@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+
+# Environment & local DB
+.env
+*.db
+sms.db
+*.sqlite
+*.sqlite3
+
+# Build outputs
+frontend/dist/
+frontend/node_modules/
+
+# Executables
+cloudflared.exe
+*.exe
+custom_users.json
