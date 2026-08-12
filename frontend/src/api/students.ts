@@ -36,6 +36,8 @@ export interface StudentListRow {
   email: string | null;
   phone: string | null;
   aadhaar_masked: string; // backend applies mask_aadhaar() — never send full number in list responses
+  year_of_study?: string;
+  batch?: string;
   active: boolean;
 }
 

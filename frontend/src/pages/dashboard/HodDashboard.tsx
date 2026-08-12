@@ -356,7 +356,13 @@ export function HodDashboard({ user, onLoggedOut }: HodDashboardProps) {
   function handleSemesterChange(e: React.ChangeEvent<HTMLSelectElement>) {
     const val = e.target.value ? Number(e.target.value) : "";
     setPickedSemId(val);
-    setPickedYear(""); // clear year when specific semester chosen
+    if (val !== "") {
+      const chosenSem = semesters.find((s) => s.id === val);
+      if (chosenSem) {
+        const y = semYearNumber(chosenSem.code);
+        if (y > 0) setPickedYear(String(y));
+      }
+    }
     load(pickedDate || undefined, val === "" ? undefined : val, undefined);
   }
 
@@ -365,6 +371,28 @@ export function HodDashboard({ user, onLoggedOut }: HodDashboardProps) {
     setPickedYear(newYear);
     setPickedSemId(""); // clear semester when year chosen
     load(pickedDate || undefined, undefined, newYear || undefined);
+  }
+
+  function semYearNumber(code: string): number {
+    if (/^IV-/.test(code)) return 4;
+    if (/^III-/.test(code)) return 3;
+    if (/^II-/.test(code)) return 2;
+    if (/^I-/.test(code)) return 1;
+    return 0;
+  }
+
+  const visibleSemesters = semesters.filter((s) => {
+    if (pickedYear === "") return true;
+    return semYearNumber(s.code) === Number(pickedYear);
+  });
+
+  function getBatchLabel(code: string): string {
+    const y = semYearNumber(code);
+    if (y === 1) return "2026-2030 Batch";
+    if (y === 2) return "2025-2029 Batch";
+    if (y === 3) return "2024-2028 Batch";
+    if (y === 4) return "2023-2027 Batch";
+    return "";
   }
 
   function handleClearDate() {
@@ -513,9 +541,14 @@ export function HodDashboard({ user, onLoggedOut }: HodDashboardProps) {
             style={{ height: 36, fontSize: 13, fontWeight: 700, width: "auto", minWidth: 160 }}
           >
             <option value="">— All —</option>
-            {semesters.map((s) => (
-              <option key={s.id} value={s.id}>{s.code} — {s.name}</option>
-            ))}
+            {visibleSemesters.map((s) => {
+              const batch = getBatchLabel(s.code);
+              return (
+                <option key={s.id} value={s.id}>
+                  {s.code} — {s.name} {batch ? `(${batch})` : ""}
+                </option>
+              );
+            })}
           </select>
         </div>
 

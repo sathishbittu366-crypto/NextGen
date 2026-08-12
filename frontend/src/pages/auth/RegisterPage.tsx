@@ -24,6 +24,8 @@ export function RegisterPage() {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
 
+  const [phone, setPhone] = useState("");
+  const [yearOfStudy, setYearOfStudy] = useState("1");
   const [email, setEmail] = useState("");
   const [emailLocked, setEmailLocked] = useState(false);
   const [otpCode, setOtpCode] = useState("");
@@ -182,7 +184,9 @@ export function RegisterPage() {
         password,
         confirmPassword,
         fullName.trim(),
-        email.trim().toLowerCase()
+        email.trim().toLowerCase(),
+        phone.trim(),
+        yearOfStudy
       );
       setSuccess(res.message);
       setTimeout(() => navigate("/login"), 1500);
@@ -239,6 +243,34 @@ export function RegisterPage() {
                 placeholder="e.g. 24BT1A6701"
                 value={rollNo}
                 onChange={(e) => setRollNo(e.target.value)}
+              />
+            </div>
+
+            <div className="brandlogin-field">
+              <label htmlFor="year_of_study">Year of Study & Batch <span style={{ color: "#ef4444" }}>*</span></label>
+              <select
+                id="year_of_study"
+                name="year_of_study"
+                value={yearOfStudy}
+                onChange={(e) => setYearOfStudy(e.target.value)}
+                style={{ height: 42, width: "100%", padding: "0 12px", border: "1.5px solid var(--border)", borderRadius: 10, fontSize: 14, background: "var(--input-bg)", color: "var(--text)" }}
+              >
+                <option value="1">1st Year (2026-2030 Batch)</option>
+                <option value="2">2nd Year (2025-2029 Batch)</option>
+                <option value="3">3rd Year (2024-2028 Batch)</option>
+                <option value="4">4th Year (2023-2027 Batch)</option>
+              </select>
+            </div>
+
+            <div className="brandlogin-field">
+              <label htmlFor="phone">Mobile Number</label>
+              <input
+                id="phone"
+                name="phone"
+                type="tel"
+                placeholder="Enter 10-digit mobile number"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
               />
             </div>
 

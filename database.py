@@ -593,7 +593,7 @@ def init_db(db_name=None):
             roll_no VARCHAR(64) NOT NULL UNIQUE,
             name VARCHAR(255) NOT NULL,
             department VARCHAR(64) NOT NULL DEFAULT 'CSD' CHECK(department='CSD'),
-            email VARCHAR(191) UNIQUE,
+            email VARCHAR(255) UNIQUE,
             phone VARCHAR(32),
             parent_phone VARCHAR(32),
             dob VARCHAR(32),
@@ -607,8 +607,8 @@ def init_db(db_name=None):
             consultant_name VARCHAR(255),
             photo_path VARCHAR(512),
             active TINYINT(1) NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
-            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             aadhaar_number TEXT,
             apaar_id TEXT,
             tenth_school VARCHAR(255),
@@ -646,7 +646,7 @@ def init_db(db_name=None):
             date_of_joining VARCHAR(32),
             active TINYINT(1) NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
             must_change_password TINYINT(1) NOT NULL DEFAULT 0 CHECK(must_change_password IN (0,1)),
-            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY(student_roll_no) REFERENCES students(roll_no) ON UPDATE CASCADE ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """)
@@ -670,7 +670,7 @@ def init_db(db_name=None):
             department VARCHAR(64) NOT NULL DEFAULT 'CSD',
             status VARCHAR(32) NOT NULL CHECK(status IN ('Present','Absent','Late','Excused')),
             marked_by VARCHAR(64),
-            updated_at DATETIME NULL,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             UNIQUE(roll_no,date),
             FOREIGN KEY(roll_no) REFERENCES students(roll_no) ON UPDATE CASCADE ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -680,11 +680,11 @@ def init_db(db_name=None):
         CREATE TABLE IF NOT EXISTS marks(
             id INT AUTO_INCREMENT PRIMARY KEY,
             roll_no VARCHAR(64) NOT NULL,
-            subject VARCHAR(120) NOT NULL,
+            subject VARCHAR(255) NOT NULL,
             internal DOUBLE NOT NULL DEFAULT 0 CHECK(internal BETWEEN 0 AND 100),
             external DOUBLE NOT NULL DEFAULT 0 CHECK(external BETWEEN 0 AND 100),
             entered_by VARCHAR(64),
-            updated_at DATETIME NULL,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             UNIQUE(roll_no,subject),
             FOREIGN KEY(roll_no) REFERENCES students(roll_no) ON UPDATE CASCADE ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -694,7 +694,7 @@ def init_db(db_name=None):
         CREATE TABLE IF NOT EXISTS checklist(
             id INT AUTO_INCREMENT PRIMARY KEY,
             roll_no VARCHAR(64) NOT NULL,
-            item VARCHAR(120) NOT NULL,
+            item VARCHAR(255) NOT NULL,
             status VARCHAR(64) NOT NULL DEFAULT 'Pending' CHECK(status IN ('Pending','Complete','Available','Not Applicable')),
             UNIQUE(roll_no,item),
             FOREIGN KEY(roll_no) REFERENCES students(roll_no) ON UPDATE CASCADE ON DELETE CASCADE
@@ -715,7 +715,7 @@ def init_db(db_name=None):
             action VARCHAR(64) NOT NULL,
             entity VARCHAR(64) NOT NULL,
             details TEXT,
-            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """)
 
@@ -763,8 +763,8 @@ def init_db(db_name=None):
             duration_hours INT NOT NULL CHECK(duration_hours IN (1,2,3)),
             topic TEXT NOT NULL,
             created_by VARCHAR(64) NOT NULL,
-            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             UNIQUE(attendance_date,subject_id,faculty_username,session_type),
             FOREIGN KEY(semester_id) REFERENCES academic_semesters(id),
             FOREIGN KEY(subject_id) REFERENCES subjects(id),
@@ -779,7 +779,7 @@ def init_db(db_name=None):
             roll_no VARCHAR(64) NOT NULL,
             status VARCHAR(32) NOT NULL CHECK(status IN ('Present','Absent')),
             marked_by VARCHAR(64) NOT NULL,
-            updated_at DATETIME NULL,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             UNIQUE(session_id,roll_no),
             FOREIGN KEY(session_id) REFERENCES attendance_sessions(id) ON DELETE CASCADE,
             FOREIGN KEY(roll_no) REFERENCES students(roll_no) ON UPDATE CASCADE ON DELETE CASCADE
@@ -795,7 +795,7 @@ def init_db(db_name=None):
             attendance_session_id INT,
             send_date VARCHAR(32) NOT NULL,
             status VARCHAR(32) NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING','SENT','FAILED')),
-            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             sent_at DATETIME,
             error TEXT,
             UNIQUE(roll_no,send_date),
@@ -831,7 +831,7 @@ def init_db(db_name=None):
             purpose VARCHAR(32) NOT NULL CHECK(purpose IN ('REGISTER','RESET_PASSWORD')),
             code_hash VARCHAR(255) NOT NULL,
             attempts INT NOT NULL DEFAULT 0,
-            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             expires_at DATETIME NOT NULL,
             used TINYINT(1) NOT NULL DEFAULT 0 CHECK(used IN (0,1))
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -847,8 +847,8 @@ def init_db(db_name=None):
             description TEXT NOT NULL,
             status VARCHAR(32) NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING','IN_PROGRESS','RESOLVED','CLOSED')),
             admin_notes TEXT,
-            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             FOREIGN KEY(username) REFERENCES users(username) ON UPDATE CASCADE ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """)
@@ -1094,7 +1094,7 @@ def is_open_registration_enabled() -> bool:
     return get_setting(OPEN_REGISTRATION_SETTING_KEY, "1") == "1"
 
 
-def register_student(roll_no, username, password, full_name=None, email=None):
+def register_student(roll_no, username, password, full_name=None, email=None, phone=None, year_of_study=None):
     """Self-service registration with MANDATORY email & OTP verification.
 
     Email is required for creating a new user account, and must be OTP-verified
@@ -1103,6 +1103,7 @@ def register_student(roll_no, username, password, full_name=None, email=None):
     username = username.strip()
     roll_no = str(roll_no).strip()
     email = (email or "").strip().lower()
+    phone = (phone or "").strip()
 
     if not email or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
         raise ValueError("A valid email address is required for registration")
@@ -1125,6 +1126,16 @@ def register_student(roll_no, username, password, full_name=None, email=None):
 
         s = c.execute("SELECT * FROM students WHERE roll_no=%s AND department='CSD'", (roll_no,)).fetchone()
 
+        # Map year_of_study (e.g. '1', '2', '3', '4') to initial semester ID
+        sem_id = None
+        if year_of_study:
+            sem_code_map = {"1": "I-I", "2": "II-I", "3": "III-I", "4": "IV-I"}
+            code = sem_code_map.get(str(year_of_study).strip())
+            if code:
+                sem_row = c.execute("SELECT id FROM academic_semesters WHERE code=%s", (code,)).fetchone()
+                if sem_row:
+                    sem_id = sem_row["id"]
+
         if not s:
             if not is_open_registration_enabled():
                 raise ValueError("Roll number was not found in CSD records")
@@ -1133,11 +1144,17 @@ def register_student(roll_no, username, password, full_name=None, email=None):
             if c.execute("SELECT 1 FROM students WHERE roll_no=%s", (roll_no,)).fetchone():
                 raise ValueError("That roll number is already registered")
             c.execute(
-                "INSERT INTO students(roll_no,name,department,email) VALUES(%s,%s,'CSD',%s)",
-                (roll_no, name, email),
+                "INSERT INTO students(roll_no,name,department,email,phone,current_semester_id) VALUES(%s,%s,'CSD',%s,%s,%s)",
+                (roll_no, name, email, phone or None, sem_id),
             )
             audit(c, username, "SELF_REGISTER_NEW_STUDENT", "student", f"{roll_no} ({name}) — open registration, verified email")
             s = c.execute("SELECT * FROM students WHERE roll_no=%s AND department='CSD'", (roll_no,)).fetchone()
+        else:
+            if phone or sem_id:
+                c.execute(
+                    "UPDATE students SET phone=COALESCE(NULLIF(%s,''),phone), current_semester_id=COALESCE(%s,current_semester_id) WHERE roll_no=%s",
+                    (phone, sem_id, roll_no)
+                )
 
         if c.execute("SELECT 1 FROM users WHERE student_roll_no=%s", (roll_no,)).fetchone():
             raise ValueError("This student already has a login — use Forgot Password instead")

@@ -94,7 +94,9 @@ export async function register(
   password: string,
   confirmPassword: string,
   fullName: string | undefined,
-  email: string
+  email: string,
+  phone?: string,
+  yearOfStudy?: string
 ): Promise<RegisterResponse> {
   return apiFetch<RegisterResponse>("/api/auth/register", {
     method: "POST",
@@ -105,6 +107,8 @@ export async function register(
       confirm_password: confirmPassword,
       full_name: fullName || undefined,
       email,
+      phone: phone || undefined,
+      year_of_study: yearOfStudy || undefined,
     },
     skipRefreshRetry: true, // no session exists yet — nothing to refresh
   });

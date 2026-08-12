@@ -8,6 +8,7 @@ in frontend/src/pages/students/ and call through frontend/src/api/students.ts.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends, File, UploadFile
 from pydantic import BaseModel
@@ -54,12 +55,50 @@ def _decrypt_row(row) -> dict:
     return d
 
 
+def _compute_year_and_batch(d: dict) -> tuple[str, str]:
+    roll_no = str(d.get("roll_no") or "").strip().upper()
+    sem_id = d.get("current_semester_id")
+
+    # Determine batch from roll number (e.g. 24BT1A6722 -> 2024-2028 Batch)
+    batch = ""
+    joining_year = None
+    if len(roll_no) >= 2 and roll_no[:2].isdigit():
+        yy = int(roll_no[:2])
+        if 18 <= yy <= 35:
+            joining_year = 2000 + yy
+            batch = f"{joining_year}-{joining_year + 4} Batch"
+
+    # Determine Year of study
+    year = ""
+    if sem_id in (1, 2):
+        year = "1st Year"
+        if not batch: batch = "2026-2030 Batch"
+    elif sem_id in (3, 4):
+        year = "2nd Year"
+        if not batch: batch = "2025-2029 Batch"
+    elif sem_id in (5, 6):
+        year = "3rd Year"
+        if not batch: batch = "2024-2028 Batch"
+    elif sem_id in (7, 8):
+        year = "4th Year"
+        if not batch: batch = "2023-2027 Batch"
+    elif joining_year:
+        diff = 2026 - joining_year + 1
+        if diff <= 1: year = "1st Year"
+        elif diff == 2: year = "2nd Year"
+        elif diff == 3: year = "3rd Year"
+        else: year = "4th Year"
+    else:
+        year = "1st Year"
+        batch = "2026-2030 Batch"
+
+    return year, batch
+
+
 def _serialize_list_row(row) -> dict:
-    """For the list endpoint — decrypt then mask aadhaar.
-    WHY decrypt before mask: mask_aadhaar on ciphertext silently returns
-    "XXXX XXXX XXXX" without error — live-confirmed failure mode.
-    """
+    """For the list endpoint — decrypt then mask aadhaar."""
     d = _decrypt_row(row)
+    year, batch = _compute_year_and_batch(d)
     return {
         "id": d["id"],
         "roll_no": d["roll_no"],
@@ -67,17 +106,21 @@ def _serialize_list_row(row) -> dict:
         "email": d.get("email") or "",
         "phone": d.get("phone") or "",
         "aadhaar_masked": mask_aadhaar(d.get("aadhaar_number")),
+        "year_of_study": year,
+        "batch": batch,
         "active": bool(d["active"]),
     }
 
 
 def _serialize_full(row) -> dict:
-    """Full student record — aadhaar_number/apaar_id returned decrypted
-    (HOD-detail-view exception per §4.4).
-    """
+    """Full student record — aadhaar_number/apaar_id returned decrypted."""
     d = _decrypt_row(row)
-    return {k: (d.get(k) or "") if isinstance(d.get(k), str) or d.get(k) is None else d[k]
-            for k in d if k not in ("password",)}
+    year, batch = _compute_year_and_batch(d)
+    res = {k: (d.get(k) or "") if isinstance(d.get(k), str) or d.get(k) is None else d[k]
+           for k in d if k not in ("password",)}
+    res["year_of_study"] = year
+    res["batch"] = batch
+    return res
 
 
 @router.get("")
@@ -353,7 +396,7 @@ async def student_delete(student_id: int, user: CurrentUser = Depends(get_curren
         if not row:
             raise ApiError("Student not found", 404, "NOT_FOUND")
         roll_no = row["roll_no"]
-        c.execute("DELETE FROM attendance_marks WHERE roll_no=?", (roll_no,))
+        c.execute("DELETE FROM attendance_records WHERE roll_no=?", (roll_no,))
         c.execute("DELETE FROM sms_queue WHERE roll_no=?", (roll_no,))
         c.execute("DELETE FROM checklist WHERE roll_no=?", (roll_no,))
         c.execute("DELETE FROM users WHERE student_roll_no=? OR username=?", (roll_no, roll_no))

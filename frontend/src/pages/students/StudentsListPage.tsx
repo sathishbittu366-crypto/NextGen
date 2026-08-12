@@ -93,7 +93,7 @@ export function StudentsListPage({ user, onLoggedOut }: StudentsListPageProps) {
         <table className="data-table">
           <thead>
             <tr>
-              <th>Roll No</th><th>Name</th><th>Email</th><th>Phone</th><th>Aadhaar</th><th className="center">Actions</th>
+              <th>Roll No</th><th>Name</th><th>Year & Batch</th><th>Email</th><th>Phone</th><th>Aadhaar</th><th className="center">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -101,6 +101,14 @@ export function StudentsListPage({ user, onLoggedOut }: StudentsListPageProps) {
               <tr key={r.id}>
                 <td data-label="Roll No">{r.roll_no}</td>
                 <td data-label="Name"><Link to={`/students/${r.id}`}>{r.name}</Link></td>
+                <td data-label="Year & Batch">
+                  <span className="chip chip-blue" style={{ fontSize: 11, padding: "2px 8px" }}>
+                    {r.year_of_study || "1st Year"}
+                  </span>
+                  <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2, fontWeight: 600 }}>
+                    {r.batch || "2026-2030 Batch"}
+                  </div>
+                </td>
                 <td data-label="Email">{r.email || ""}</td>
                 <td data-label="Phone">{r.phone || ""}</td>
                 <td data-label="Aadhaar">{r.aadhaar_masked}</td>
