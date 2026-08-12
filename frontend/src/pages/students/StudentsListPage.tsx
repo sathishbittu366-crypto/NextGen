@@ -14,21 +14,19 @@ interface StudentsListPageProps {
   onLoggedOut: () => void;
 }
 
-type StatusFilter = "Active" | "Inactive" | "All";
-
 export function StudentsListPage({ user, onLoggedOut }: StudentsListPageProps) {
   const navigate = useNavigate();
   const [q, setQ] = useState("");
-  const [status, setStatus] = useState<StatusFilter>("Active");
+  const [yearFilter, setYearFilter] = useState(""); // "", "1", "2", "3", "4"
   const [rows, setRows] = useState<StudentListRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async (query: string, statusVal: StatusFilter) => {
+  const load = useCallback(async (query: string) => {
     setLoading(true);
     setError(null);
     try {
-      const res = await listStudents(query, statusVal);
+      const res = await listStudents(query, "All");
       setRows(res);
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : "Failed to load students");
@@ -37,48 +35,55 @@ export function StudentsListPage({ user, onLoggedOut }: StudentsListPageProps) {
     }
   }, []);
 
-  useEffect(() => { load(q, status); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load(q); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleSearchSubmit(e: React.FormEvent) {
     e.preventDefault();
-    load(q, status);
-  }
-
-  function handleStatusChange(e: React.ChangeEvent<HTMLSelectElement>) {
-    const val = e.target.value as StatusFilter;
-    setStatus(val);
-    load(q, val);
+    load(q);
   }
 
   async function handleDelete(r: StudentListRow) {
     if (!window.confirm(`Are you sure you want to delete profile for ${r.name} (${r.roll_no})? This action cannot be undone.`)) return;
     try {
       await deleteStudent(r.id);
-      load(q, status);
+      load(q);
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : "Failed to delete student profile");
     }
   }
 
+  // Client-side year filter
+  const YEAR_LABELS: Record<string, string> = {
+    "1": "1st Year",
+    "2": "2nd Year",
+    "3": "3rd Year",
+    "4": "4th Year",
+  };
+  const displayedRows = yearFilter
+    ? rows.filter((r) => r.year_of_study === YEAR_LABELS[yearFilter])
+    : rows;
+
   return (
     <AppShell user={user} activeNav="students" heading="Students" onLoggedOut={onLoggedOut}>
-      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 14 }}>
-        <form onSubmit={handleSearchSubmit} style={{ display: "flex", gap: 8, flex: 1, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 14 }}>
+        <form onSubmit={handleSearchSubmit} style={{ display: "flex", gap: 8, flex: 1, flexWrap: "wrap", minWidth: 0 }}>
           <input
             type="text"
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Search CSD Data Science student by name, roll no, email or phone..."
-            style={{ flex: 1, minWidth: 220, height: 40, padding: "0 12px", border: "1px solid #d0d5dd", borderRadius: 6 }}
+            placeholder="Search by name, roll no, email or phone…"
+            style={{ flex: 1, minWidth: 160, maxWidth: 320, height: 40, padding: "0 12px", border: "1px solid #d0d5dd", borderRadius: 6, fontSize: 13 }}
           />
           <select
-            value={status}
-            onChange={handleStatusChange}
-            style={{ height: 40, border: "1px solid #d0d5dd", borderRadius: 6 }}
+            value={yearFilter}
+            onChange={(e) => setYearFilter(e.target.value)}
+            style={{ height: 40, padding: "0 10px", border: "1px solid #d0d5dd", borderRadius: 6, fontSize: 13, fontWeight: 600, minWidth: 160 }}
           >
-            <option value="Active">Active</option>
-            <option value="Inactive">Inactive</option>
-            <option value="All">All</option>
+            <option value="">All Years</option>
+            <option value="1">1st Year (2026-2030)</option>
+            <option value="2">2nd Year (2025-2029)</option>
+            <option value="3">3rd Year (2024-2028)</option>
+            <option value="4">4th Year (2023-2027)</option>
           </select>
           <button type="submit" className="btn btn-outline">Search</button>
         </form>
@@ -97,7 +102,7 @@ export function StudentsListPage({ user, onLoggedOut }: StudentsListPageProps) {
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => (
+            {displayedRows.map((r) => (
               <tr key={r.id}>
                 <td data-label="Roll No">{r.roll_no}</td>
                 <td data-label="Name"><Link to={`/students/${r.id}`}>{r.name}</Link></td>
@@ -129,7 +134,7 @@ export function StudentsListPage({ user, onLoggedOut }: StudentsListPageProps) {
           </tbody>
         </table>
         {loading && <p className="empty-note">Loading…</p>}
-        {!loading && rows.length === 0 && <p className="empty-note">No students match this search.</p>}
+        {!loading && displayedRows.length === 0 && <p className="empty-note">No students match this search.</p>}
       </div>
     </AppShell>
   );
