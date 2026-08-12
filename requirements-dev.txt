@@ -1,6 +1,0 @@
-# Dev/test-only dependencies — not needed by the running app itself.
-# Split out from requirements.txt per Handoff 1's note: httpx is only used
-# by _test_group1_auth.py's TestClient, the live app never imports it.
--r requirements.txt
-httpx
-pyngrok

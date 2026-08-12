@@ -14,7 +14,9 @@ sms.db
 frontend/dist/
 frontend/node_modules/
 
+webapp/uploads/
 # Executables
 cloudflared.exe
 *.exe
 custom_users.json
+mysql_data/
