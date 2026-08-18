@@ -75,7 +75,12 @@ async def subject_create(body: SubjectCreateBody, user: CurrentUser = Depends(ge
     try:
         create_subject(semester_id=body.semester_id, code=body.code, name=body.name,
                        has_lab=body.has_lab, actor=user.username)
-        return ok({"ok": True})
+        # WHY status_code=201 passed explicitly: @router.post(status_code=201)
+        # only applies when a route returns a plain dict FastAPI wraps itself.
+        # ok() returns its own JSONResponse (defaults to 200), which bypasses
+        # the decorator entirely — same gotcha envelope.py already documents
+        # for cookies, but for status codes.
+        return ok({"ok": True}, status_code=201)
     except IntegrityError:
         raise ApiError("A subject with that code already exists in this semester", 400, "VALIDATION_ERROR")
     except ValueError as e:

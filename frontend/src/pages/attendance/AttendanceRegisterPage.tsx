@@ -164,7 +164,7 @@ export function AttendanceRegisterPage({ user, onLoggedOut }: AttendanceRegister
       setSession(res.session);
       setRoster(res.roster);
       const queuedMsg = typeof res.sms_queued === "number" && res.sms_queued > 0
-        ? ` — Automated SMS sent to ${res.sms_queued} parent(s) via Department SIM Gateway.`
+        ? ` — ${res.sms_queued} absentee SMS queued for HOD approval.`
         : "";
       setSaveNote(`Saved successfully!${queuedMsg}`);
     } catch (err) {

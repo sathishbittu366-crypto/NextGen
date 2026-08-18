@@ -1,432 +1,397 @@
-// HOD Absentee SMS Log & Android Gateway Setup page.
-import { useState, useEffect } from "react";
+import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { AppShell } from "../../components/AppShell";
 import { ErrorPopup } from "../../components/ErrorPopup";
 import { ToastPopup } from "../../components/ToastPopup";
 import {
-  getSmsLogs, getSmsSettings, saveSmsSettings, testSmsGateway, triggerSmsQueue,
-  type SmsLogRow, type SmsSettings
+  approveSmsBatch,
+  createSmsGateway,
+  getSmsApproval,
+  getSmsGateways,
+  getSmsLogs,
+  getSmsSettings,
+  saveSmsSettings,
+  testSmsGateway,
+  testSmsGatewayConnection,
+  updateSmsGateway,
+  type SmsApprovalRow,
+  type SmsGateway,
+  type SmsLogRow,
+  type SmsSettings,
 } from "../../api/logs";
 import { ApiClientError } from "../../api/client";
-import { type CurrentUser } from "../../api/auth";
+import { getFacultyPage, type UserAccount } from "../../api/faculty";
 
 interface Props {
-  user: CurrentUser;
+  user: { username: string; role: string };
   onLoggedOut: () => void;
 }
 
+type GatewayForm = {
+  gateway_name: string;
+  gateway_mode: "cloud" | "local" | "modem";
+  device_id: string;
+  local_url: string;
+  username: string;
+  password: string;
+  modem_port: string;
+  modem_baud: string;
+  sim_number: string;
+  active: boolean;
+  hod_username?: string;
+};
+
+const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+
+const blankGateway: GatewayForm = {
+  gateway_name: "SMSGate Phone",
+  gateway_mode: "cloud",
+  device_id: "",
+  local_url: "",
+  username: "",
+  password: "",
+  modem_port: "",
+  modem_baud: "115200",
+  sim_number: "",
+  active: true,
+  hod_username: "",
+};
+
+function formFromGateway(g: SmsGateway): GatewayForm {
+  return {
+    gateway_name: g.gateway_name,
+    gateway_mode: g.gateway_mode === "local" || g.gateway_mode === "modem" ? g.gateway_mode : "cloud",
+    device_id: g.device_id || "",
+    local_url: g.local_url || "",
+    username: g.username || "",
+    password: "",
+    modem_port: g.modem_port || "",
+    modem_baud: g.modem_baud || "115200",
+    sim_number: g.sim_number ? String(g.sim_number) : "",
+    active: g.active,
+    hod_username: g.hod_username,
+  };
+}
+
 export function SmsLogPage({ user, onLoggedOut }: Props) {
-  const [rows, setRows] = useState<SmsLogRow[]>([]);
+  const [settings, setSettings] = useState<SmsSettings>({ sms_enabled: "1", sms_daily_cap: "62" });
+  const [gateways, setGateways] = useState<SmsGateway[]>([]);
+  const [gateway, setGateway] = useState<GatewayForm>(blankGateway);
+  const [selectedGatewayId, setSelectedGatewayId] = useState<number | null>(null);
+  const [hodAccounts, setHodAccounts] = useState<UserAccount[]>([]);
+  const [selectedHodUsername, setSelectedHodUsername] = useState("");
+  const [approvalDate, setApprovalDate] = useState(today());
+  const [approvalRows, setApprovalRows] = useState<SmsApprovalRow[]>([]);
+  const [logs, setLogs] = useState<SmsLogRow[]>([]);
+  const [testPhone, setTestPhone] = useState("");
   const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  // Gateway Settings State
-  const [settings, setSettings] = useState<SmsSettings>({
-    sms_enabled: "1",
-    sms_gateway_type: "android",
-    sms_android_url: "http://100.92.227.240:8080",
-    sms_android_user: "sms",
-    sms_android_password: "",
-    sms_android_key: "",
-    sms_modem_port: "/dev/ttyUSB0",
-    sms_modem_baud: "115200",
-    sms_daily_cap: "62",
-  });
-  const [savingSettings, setSavingSettings] = useState(false);
+  const isAdmin = user.role === "ADMIN";
+  const currentGateway = useMemo(() => {
+    if (isAdmin) {
+      return gateways.find((g) => g.hod_username === selectedHodUsername) || null;
+    }
+    return gateways.find((g) => g.id === selectedGatewayId) || gateways[0] || null;
+  }, [gateways, selectedGatewayId, selectedHodUsername, isAdmin]);
+  const scopeHodUsername = isAdmin ? selectedHodUsername : user.username;
+  const gatewayConfigured = Boolean(currentGateway && (
+    (currentGateway.gateway_mode === "cloud" && currentGateway.device_id && currentGateway.username && currentGateway.password_set) ||
+    (currentGateway.gateway_mode === "local" && currentGateway.local_url) ||
+    (currentGateway.gateway_mode === "modem" && currentGateway.modem_port)
+  ));
 
-  // Test Send State
-  const [testPhone, setTestPhone] = useState("");
-  const [testingSms, setTestingSms] = useState(false);
-  const [dispatching, setDispatching] = useState(false);
-
-  const loadData = async () => {
+  const load = async () => {
     setLoading(true);
     setError(null);
     try {
-      const [logData, settingsData] = await Promise.all([
-        getSmsLogs().catch(() => []),
-        getSmsSettings().catch(() => ({
-          sms_enabled: "1",
-          sms_gateway_type: "android",
-          sms_android_url: "http://100.92.227.240:8080",
-          sms_android_user: "sms",
-          sms_android_password: "",
-          sms_android_key: "",
-          sms_modem_port: "/dev/ttyUSB0",
-          sms_modem_baud: "115200",
-          sms_daily_cap: "62",
-        })),
+      const [settingsData, gatewayData, logData, approvalData, facultyData] = await Promise.all([
+        getSmsSettings(),
+        getSmsGateways(),
+        getSmsLogs(),
+        getSmsApproval(approvalDate),
+        isAdmin ? getFacultyPage() : Promise.resolve(null),
       ]);
-      setRows(logData);
       setSettings(settingsData);
-    } catch (_err) {
-      // Graceful load
+      setGateways(gatewayData);
+      setLogs(logData);
+      setApprovalRows(approvalData);
+      setHodAccounts(facultyData ? facultyData.accounts.filter((a) => a.role === "HOD" && a.active) : []);
+      if (gatewayData.length) {
+        const chosen = isAdmin
+          ? (gatewayData.find((g) => g.hod_username === selectedHodUsername) || gatewayData.find((g) => g.id === selectedGatewayId) || gatewayData[0])
+          : (gatewayData.find((g) => g.id === selectedGatewayId) || gatewayData[0]);
+        setSelectedGatewayId(chosen.id);
+        setGateway(formFromGateway(chosen));
+        setSelectedHodUsername(chosen.hod_username || "");
+      } else {
+        setSelectedGatewayId(null);
+        setGateway({ ...blankGateway, hod_username: isAdmin ? selectedHodUsername : user.username });
+      }
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : "Could not load SMS configuration");
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => {
-    loadData();
-  }, []);
+  useEffect(() => { void load(); }, [approvalDate]);
 
-  const handleSaveSettings = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSavingSettings(true);
+  const saveGateway = async () => {
+    setBusy("gateway");
     setError(null);
-    setSuccess(null);
     try {
-      await saveSmsSettings(settings);
-      setSuccess("SMS Gateway Settings saved successfully!");
+      const payload = {
+        ...gateway,
+        ...(isAdmin && !currentGateway ? { hod_username: selectedHodUsername } : {}),
+        sim_number: gateway.sim_number ? Number(gateway.sim_number) : null,
+      };
+      if (isAdmin && !currentGateway && !selectedHodUsername) {
+        setError("Select the responsible HOD before creating a gateway.");
+        setBusy(null);
+        return;
+      }
+      const saved = currentGateway
+        ? await updateSmsGateway(currentGateway.id, payload)
+        : await createSmsGateway(payload);
+      setGateways((old) => {
+        const without = old.filter((g) => g.id !== saved.id);
+        return [...without, saved];
+      });
+      setSelectedGatewayId(saved.id);
+      setGateway(formFromGateway(saved));
+      setSuccess("SMS gateway configuration saved.");
     } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : "Failed to save SMS settings");
+      setError(err instanceof ApiClientError ? err.message : "Could not save gateway");
     } finally {
-      setSavingSettings(false);
+      setBusy(null);
     }
   };
 
-  const handleTestSms = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!testPhone) {
-      setError("Please enter a test phone number");
+  const testConnection = async () => {
+    if (!currentGateway) return;
+    setBusy("connection");
+    setError(null);
+    try {
+      const result = await testSmsGatewayConnection(currentGateway.id);
+      setSuccess(result.mode === "cloud" ? "Cloud credentials and device ID are valid." : "Gateway connection check passed.");
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : "Gateway connection test failed");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const sendTest = async () => {
+    if (!currentGateway) {
+      setError("Configure an SMS gateway first.");
       return;
     }
-    setTestingSms(true);
+    if (!testPhone.trim()) {
+      setError("Enter a test phone number.");
+      return;
+    }
+    setBusy("test-sms");
     setError(null);
-    setSuccess(null);
     try {
-      const res = await testSmsGateway(testPhone);
-      setSuccess(`Test SMS dispatched successfully! Status: ${res.message}`);
-      loadData();
+      await testSmsGateway(testPhone.trim(), currentGateway.id);
+      setSuccess("Test SMS accepted by the configured gateway.");
+      setTestPhone("");
+      const nextLogs = await getSmsLogs();
+      setLogs(nextLogs);
     } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : "Test SMS failed to dispatch");
+      setError(err instanceof ApiClientError ? err.message : "Test SMS failed");
     } finally {
-      setTestingSms(false);
+      setBusy(null);
     }
   };
 
-  const handleTriggerQueue = async () => {
-    setDispatching(true);
+  const approve = async () => {
+    if (!approvalRows.length) return;
+    if (!window.confirm(`Approve ${approvalRows.length} absentee SMS message(s) for ${approvalDate}? They can then be sent by the worker.`)) return;
+    setBusy("approve");
     setError(null);
-    setSuccess(null);
     try {
-      const res = await triggerSmsQueue();
-      setSuccess(`Queue worker executed. Dispatched: ${res.sent_count || 0}, Failed: ${res.failed_count || 0}`);
-      loadData();
+      const result = await approveSmsBatch(approvalDate);
+      setSuccess(`${result.approved_count} message(s) approved. The worker may now send them.`);
+      await load();
     } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : "Failed to trigger SMS queue worker");
+      setError(err instanceof ApiClientError ? err.message : "Could not approve SMS batch");
     } finally {
-      setDispatching(false);
+      setBusy(null);
+    }
+  };
+
+  const saveOperationsSettings = async () => {
+    setBusy("settings");
+    setError(null);
+    try {
+      await saveSmsSettings(settings);
+      setSuccess("SMS sending settings saved.");
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : "Could not save SMS settings");
+    } finally {
+      setBusy(null);
     }
   };
 
   return (
-    <AppShell user={user} activeNav="sms-log" heading="Absentee SMS Log & Android Gateway" onLoggedOut={onLoggedOut}>
+    <AppShell user={user as any} activeNav="sms-log" heading="Absentee SMS" onLoggedOut={onLoggedOut}>
       <ErrorPopup message={error} onClose={() => setError(null)} />
-      {success && <ToastPopup type="success" message={success} onClose={() => setSuccess(null)} />}
+      <ToastPopup message={success} onClose={() => setSuccess(null)} />
 
-      {/* Gateway Configuration Card */}
-      <div className="card" style={{ marginBottom: 28, padding: 24, borderRadius: 16, background: "var(--card-glass)", border: "1px solid var(--border)", boxShadow: "0 20px 45px rgba(0,0,0,0.15)" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24, flexWrap: "wrap", gap: 16 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-            <div style={{ width: 48, height: 48, borderRadius: 12, background: "linear-gradient(135deg, #0284c7, #2563eb)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24, boxShadow: "0 8px 20px rgba(56, 189, 248, 0.4)" }}>
-              📱
-            </div>
+      <div style={{ display: "grid", gap: 18, maxWidth: 1100, margin: "0 auto" }}>
+        <section style={cardStyle}>
+          <div style={headerStyle}>
             <div>
-              <h3 style={{ margin: 0, fontSize: 20, fontWeight: 800, color: "var(--text)" }}>Automatic Absentee SMS & Phone Gateway</h3>
-              <p style={{ margin: "4px 0 0 0", color: "var(--muted)", fontSize: 13 }}>
-                Dispatches instant parent SMS alerts via connected Android phone (SMSGate app) or USB modem.
-              </p>
+              <div style={eyebrow}>SMS ROUTING</div>
+              <h2 style={titleStyle}>{isAdmin ? "HOD SMSGate connections" : "Your SMSGate connection"}</h2>
+              <p style={muted}>{isAdmin ? "Each HOD has one assigned SMSGate gateway. Choose the responsible HOD to administer that gateway; physical phone location does not affect routing." : "This gateway belongs to your HOD scope. The phone may be physically anywhere; absentee SMS for your students is routed only through this assigned gateway."}</p>
             </div>
+            <span style={pill(!currentGateway?.active ? "muted" : gatewayConfigured ? "good" : "bad")}>{!currentGateway?.active ? "INACTIVE" : gatewayConfigured ? "READY" : "NOT CONFIGURED"}</span>
           </div>
-          <button
-            type="button"
-            className="btn"
-            style={{ background: "linear-gradient(135deg, #0284c7, #2563eb)", color: "#ffffff", fontWeight: 700, padding: "10px 18px", borderRadius: 10, border: "none", boxShadow: "0 8px 20px rgba(56, 189, 248, 0.35)", cursor: "pointer" }}
-            onClick={handleTriggerQueue}
-            disabled={dispatching}
-          >
-            {dispatching ? "Sending Pending..." : "⚡ Dispatch Pending SMS Queue"}
-          </button>
-        </div>
 
-        <form onSubmit={handleSaveSettings}>
-          {/* 3D Selector 1: Automatic Absent SMS Status */}
-          <div style={{ marginBottom: 20 }}>
-            <label style={{ fontWeight: 800, fontSize: 13, display: "block", marginBottom: 8, color: "var(--heading-accent)", textTransform: "uppercase", letterSpacing: "0.5px" }}>
-              1. Automatic Absentee SMS Status
-            </label>
-            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-              <button
-                type="button"
-                onClick={() => setSettings({ ...settings, sms_enabled: "1" })}
-                style={{
-                  flex: 1,
-                  minWidth: 180,
-                  padding: "14px 18px",
-                  borderRadius: 12,
-                  fontWeight: 700,
-                  fontSize: 14,
-                  cursor: "pointer",
-                  border: settings.sms_enabled === "1" ? "2px solid var(--heading-accent)" : "1px solid var(--border)",
-                  background: settings.sms_enabled === "1" ? "linear-gradient(135deg, rgba(2, 132, 199, 0.3), rgba(37, 99, 235, 0.4))" : "var(--chip-bg-muted)",
-                  color: settings.sms_enabled === "1" ? "var(--text)" : "var(--muted)",
-                  boxShadow: settings.sms_enabled === "1" ? "0 8px 20px rgba(56, 189, 248, 0.35)" : "none",
-                  transition: "all 0.2s ease",
-                  textAlign: "center",
+          {isAdmin && (
+            <div style={{ display: "grid", gap: 7, marginBottom: 14 }}>
+              <label style={{ color: "var(--text)", fontSize: 13, fontWeight: 700 }}>Responsible HOD</label>
+              <select
+                value={scopeHodUsername}
+                onChange={(e) => {
+                  const username = e.target.value;
+                  setSelectedHodUsername(username);
+                  const g = gateways.find((x) => x.hod_username === username);
+                  if (g) {
+                    setSelectedGatewayId(g.id);
+                    setGateway(formFromGateway(g));
+                  } else {
+                    setSelectedGatewayId(null);
+                    setGateway({ ...blankGateway, hod_username: username });
+                  }
                 }}
+                style={inputStyle}
               >
-                ✅ Enabled (Auto Dispatch)
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setSettings({ ...settings, sms_enabled: "0" })}
-                style={{
-                  flex: 1,
-                  minWidth: 180,
-                  padding: "14px 18px",
-                  borderRadius: 12,
-                  fontWeight: 700,
-                  fontSize: 14,
-                  cursor: "pointer",
-                  border: settings.sms_enabled === "0" ? "2px solid #f43f5e" : "1px solid var(--border)",
-                  background: settings.sms_enabled === "0" ? "linear-gradient(135deg, rgba(244, 63, 94, 0.25), rgba(225, 29, 72, 0.3))" : "var(--chip-bg-muted)",
-                  color: settings.sms_enabled === "0" ? "var(--text)" : "var(--muted)",
-                  boxShadow: settings.sms_enabled === "0" ? "0 8px 20px rgba(244, 63, 94, 0.3)" : "none",
-                  transition: "all 0.2s ease",
-                  textAlign: "center",
-                }}
-              >
-                🛑 Disabled
-              </button>
+                <option value="">Select an HOD</option>
+                {hodAccounts.map((h) => <option key={h.username} value={h.username}>{h.full_name || h.username} ({h.username})</option>)}
+              </select>
+              <p style={muted}>This chooses the HOD whose students and absentee messages use this gateway. Physical phone location does not affect routing.</p>
             </div>
-          </div>
+          )}
 
-          {/* 3D Selector 2: Gateway Device Type Selector */}
-          <div style={{ marginBottom: 24 }}>
-            <label style={{ fontWeight: 800, fontSize: 13, display: "block", marginBottom: 8, color: "var(--heading-accent)", textTransform: "uppercase", letterSpacing: "0.5px" }}>
-              2. Select Gateway Device Mode
-            </label>
-            <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
-              <button
-                type="button"
-                onClick={() => setSettings({ ...settings, sms_gateway_type: "android" })}
-                style={{
-                  flex: 1,
-                  minWidth: 240,
-                  padding: "16px 20px",
-                  borderRadius: 12,
-                  fontWeight: 700,
-                  fontSize: 14,
-                  cursor: "pointer",
-                  border: settings.sms_gateway_type === "android" ? "2px solid var(--heading-accent)" : "1px solid var(--border)",
-                  background: settings.sms_gateway_type === "android" ? "linear-gradient(135deg, rgba(2, 132, 199, 0.35), rgba(37, 99, 235, 0.45))" : "var(--chip-bg-muted)",
-                  color: settings.sms_gateway_type === "android" ? "var(--text)" : "var(--muted)",
-                  boxShadow: settings.sms_gateway_type === "android" ? "0 10px 25px rgba(56, 189, 248, 0.4)" : "none",
-                  transition: "all 0.2s ease",
-                  textAlign: "left",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 12,
-                }}
-              >
-                <span style={{ fontSize: 24 }}>📱</span>
-                <div>
-                  <strong style={{ display: "block", fontSize: 15 }}>Android Phone Gateway</strong>
-                  <span style={{ fontSize: 12, opacity: 0.85, fontWeight: 400 }}>Connects via SMSGate app on phone</span>
-                </div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setSettings({ ...settings, sms_gateway_type: "modem" })}
-                style={{
-                  flex: 1,
-                  minWidth: 240,
-                  padding: "16px 20px",
-                  borderRadius: 12,
-                  fontWeight: 700,
-                  fontSize: 14,
-                  cursor: "pointer",
-                  border: settings.sms_gateway_type === "modem" ? "2px solid var(--heading-accent)" : "1px solid var(--border)",
-                  background: settings.sms_gateway_type === "modem" ? "linear-gradient(135deg, rgba(2, 132, 199, 0.35), rgba(37, 99, 235, 0.45))" : "var(--chip-bg-muted)",
-                  color: settings.sms_gateway_type === "modem" ? "var(--text)" : "var(--muted)",
-                  boxShadow: settings.sms_gateway_type === "modem" ? "0 10px 25px rgba(56, 189, 248, 0.4)" : "none",
-                  transition: "all 0.2s ease",
-                  textAlign: "left",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 12,
-                }}
-              >
-                <span style={{ fontSize: 24 }}>🔌</span>
-                <div>
-                  <strong style={{ display: "block", fontSize: 15 }}>USB Serial GSM Modem</strong>
-                  <span style={{ fontSize: 12, opacity: 0.85, fontWeight: 400 }}>Direct AT Commands via USB Dongle</span>
-                </div>
-              </button>
+          {!isAdmin && (
+            <div style={{ ...emptyStyle, textAlign: "left", marginBottom: 14 }}>
+              <strong style={{ color: "var(--text)" }}>Assigned to you</strong>
+              <div style={{ marginTop: 4 }}>{user.username}</div>
+              <div style={{ marginTop: 4 }}>Only this HOD's absentee SMS can use this gateway.</div>
             </div>
+          )}
+
+          <div style={gridStyle}>
+            <Field label="Gateway name"><input style={inputStyle} value={gateway.gateway_name} onChange={(e) => setGateway({ ...gateway, gateway_name: e.target.value })} /></Field>
+            <Field label="Mode">
+              <select style={inputStyle} value={gateway.gateway_mode} onChange={(e) => setGateway({ ...gateway, gateway_mode: e.target.value as GatewayForm["gateway_mode"] })}>
+                <option value="cloud">Cloud Server</option>
+                <option value="local">Local Server</option>
+                <option value="modem">USB / Serial Modem</option>
+              </select>
+            </Field>
           </div>
 
-          {/* Form Fields Grid */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16, marginBottom: 20 }}>
-            {settings.sms_gateway_type === "android" ? (
-              <>
-                <div>
-                  <label style={{ fontWeight: 700, fontSize: 13, display: "block", marginBottom: 6, color: "var(--text)" }}>Android Local Address (IP:Port)</label>
-                  <input
-                    type="text"
-                    className="input-field"
-                    style={{ width: "100%", padding: "10px 14px", borderRadius: 10, background: "var(--input-bg)", border: "1px solid var(--input-border)", color: "var(--text)" }}
-                    placeholder="http://100.92.227.240:8080"
-                    value={settings.sms_android_url}
-                    onChange={(e) => setSettings({ ...settings, sms_android_url: e.target.value })}
-                  />
-                  <small style={{ color: "var(--muted)", fontSize: 11, marginTop: 4, display: "block" }}>
-                    Copy from "Local address" in SMSGate app screen on phone.
-                  </small>
-                </div>
+          {gateway.gateway_mode === "cloud" && <div style={gridStyle}>
+            <Field label="Device ID"><input style={inputStyle} value={gateway.device_id} onChange={(e) => setGateway({ ...gateway, device_id: e.target.value })} placeholder="SMSGate device ID" /></Field>
+            <Field label="Cloud username"><input style={inputStyle} value={gateway.username} onChange={(e) => setGateway({ ...gateway, username: e.target.value })} /></Field>
+            <Field label={`Cloud password${currentGateway?.password_set ? " (leave blank to keep)" : ""}`}><input type="password" style={inputStyle} value={gateway.password} onChange={(e) => setGateway({ ...gateway, password: e.target.value })} /></Field>
+            <Field label="SIM slot (optional)"><input type="number" min={1} max={3} style={inputStyle} value={gateway.sim_number} onChange={(e) => setGateway({ ...gateway, sim_number: e.target.value })} placeholder="1" /></Field>
+          </div>}
 
-                <div>
-                  <label style={{ fontWeight: 700, fontSize: 13, display: "block", marginBottom: 6, color: "var(--text)" }}>App Username</label>
-                  <input
-                    type="text"
-                    className="input-field"
-                    style={{ width: "100%", padding: "10px 14px", borderRadius: 10, background: "var(--input-bg)", border: "1px solid var(--input-border)", color: "var(--text)" }}
-                    placeholder="sms"
-                    value={settings.sms_android_user}
-                    onChange={(e) => setSettings({ ...settings, sms_android_user: e.target.value })}
-                  />
-                  <small style={{ color: "var(--muted)", fontSize: 11, marginTop: 4, display: "block" }}>
-                    Shown as Username on SMSGate app screen.
-                  </small>
-                </div>
+          {gateway.gateway_mode === "local" && <div style={gridStyle}>
+            <Field label="Local server URL"><input style={inputStyle} value={gateway.local_url} onChange={(e) => setGateway({ ...gateway, local_url: e.target.value })} placeholder="http://phone-ip:8080" /></Field>
+            <Field label="Username"><input style={inputStyle} value={gateway.username} onChange={(e) => setGateway({ ...gateway, username: e.target.value })} /></Field>
+            <Field label="Password"><input type="password" style={inputStyle} value={gateway.password} onChange={(e) => setGateway({ ...gateway, password: e.target.value })} /></Field>
+          </div>}
 
-                <div>
-                  <label style={{ fontWeight: 700, fontSize: 13, display: "block", marginBottom: 6, color: "var(--text)" }}>App Password</label>
-                  <input
-                    type="text"
-                    className="input-field"
-                    style={{ width: "100%", padding: "10px 14px", borderRadius: 10, background: "var(--input-bg)", border: "1px solid var(--input-border)", color: "var(--text)" }}
-                    placeholder="Enter password shown on phone screen"
-                    value={settings.sms_android_password}
-                    onChange={(e) => setSettings({ ...settings, sms_android_password: e.target.value })}
-                  />
-                  <small style={{ color: "var(--muted)", fontSize: 11, marginTop: 4, display: "block" }}>
-                    Shown as Password on SMSGate app screen (e.g. lmkGykF3).
-                  </small>
-                </div>
-              </>
-            ) : (
-              <>
-                <div>
-                  <label style={{ fontWeight: 700, fontSize: 13, display: "block", marginBottom: 6, color: "var(--text)" }}>Modem Serial Port</label>
-                  <input
-                    type="text"
-                    className="input-field"
-                    style={{ width: "100%", padding: "10px 14px", borderRadius: 10, background: "var(--input-bg)", border: "1px solid var(--input-border)", color: "var(--text)" }}
-                    placeholder="/dev/ttyUSB0 or COM3"
-                    value={settings.sms_modem_port}
-                    onChange={(e) => setSettings({ ...settings, sms_modem_port: e.target.value })}
-                  />
-                </div>
-                <div>
-                  <label style={{ fontWeight: 700, fontSize: 13, display: "block", marginBottom: 6, color: "var(--text)" }}>Modem Baud Rate</label>
-                  <input
-                    type="text"
-                    className="input-field"
-                    style={{ width: "100%", padding: "10px 14px", borderRadius: 10, background: "var(--input-bg)", border: "1px solid var(--input-border)", color: "var(--text)" }}
-                    placeholder="115200"
-                    value={settings.sms_modem_baud}
-                    onChange={(e) => setSettings({ ...settings, sms_modem_baud: e.target.value })}
-                  />
-                </div>
-              </>
-            )}
+          {gateway.gateway_mode === "modem" && <div style={gridStyle}>
+            <Field label="Serial port"><input style={inputStyle} value={gateway.modem_port} onChange={(e) => setGateway({ ...gateway, modem_port: e.target.value })} placeholder="COM3 or /dev/ttyUSB0" /></Field>
+            <Field label="Baud rate"><input style={inputStyle} value={gateway.modem_baud} onChange={(e) => setGateway({ ...gateway, modem_baud: e.target.value })} /></Field>
+          </div>}
 
-            <div>
-              <label style={{ fontWeight: 700, fontSize: 13, display: "block", marginBottom: 6, color: "var(--text)" }}>Daily Maximum SMS Cap</label>
-              <input
-                type="number"
-                className="input-field"
-                style={{ width: "100%", padding: "10px 14px", borderRadius: 10, background: "var(--input-bg)", border: "1px solid var(--input-border)", color: "var(--text)" }}
-                value={settings.sms_daily_cap}
-                onChange={(e) => setSettings({ ...settings, sms_daily_cap: e.target.value })}
-              />
+          <label style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 12, color: "var(--text)", fontWeight: 700 }}>
+            <input type="checkbox" checked={gateway.active} onChange={(e) => setGateway({ ...gateway, active: e.target.checked })} /> Gateway enabled
+          </label>
+
+          <div style={actionsStyle}>
+            <button className="btn btn-primary" onClick={() => void saveGateway()} disabled={busy !== null}>{busy === "gateway" ? "Saving…" : "Save gateway"}</button>
+            {currentGateway && <button className="btn btn-outline" onClick={() => void testConnection()} disabled={busy !== null}>{busy === "connection" ? "Testing…" : "Test connection"}</button>}
+          </div>
+        </section>
+
+        <section style={cardStyle}>
+          <div style={headerStyle}>
+            <div><div style={eyebrow}>SAFETY GATE</div><h2 style={titleStyle}>Review before sending</h2><p style={muted}>Attendance only creates a queued batch. Nothing is sent until this batch is approved. {isAdmin ? "You are viewing the college-wide approval scope." : "You are viewing only your HOD scope."}</p></div>
+            <input type="date" value={approvalDate} onChange={(e) => setApprovalDate(e.target.value)} style={{ ...inputStyle, width: 170 }} />
+          </div>
+          {approvalRows.length === 0 ? <div style={emptyStyle}>No unapproved absentee SMS messages for this date.</div> : <>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 12 }}>
+              <strong style={{ color: "var(--text)" }}>{approvalRows.length} message(s) awaiting approval</strong>
+              <button className="btn btn-primary" onClick={() => void approve()} disabled={busy !== null}>{busy === "approve" ? "Approving…" : "Approve batch"}</button>
             </div>
-          </div>
+            <div style={{ display: "grid", gap: 8 }}>
+              {approvalRows.map((r) => <div key={r.id} style={rowStyle}>
+                <div><strong style={{ color: "var(--text)" }}>{r.roll_no} — {r.student_name}</strong><div style={muted}>{r.parent_phone}</div></div>
+                <div style={{ flex: 1, color: "var(--text)", fontSize: 13 }}>{r.message}</div>
+                <div style={{ minWidth: 180, textAlign: "right" }}><div><span style={pill(r.gateway_id && r.gateway_active && !r.error ? "good" : "bad")}>{r.error ? "BLOCKED" : r.gateway_name || "NO GATEWAY"}</span></div><div style={{ ...muted, marginTop: 4 }}>{r.hod_username || "No HOD"}</div></div>
+              </div>)}
+            </div>
+          </>}
+        </section>
 
-          <div style={{ display: "flex", gap: 12 }}>
-            <button
-              type="submit"
-              className="btn btn-primary"
-              style={{ background: "linear-gradient(135deg, #0284c7, #2563eb)", color: "#ffffff", fontWeight: 700, padding: "12px 24px", borderRadius: 10, border: "none", boxShadow: "0 8px 20px rgba(56, 189, 248, 0.35)", cursor: "pointer" }}
-              disabled={savingSettings}
-            >
-              {savingSettings ? "Saving Gateway Settings..." : "💾 Save Gateway Settings"}
-            </button>
+        <section style={cardStyle}>
+          <div style={headerStyle}><div><div style={eyebrow}>OPERATIONS</div><h2 style={titleStyle}>Sending controls</h2></div></div>
+          <div style={gridStyle}>
+            <Field label="Daily SMS cap"><input type="number" min={1} style={inputStyle} value={settings.sms_daily_cap} onChange={(e) => setSettings({ ...settings, sms_daily_cap: e.target.value })} /></Field>
+            <Field label="Automatic worker"><select style={inputStyle} value={settings.sms_enabled} onChange={(e) => setSettings({ ...settings, sms_enabled: e.target.value })}><option value="1">Enabled</option><option value="0">Disabled</option></select></Field>
+            <Field label="Test recipient"><input style={inputStyle} value={testPhone} onChange={(e) => setTestPhone(e.target.value)} placeholder="10-digit mobile number" /></Field>
           </div>
-        </form>
-
-        {/* Test SMS Section */}
-        <hr style={{ margin: "24px 0", border: 0, borderTop: "1px solid var(--border)" }} />
-        <form onSubmit={handleTestSms} style={{ display: "flex", gap: 14, alignItems: "flex-end", flexWrap: "wrap" }}>
-          <div style={{ flex: 1, minWidth: 260 }}>
-            <label style={{ fontWeight: 700, fontSize: 13, display: "block", marginBottom: 6, color: "var(--text)" }}>Test Mobile Number</label>
-            <input
-              type="text"
-              className="input-field"
-              style={{ width: "100%", padding: "10px 14px", borderRadius: 10, background: "var(--input-bg)", border: "1px solid var(--input-border)", color: "var(--text)" }}
-              placeholder="+919876543210"
-              value={testPhone}
-              onChange={(e) => setTestPhone(e.target.value)}
-            />
+          <div style={actionsStyle}>
+            <button className="btn btn-primary" onClick={() => void saveOperationsSettings()} disabled={busy !== null}>{busy === "settings" ? "Saving…" : "Save settings"}</button>
+            <button className="btn btn-outline" onClick={() => void sendTest()} disabled={busy !== null || !currentGateway}>{busy === "test-sms" ? "Sending…" : "Send test SMS"}</button>
           </div>
-          <button
-            type="submit"
-            className="btn btn-secondary"
-            style={{ background: "var(--chip-bg-muted)", color: "var(--heading-accent)", fontWeight: 700, padding: "12px 20px", borderRadius: 10, border: "1px solid var(--input-border)", cursor: "pointer" }}
-            disabled={testingSms}
-          >
-            {testingSms ? "Sending Test SMS..." : "📤 Send Test SMS via Phone Gateway"}
-          </button>
-        </form>
-      </div>
+          <p style={{ ...muted, marginTop: 12 }}>A test SMS is independent of the absentee approval queue and uses only the currently selected HOD gateway. It never changes absentee routing.</p>
+        </section>
 
-      {/* SMS Queue & Logs Table */}
-      <div className="table-wrap">
-        <h3 style={{ margin: "0 0 16px 0", fontSize: 18, fontWeight: 800, color: "var(--text)" }}>Absentee SMS Queue & Log History</h3>
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>Timestamp</th>
-              <th>Roll No</th>
-              <th>Parent Phone</th>
-              <th>Message Content</th>
-              <th className="center">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.id}>
-                <td style={{ whiteSpace: "nowrap", color: "var(--muted)", fontSize: 12 }}>{r.created_at}</td>
-                <td><strong>{r.roll_no}</strong></td>
-                <td>{r.parent_phone}</td>
-                <td style={{ fontSize: 12 }}>{r.message}</td>
-                <td className="center">
-                  <span className={`chip ${r.status === "SENT" ? "chip-green" : r.status === "FAILED" ? "chip-red" : "chip-yellow"}`}>
-                    {r.status}
-                  </span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {loading && <p className="empty-note">Loading SMS log…</p>}
-        {!loading && rows.length === 0 && <p className="empty-note">No SMS log entries found.</p>}
+        <section style={cardStyle}>
+          <div style={headerStyle}><div><div style={eyebrow}>HISTORY</div><h2 style={titleStyle}>Recent SMS activity</h2></div></div>
+          {loading ? <div style={emptyStyle}>Loading…</div> : logs.length === 0 ? <div style={emptyStyle}>No SMS activity yet.</div> : <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", color: "var(--text)" }}>
+              <thead><tr>{["Date", "Student", "Gateway", "Status", "Error"].map((h) => <th key={h} style={thStyle}>{h}</th>)}</tr></thead>
+              <tbody>{logs.map((r) => <tr key={r.id}><td style={tdStyle}>{r.created_at}</td><td style={tdStyle}>{r.roll_no}{r.student_name ? ` — ${r.student_name}` : ""}</td><td style={tdStyle}>{r.gateway_name || "Unassigned"}</td><td style={tdStyle}><span style={pill(r.status === "SENT" ? "good" : r.status === "FAILED" ? "bad" : "muted")}>{r.status}</span></td><td style={{ ...tdStyle, color: "var(--muted)" }}>{r.error || "—"}</td></tr>)}</tbody>
+            </table>
+          </div>}
+        </section>
       </div>
     </AppShell>
   );
+}
+
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return <label style={{ display: "grid", gap: 7, color: "var(--text)", fontSize: 13, fontWeight: 700 }}>{label}{children}</label>;
+}
+
+const cardStyle: CSSProperties = { background: "var(--card-glass)", border: "1px solid var(--border)", borderRadius: 18, padding: 20, boxShadow: "0 8px 28px rgba(0,0,0,.08)" };
+const headerStyle: CSSProperties = { display: "flex", justifyContent: "space-between", gap: 18, alignItems: "flex-start", marginBottom: 18 };
+const titleStyle: CSSProperties = { margin: "3px 0 5px", color: "var(--text)", fontSize: 21 };
+const muted: CSSProperties = { color: "var(--muted)", fontSize: 13, lineHeight: 1.5, margin: 0 };
+const eyebrow: CSSProperties = { color: "var(--heading-accent)", fontSize: 11, fontWeight: 900, letterSpacing: 1.4 };
+const gridStyle: CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 14 };
+const inputStyle: CSSProperties = { width: "100%", boxSizing: "border-box", padding: "10px 12px", borderRadius: 10, border: "1px solid var(--input-border)", background: "var(--input-bg)", color: "var(--text)" };
+const actionsStyle: CSSProperties = { display: "flex", gap: 10, flexWrap: "wrap", marginTop: 16 };
+const emptyStyle: CSSProperties = { padding: 18, borderRadius: 12, background: "var(--chip-bg-muted)", color: "var(--muted)", textAlign: "center" };
+const rowStyle: CSSProperties = { display: "flex", alignItems: "center", gap: 14, padding: 12, border: "1px solid var(--border)", borderRadius: 12, flexWrap: "wrap" };
+const thStyle: CSSProperties = { textAlign: "left", padding: "9px 8px", borderBottom: "1px solid var(--border)", fontSize: 11, color: "var(--muted)", textTransform: "uppercase" };
+const tdStyle: CSSProperties = { padding: "10px 8px", borderBottom: "1px solid var(--border)", fontSize: 12, verticalAlign: "top" };
+
+function pill(kind: "good" | "bad" | "muted") : CSSProperties {
+  return { display: "inline-flex", padding: "4px 8px", borderRadius: 999, fontSize: 10, fontWeight: 900, letterSpacing: .5,
+    background: kind === "good" ? "rgba(16,185,129,.12)" : kind === "bad" ? "rgba(239,68,68,.12)" : "var(--chip-bg-muted)",
+    color: kind === "good" ? "#059669" : kind === "bad" ? "#dc2626" : "var(--muted)" };
 }

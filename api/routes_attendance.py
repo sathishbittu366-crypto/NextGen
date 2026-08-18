@@ -82,12 +82,15 @@ def _load_session_or_404(session_id: int):
 
 
 def _require_owner_or_hod(user: CurrentUser, session) -> None:
-    # WHY separate from _require_staff: this guards WHICH sessions a given
-    # FACULTY may act on; _require_staff guards WHO may act at all. HOD
-    # bypasses this check (can act on any faculty's session), FACULTY may
-    # only act on their own. Same split as the old app's every handler.
+    # Faculty own their own sessions. A HOD may only access sessions belonging
+    # to that HOD's organizational scope. ADMIN remains the cross-scope role.
+    # Physical college location is never used for authorization.
     if user.role == "FACULTY" and session["faculty_username"] != user.username:
         raise ApiError("You do not have access to this session", status_code=403, code="FORBIDDEN")
+    if user.role == "HOD" and session.get("hod_username") != user.username:
+        raise ApiError("This session belongs to another HOD scope", status_code=403, code="FORBIDDEN")
+    if user.role == "HOD" and not session.get("hod_username"):
+        raise ApiError("This session has no HOD ownership assigned", status_code=403, code="FORBIDDEN")
 
 
 def _serialize_session(session) -> dict:
@@ -333,12 +336,10 @@ async def save(
         try:
             queued_count, _ = queue_absentees_for_session(session_id, absent_rolls, actor=user.username)
         except Exception as exc:
+            # Attendance itself has already been committed successfully. SMS
+            # routing problems are recorded by the queue service and must not
+            # turn a valid attendance save into a failed attendance operation.
             print(f"[Automated SMS Queue] Notice: {exc}")
-        try:
-            from webapp.sms_worker import process_pending_sms_now
-            process_pending_sms_now()
-        except Exception as exc:
-            print(f"[Automated SMS Gateway] Dispatch notice: {exc}")
 
     roster = _serialize_roster(session_id)
     present = sum(r["present"] for r in roster)

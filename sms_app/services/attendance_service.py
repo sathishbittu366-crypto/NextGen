@@ -330,18 +330,36 @@ def get_or_create_session(*, attendance_date, semester_id, subject_id, faculty_u
         duration_hours=duration_hours, topic=topic,
     )
     with connect() as c:
+        faculty = c.execute(
+            "SELECT username, role, department, hod_username FROM users WHERE username=%s AND active=1",
+            (faculty_username,),
+        ).fetchone()
+        if not faculty:
+            raise ValueError("Faculty account is not active")
+        hod_username = faculty["hod_username"]
+        if faculty["role"] == "HOD":
+            hod_username = faculty_username
+        if not hod_username:
+            raise ValueError("This faculty account is not assigned to a HOD scope")
+
         row = c.execute("""
             SELECT * FROM attendance_sessions
             WHERE attendance_date=%s AND subject_id=%s AND faculty_username=%s AND session_type=%s
         """, (attendance_date, subject_id, faculty_username, session_type)).fetchone()
         if row:
+            # Legacy sessions without an owner are repaired only from the
+            # authenticated faculty's current HOD scope. Never guess from
+            # physical location or another gateway.
+            if not row.get("hod_username"):
+                c.execute("UPDATE attendance_sessions SET hod_username=%s WHERE id=%s", (hod_username, row["id"]))
+                row = c.execute("SELECT * FROM attendance_sessions WHERE id=%s", (row["id"],)).fetchone()
             return row
         cur = c.execute("""
             INSERT INTO attendance_sessions(
-                attendance_date,semester_id,subject_id,faculty_username,
+                attendance_date,semester_id,subject_id,faculty_username,hod_username,
                 session_type,duration_hours,topic,created_by
-            ) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)
-        """, (attendance_date, semester_id, subject_id, faculty_username,
+            ) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        """, (attendance_date, semester_id, subject_id, faculty_username, hod_username,
               session_type, duration_hours, topic, actor))
         audit(c, actor, "CREATE", "attendance_session",
               f"session={cur.lastrowid}; subject={subject_id}; type={session_type}; hours={duration_hours}")
@@ -383,14 +401,20 @@ def session_is_editable(session, role):
 
 def load_register(session_id):
     with connect() as c:
-        students = c.execute("SELECT roll_no,name FROM students WHERE department='CSD' AND active=1 ORDER BY roll_no").fetchall()
+        session = c.execute("SELECT hod_username FROM attendance_sessions WHERE id=%s", (session_id,)).fetchone()
+        if not session or not session.get("hod_username"):
+            raise ValueError("Attendance session has no HOD ownership assigned")
+        students = c.execute(
+            "SELECT roll_no,name FROM students WHERE department='CSD' AND hod_username=%s AND active=1 ORDER BY roll_no",
+            (session["hod_username"],),
+        ).fetchall()
         existing = {r["roll_no"]: r["status"] for r in c.execute(
             "SELECT roll_no,status FROM attendance_records WHERE session_id=%s", (session_id,)
         ).fetchall()}
     return students, existing
 
 
-def sessions_last_n_days(days=15, on_date=None, semester_id=None, year=None):
+def sessions_last_n_days(days=15, on_date=None, semester_id=None, year=None, hod_username=None):
     # — HOD 15-day view (P0-P1 req 5): sessions grouped by date, newest first.
     # on_date (YYYY-MM-DD): if given, shows just that single day instead of
     # the rolling N-day window (Boss's date-picker request, 2026-07-22).
@@ -416,6 +440,10 @@ def sessions_last_n_days(days=15, on_date=None, semester_id=None, year=None):
             prefix = YEAR_PREFIXES[year]
             where_clauses.append("sem.code LIKE %s")
             params.append(prefix + "%")
+
+        if hod_username:
+            where_clauses.append("a.hod_username = %s")
+            params.append(hod_username)
 
         where_clause = "WHERE " + " AND ".join(where_clauses)
         rows = c.execute(f"""

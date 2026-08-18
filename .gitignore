@@ -5,6 +5,7 @@ __pycache__/
 
 # Environment & local DB
 .env
+.env.test
 *.db
 sms.db
 *.sqlite
@@ -13,6 +14,13 @@ sms.db
 # Build outputs
 frontend/dist/
 frontend/node_modules/
+
+IMPLEMENTATION_STATE.md
+VERSION.md
+spec.md
+build_summary.py
+
+reports/
 
 webapp/uploads/
 # Executables

@@ -593,6 +593,7 @@ def init_db(db_name=None):
             roll_no VARCHAR(64) NOT NULL UNIQUE,
             name VARCHAR(255) NOT NULL,
             department VARCHAR(64) NOT NULL DEFAULT 'CSD' CHECK(department='CSD'),
+            hod_username VARCHAR(64),
             email VARCHAR(255) UNIQUE,
             phone VARCHAR(32),
             parent_phone VARCHAR(32),
@@ -637,6 +638,7 @@ def init_db(db_name=None):
             full_name VARCHAR(255) NOT NULL DEFAULT '',
             photo_path VARCHAR(512),
             department VARCHAR(64),
+            hod_username VARCHAR(64),
             designation VARCHAR(128),
             employee_id VARCHAR(64),
             email VARCHAR(255),
@@ -661,6 +663,14 @@ def init_db(db_name=None):
             c.execute("ALTER TABLE users ADD COLUMN email VARCHAR(255)")
         if "email_verified" not in existing_user_cols:
             c.execute("ALTER TABLE users ADD COLUMN email_verified TINYINT(1) NOT NULL DEFAULT 0 CHECK(email_verified IN (0,1))")
+        if "hod_username" not in existing_user_cols:
+            c.execute("ALTER TABLE users ADD COLUMN hod_username VARCHAR(64) NULL")
+
+        # Additive migrations for HOD-scoped SMS routing. These are intentionally
+        # idempotent because init_db() runs on application startup.
+        existing_student_cols = {row["Field"] if "Field" in row else row["name"] for row in c.execute("SHOW COLUMNS FROM students").fetchall()}
+        if "hod_username" not in existing_student_cols:
+            c.execute("ALTER TABLE students ADD COLUMN hod_username VARCHAR(64) NULL")
 
         c.execute("""
         CREATE TABLE IF NOT EXISTS attendance(
@@ -759,6 +769,7 @@ def init_db(db_name=None):
             semester_id INT NOT NULL,
             subject_id INT NOT NULL,
             faculty_username VARCHAR(64) NOT NULL,
+            hod_username VARCHAR(64),
             session_type VARCHAR(32) NOT NULL CHECK(session_type IN ('CLASS','LAB')),
             duration_hours INT NOT NULL CHECK(duration_hours IN (1,2,3)),
             topic TEXT NOT NULL,
@@ -771,6 +782,27 @@ def init_db(db_name=None):
             FOREIGN KEY(faculty_username) REFERENCES users(username) ON UPDATE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """)
+
+        existing_session_cols = {row["Field"] if "Field" in row else row["name"] for row in c.execute("SHOW COLUMNS FROM attendance_sessions").fetchall()}
+        if "hod_username" not in existing_session_cols:
+            c.execute("ALTER TABLE attendance_sessions ADD COLUMN hod_username VARCHAR(64) NULL")
+
+        # Backfill ownership on users first. A sole active HOD in a department
+        # is unambiguous; multiple HODs intentionally leave assignments NULL.
+        active_hods = c.execute("SELECT username, department FROM users WHERE role='HOD' AND active=1").fetchall()
+        dept_hod_map = {}
+        for h in active_hods:
+            dept = (h["department"] or "").strip()
+            if dept and dept not in dept_hod_map:
+                dept_hod_map[dept] = h["username"]
+            elif dept:
+                dept_hod_map[dept] = None
+        for dept, hod_username in dept_hod_map.items():
+            if hod_username:
+                c.execute("UPDATE users SET hod_username=%s WHERE department=%s AND role<>'HOD' AND (hod_username IS NULL OR hod_username='')", (hod_username, dept))
+                c.execute("UPDATE users SET hod_username=username WHERE department=%s AND role='HOD' AND username=%s", (dept, hod_username))
+                c.execute("UPDATE students SET hod_username=%s WHERE department=%s AND (hod_username IS NULL OR hod_username='')", (hod_username, dept))
+                c.execute("UPDATE attendance_sessions a JOIN users u ON u.username=a.faculty_username SET a.hod_username=%s WHERE u.department=%s AND a.hod_username IS NULL", (hod_username, dept))
 
         c.execute("""
         CREATE TABLE IF NOT EXISTS attendance_records(
@@ -786,6 +818,29 @@ def init_db(db_name=None):
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """)
 
+        # SMS gateway ownership is by HOD/organizational scope, never by physical
+        # college block. A phone may be physically anywhere and still serve only
+        # the students assigned to its HOD.
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS sms_gateways(
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            hod_username VARCHAR(64) NOT NULL UNIQUE,
+            gateway_name VARCHAR(128) NOT NULL DEFAULT 'SMSGate Phone',
+            gateway_mode VARCHAR(16) NOT NULL DEFAULT 'cloud',
+            device_id VARCHAR(255),
+            local_url VARCHAR(255),
+            username VARCHAR(128),
+            password VARCHAR(255),
+            modem_port VARCHAR(128),
+            modem_baud VARCHAR(32) DEFAULT '115200',
+            sim_number TINYINT,
+            active TINYINT(1) NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            FOREIGN KEY(hod_username) REFERENCES users(username) ON UPDATE CASCADE ON DELETE RESTRICT
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """)
+
         c.execute("""
         CREATE TABLE IF NOT EXISTS sms_queue(
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -794,15 +849,104 @@ def init_db(db_name=None):
             message TEXT NOT NULL,
             attendance_session_id INT,
             send_date VARCHAR(32) NOT NULL,
+            hod_username VARCHAR(64) NULL,
+            gateway_id INT NULL,
+            approved TINYINT(1) NOT NULL DEFAULT 0 CHECK(approved IN (0,1)),
             status VARCHAR(32) NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING','SENT','FAILED')),
+            attempt_count INT NOT NULL DEFAULT 0,
+            processing_started_at DATETIME NULL,
+            provider_message_id VARCHAR(255),
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             sent_at DATETIME,
             error TEXT,
             UNIQUE(roll_no,send_date),
             FOREIGN KEY(roll_no) REFERENCES students(roll_no) ON UPDATE CASCADE ON DELETE CASCADE,
-            FOREIGN KEY(attendance_session_id) REFERENCES attendance_sessions(id)
+            FOREIGN KEY(attendance_session_id) REFERENCES attendance_sessions(id),
+            FOREIGN KEY(gateway_id) REFERENCES sms_gateways(id) ON UPDATE CASCADE ON DELETE RESTRICT
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """)
+
+        # Existing deployments may already have sms_queue without the new
+        # routing/approval columns. Add them without destroying queued data.
+        existing_sms_cols = {row["Field"] if "Field" in row else row["name"] for row in c.execute("SHOW COLUMNS FROM sms_queue").fetchall()}
+        if "hod_username" not in existing_sms_cols:
+            c.execute("ALTER TABLE sms_queue ADD COLUMN hod_username VARCHAR(64) NULL")
+        if "gateway_id" not in existing_sms_cols:
+            c.execute("ALTER TABLE sms_queue ADD COLUMN gateway_id INT NULL")
+        if "approved" not in existing_sms_cols:
+            c.execute("ALTER TABLE sms_queue ADD COLUMN approved TINYINT(1) NOT NULL DEFAULT 0")
+            # Legacy rows are approved only after their original HOD/gateway
+            # ownership can be resolved below. Unresolved rows stay blocked.
+        if "attempt_count" not in existing_sms_cols:
+            c.execute("ALTER TABLE sms_queue ADD COLUMN attempt_count INT NOT NULL DEFAULT 0")
+        if "processing_started_at" not in existing_sms_cols:
+            c.execute("ALTER TABLE sms_queue ADD COLUMN processing_started_at DATETIME NULL")
+        if "provider_message_id" not in existing_sms_cols:
+            c.execute("ALTER TABLE sms_queue ADD COLUMN provider_message_id VARCHAR(255) NULL")
+
+        # Add the two routing foreign keys only if they are not already present.
+        fk_rows = c.execute("""
+            SELECT TABLE_NAME, CONSTRAINT_NAME
+            FROM information_schema.KEY_COLUMN_USAGE
+            WHERE TABLE_SCHEMA=DATABASE()
+              AND TABLE_NAME IN ('students','sms_queue')
+              AND REFERENCED_TABLE_NAME IS NOT NULL
+        """).fetchall()
+        fk_names = {r["CONSTRAINT_NAME"] for r in fk_rows}
+        if "fk_students_hod_username" not in fk_names:
+            c.execute("ALTER TABLE students ADD CONSTRAINT fk_students_hod_username FOREIGN KEY(hod_username) REFERENCES users(username) ON UPDATE CASCADE ON DELETE SET NULL")
+        user_fk_rows = c.execute("""
+            SELECT CONSTRAINT_NAME FROM information_schema.KEY_COLUMN_USAGE
+            WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='users'
+              AND COLUMN_NAME='hod_username' AND REFERENCED_TABLE_NAME='users'
+        """).fetchall()
+        if not user_fk_rows:
+            try:
+                c.execute("ALTER TABLE users ADD CONSTRAINT fk_users_hod_username FOREIGN KEY(hod_username) REFERENCES users(username) ON UPDATE CASCADE ON DELETE SET NULL")
+            except Exception:
+                pass
+        if "fk_sms_queue_gateway" not in fk_names:
+            c.execute("ALTER TABLE sms_queue ADD CONSTRAINT fk_sms_queue_gateway FOREIGN KEY(gateway_id) REFERENCES sms_gateways(id) ON UPDATE CASCADE ON DELETE RESTRICT")
+        session_fk_rows = c.execute("""
+            SELECT CONSTRAINT_NAME FROM information_schema.KEY_COLUMN_USAGE
+            WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='attendance_sessions'
+              AND COLUMN_NAME='hod_username' AND REFERENCED_TABLE_NAME='users'
+        """).fetchall()
+        if not session_fk_rows:
+            try:
+                c.execute("ALTER TABLE attendance_sessions ADD CONSTRAINT fk_attendance_sessions_hod FOREIGN KEY(hod_username) REFERENCES users(username) ON UPDATE CASCADE ON DELETE SET NULL")
+            except Exception:
+                pass
+
+        # Safe indexes; duplicate-index errors are ignored because startup must
+        # remain idempotent across MySQL versions.
+        for idx_name, idx_sql in [
+            ("idx_students_hod", "CREATE INDEX idx_students_hod ON students(hod_username)"),
+            ("idx_users_hod", "CREATE INDEX idx_users_hod ON users(hod_username)"),
+            ("idx_attendance_sessions_hod", "CREATE INDEX idx_attendance_sessions_hod ON attendance_sessions(hod_username)"),
+            ("idx_sms_queue_gateway", "CREATE INDEX idx_sms_queue_gateway ON sms_queue(gateway_id)"),
+            ("idx_sms_queue_hod", "CREATE INDEX idx_sms_queue_hod ON sms_queue(hod_username,send_date)"),
+            ("idx_sms_queue_approval", "CREATE INDEX idx_sms_queue_approval ON sms_queue(approved,status,send_date)"),
+        ]:
+            try:
+                c.execute(idx_sql)
+            except Exception:
+                pass
+
+        # Backfill legacy CSD students only when ownership is unambiguous. If
+        # more than one HOD exists, rows stay NULL and are intentionally blocked
+        # from SMS dispatch until an owner is explicitly assigned.
+        hods = c.execute("SELECT username FROM users WHERE role='HOD' AND active=1 AND department='CSD'").fetchall()
+        if len(hods) == 1:
+            c.execute("UPDATE students SET hod_username=%s WHERE department='CSD' AND (hod_username IS NULL OR hod_username='')", (hods[0]["username"],))
+
+        # Create one cloud gateway placeholder for the sole HOD only if none
+        # exists. Credentials remain empty until configured from the HOD SMS UI.
+        if len(hods) == 1:
+            c.execute("""
+                INSERT IGNORE INTO sms_gateways(hod_username,gateway_name,gateway_mode,active)
+                VALUES(%s,%s,'cloud',1)
+            """, (hods[0]["username"], f"{hods[0]['username']} SMSGate"))
 
         c.execute("""
         CREATE TABLE IF NOT EXISTS academic_calendar(
@@ -940,7 +1084,7 @@ def init_db(db_name=None):
             c.execute("INSERT IGNORE INTO settings(`key`,`value`) VALUES(%s,%s)",(key,value))
         for k, v in [
             ("sms_enabled", "1"),
-            ("sms_gateway_type", "sim_modem"),
+            ("sms_gateway_type", "cloud"),
             ("sms_department_number", "+916300743637"),
             ("sms_modem_port", "/dev/ttyUSB0"),
             ("sms_modem_baud", "115200"),
@@ -1000,11 +1144,53 @@ def init_db(db_name=None):
                         calendar_path=VALUES(calendar_path), calendar_updated_at=CURRENT_TIMESTAMP, calendar_updated_by='system'
                 """, (iii_i_sem, rel_path))
             c.execute("INSERT IGNORE INTO settings(`key`,`value`) VALUES('migrated_iii_i_calendar_doc','1')")
+
+        # Final ownership backfill after all default users and student rows have
+        # been created. Only a single active HOD makes automatic assignment safe.
+        hods = c.execute("SELECT username FROM users WHERE role='HOD' AND active=1 AND department='CSD'").fetchall()
+        if len(hods) == 1:
+            hod_username = hods[0]["username"]
+            c.execute("UPDATE users SET hod_username=%s WHERE department='CSD' AND role='HOD' AND username=%s", (hod_username, hod_username))
+            c.execute("UPDATE users SET hod_username=%s WHERE department='CSD' AND role='FACULTY' AND (hod_username IS NULL OR hod_username='')", (hod_username,))
+            c.execute("UPDATE students SET hod_username=%s WHERE department='CSD' AND (hod_username IS NULL OR hod_username='')", (hod_username,))
+            c.execute("UPDATE attendance_sessions a JOIN users u ON u.username=a.faculty_username SET a.hod_username=%s WHERE u.department='CSD' AND a.hod_username IS NULL", (hod_username,))
+            c.execute("""
+                INSERT IGNORE INTO sms_gateways(hod_username,gateway_name,gateway_mode,active)
+                VALUES(%s,%s,'cloud',1)
+            """, (hod_username, f"{hod_username} SMSGate"))
+
+            # Resolve legacy queue rows only when the student owner and gateway
+            # are unambiguous. Never pick a different HOD as a fallback.
+            c.execute("""
+                UPDATE sms_queue q
+                JOIN students st ON st.roll_no=q.roll_no
+                JOIN sms_gateways g ON g.hod_username=st.hod_username
+                SET q.hod_username=st.hod_username, q.gateway_id=g.id
+                WHERE q.gateway_id IS NULL AND st.hod_username=%s
+            """, (hod_username,))
+            c.execute("""
+                UPDATE sms_queue q
+                JOIN sms_gateways g ON g.id=q.gateway_id
+                SET q.hod_username=g.hod_username
+                WHERE q.hod_username IS NULL
+            """)
+            c.execute("""
+                UPDATE sms_queue
+                SET approved=1
+                WHERE status='PENDING' AND approved=0 AND gateway_id IS NOT NULL AND hod_username IS NOT NULL
+            """)
+
         for col in ("aadhaar_number", "apaar_id"):
             for srow in c.execute(f"SELECT id, {col} FROM students WHERE {col} IS NOT NULL AND {col} != ''").fetchall():
                 value = srow[col]
                 if not looks_encrypted(value):
                     c.execute(f"UPDATE students SET {col}=%s WHERE id=%s", (encrypt_field(value), srow["id"]))
+
+        # Gateway passwords are credentials, not ordinary settings. Encrypt
+        # legacy plaintext values once and keep the plaintext out of API output.
+        for grow in c.execute("SELECT id,password FROM sms_gateways WHERE password IS NOT NULL AND password != ''").fetchall():
+            if not looks_encrypted(grow["password"]):
+                c.execute("UPDATE sms_gateways SET password=%s WHERE id=%s", (encrypt_field(grow["password"]), grow["id"]))
 
 
 def get_conn():
@@ -1059,7 +1245,20 @@ def create_user(username,password,role,full_name="",student_roll_no=None,actor="
             if not s: raise ValueError("Student roll number was not found in CSD")
             full_name=s["name"]
         pw_hash = _hash_password(password)
-        c.execute("INSERT INTO users(username,password,role,student_roll_no,full_name) VALUES(%s,%s,%s,%s,%s)",(username,pw_hash,role,student_roll_no,full_name.strip()))
+        hod_username = None
+        if role == "HOD":
+            hod_username = username
+        elif role == "FACULTY":
+            actor_row = c.execute("SELECT role,hod_username,department FROM users WHERE username=%s", (actor,)).fetchone()
+            if actor_row and actor_row["role"] == "HOD":
+                hod_username = actor
+            elif actor_row and actor_row.get("hod_username"):
+                hod_username = actor_row["hod_username"]
+            elif actor_row and actor_row.get("department"):
+                hods = c.execute("SELECT username FROM users WHERE role='HOD' AND active=1 AND department=%s", (actor_row["department"],)).fetchall()
+                if len(hods) == 1:
+                    hod_username = hods[0]["username"]
+        c.execute("INSERT INTO users(username,password,role,student_roll_no,full_name,hod_username) VALUES(%s,%s,%s,%s,%s,%s)",(username,pw_hash,role,student_roll_no,full_name.strip(),hod_username))
         _save_custom_user_backup(username, pw_hash, role, full_name.strip(), student_roll_no)
         audit(c,actor,"CREATE","user",f"{username} ({role})")
 
@@ -1143,9 +1342,13 @@ def register_student(roll_no, username, password, full_name=None, email=None, ph
             validate_student({"roll_no": roll_no, "name": name, "department": "CSD"})
             if c.execute("SELECT 1 FROM students WHERE roll_no=%s", (roll_no,)).fetchone():
                 raise ValueError("That roll number is already registered")
+            hod_rows = c.execute("SELECT username FROM users WHERE role='HOD' AND active=1 AND department='CSD'").fetchall()
+            if len(hod_rows) != 1:
+                raise ValueError("Student registration cannot be completed until one responsible HOD scope is configured")
+            assigned_hod = hod_rows[0]["username"]
             c.execute(
-                "INSERT INTO students(roll_no,name,department,email,phone,current_semester_id) VALUES(%s,%s,'CSD',%s,%s,%s)",
-                (roll_no, name, email, phone or None, sem_id),
+                "INSERT INTO students(roll_no,name,department,email,phone,current_semester_id,hod_username) VALUES(%s,%s,'CSD',%s,%s,%s,%s)",
+                (roll_no, name, email, phone or None, sem_id, assigned_hod),
             )
             audit(c, username, "SELF_REGISTER_NEW_STUDENT", "student", f"{roll_no} ({name}) — open registration, verified email")
             s = c.execute("SELECT * FROM students WHERE roll_no=%s AND department='CSD'", (roll_no,)).fetchone()
@@ -1342,18 +1545,22 @@ def get_all_role_permissions():
 
 
 def update_role_permissions(role: str, perms: dict):
+    # WHY MySQL syntax, not SQLite: role_permissions.role has a UNIQUE
+    # constraint (one row per role), so this is a real upsert on that key.
+    # MySQL has no ON CONFLICT()/excluded — the equivalent is ON DUPLICATE
+    # KEY UPDATE with VALUES(col) referencing the row that was attempted.
     with connect() as c:
         c.execute(
             """INSERT INTO role_permissions(role, can_view_student_phone, can_edit_students, can_delete_students, can_view_audit_logs, can_view_sms_logs, can_manage_calendar, can_manage_subjects)
                VALUES(%s, %s, %s, %s, %s, %s, %s, %s)
-               ON CONFLICT(role) DO UPDATE SET
-               can_view_student_phone=excluded.can_view_student_phone,
-               can_edit_students=excluded.can_edit_students,
-               can_delete_students=excluded.can_delete_students,
-               can_view_audit_logs=excluded.can_view_audit_logs,
-               can_view_sms_logs=excluded.can_view_sms_logs,
-               can_manage_calendar=excluded.can_manage_calendar,
-               can_manage_subjects=excluded.can_manage_subjects""",
+               ON DUPLICATE KEY UPDATE
+               can_view_student_phone=VALUES(can_view_student_phone),
+               can_edit_students=VALUES(can_edit_students),
+               can_delete_students=VALUES(can_delete_students),
+               can_view_audit_logs=VALUES(can_view_audit_logs),
+               can_view_sms_logs=VALUES(can_view_sms_logs),
+               can_manage_calendar=VALUES(can_manage_calendar),
+               can_manage_subjects=VALUES(can_manage_subjects)""",
             (
                 role,
                 int(perms.get("can_view_student_phone", 1)),
@@ -1400,19 +1607,22 @@ def get_user_permissions(username: str) -> dict:
 
 
 def update_user_permissions(username: str, perms: dict):
+    # Same MySQL-vs-SQLite upsert fix as update_role_permissions above —
+    # user_permissions.username is UNIQUE, ON DUPLICATE KEY UPDATE +
+    # VALUES(col) is the MySQL equivalent of ON CONFLICT()/excluded.
     with connect() as c:
         c.execute(
             """INSERT INTO user_permissions(username, can_view_students, can_edit_students, can_delete_students, can_manage_attendance, can_manage_subjects, can_manage_calendar, can_view_sms_logs, can_view_audit_logs)
                VALUES(%s, %s, %s, %s, %s, %s, %s, %s, %s)
-               ON CONFLICT(username) DO UPDATE SET
-               can_view_students=excluded.can_view_students,
-               can_edit_students=excluded.can_edit_students,
-               can_delete_students=excluded.can_delete_students,
-               can_manage_attendance=excluded.can_manage_attendance,
-               can_manage_subjects=excluded.can_manage_subjects,
-               can_manage_calendar=excluded.can_manage_calendar,
-               can_view_sms_logs=excluded.can_view_sms_logs,
-               can_view_audit_logs=excluded.can_view_audit_logs""",
+               ON DUPLICATE KEY UPDATE
+               can_view_students=VALUES(can_view_students),
+               can_edit_students=VALUES(can_edit_students),
+               can_delete_students=VALUES(can_delete_students),
+               can_manage_attendance=VALUES(can_manage_attendance),
+               can_manage_subjects=VALUES(can_manage_subjects),
+               can_manage_calendar=VALUES(can_manage_calendar),
+               can_view_sms_logs=VALUES(can_view_sms_logs),
+               can_view_audit_logs=VALUES(can_view_audit_logs)""",
             (
                 username,
                 int(perms.get("can_view_students", 1)),
@@ -1439,6 +1649,13 @@ def update_problem_report_status(report_id, status, admin_notes=None, actor="adm
     if status not in valid_statuses:
         raise ValueError(f"Invalid status. Must be one of {valid_statuses}")
     with connect() as c:
+        # WHY check existence first, not rely on UPDATE's rowcount: MySQL
+        # reports rowcount=0 both when no row matches the WHERE AND when a
+        # row matches but every column is already equal to the new value —
+        # the latter is a legitimate no-op update, not a missing report.
+        existing = c.execute("SELECT id FROM problem_reports WHERE id=%s", (report_id,)).fetchone()
+        if not existing:
+            raise ValueError(f"Problem report {report_id} not found")
         c.execute(
             "UPDATE problem_reports SET status=%s, admin_notes=%s WHERE id=%s",
             (status, admin_notes or "", report_id),

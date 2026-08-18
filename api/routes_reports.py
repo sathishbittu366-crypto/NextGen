@@ -39,7 +39,7 @@ async def submit_report(body: SubmitReportBody, user: CurrentUser = Depends(get_
             subject=body.subject,
             description=body.description,
         )
-        return ok({"message": "Problem report submitted successfully. An administrator will review it."})
+        return ok({"message": "Problem report submitted successfully. An administrator will review it."}, status_code=201)
     except ValueError as exc:
         raise ApiError(str(exc), code="VALIDATION_ERROR") from exc
 
