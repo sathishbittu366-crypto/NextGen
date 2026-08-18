@@ -7,6 +7,7 @@ at queue time. The worker therefore never has to guess which phone should send.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import os
 
 from database import audit, connect, get_setting
 
@@ -15,15 +16,35 @@ MAX_ATTEMPTS = 3
 PROCESSING_LEASE_MINUTES = 15
 
 
-def queue_absentees_for_session(session_id, absent_roll_nos, actor="system"):
-    """Queue one parent SMS per student/day without sending it.
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
-    Returns ``(queued_count, skipped_no_phone_count)`` for compatibility with
-    the existing callers. Routing failures are retained as blocked queue rows
-    with an explicit error and are never silently rerouted.
+
+def sms_enabled() -> bool:
+    return _env_bool("SMS_ENABLED", get_setting("sms_enabled", "1") == "1")
+
+
+def repeat_every_attendance() -> bool:
+    return _env_bool("SMS_REPEAT_EVERY_ATTENDANCE", get_setting("sms_repeat_every_attendance", "1") == "1")
+
+
+def queue_absentees_for_session(session_id, absent_roll_nos, actor="system"):
+    """Queue an absentee SMS for each absent student in this attendance session.
+
+    Demo mode defaults to one SMS opportunity per attendance session, so the same
+    student can legitimately generate another absentee SMS in a later class.
+    Set SMS_REPEAT_EVERY_ATTENDANCE=0 (or the admin setting) to restore the
+    legacy one-student-per-day de-duplication rule.
+
+    Queue rows are created even when routing is blocked so the HOD can see exactly
+    why a message was not sendable instead of the attendance save silently hiding it.
+    Returns a detailed dict consumed by the attendance API.
     """
     if not absent_roll_nos:
-        return 0, 0
+        return {"queued_count": 0, "blocked_count": 0, "duplicate_count": 0, "skipped_no_phone": 0, "cap_blocked": 0}
     with connect() as c:
         session = c.execute("""
             SELECT a.attendance_date, a.hod_username, s.name AS subject_name
@@ -31,32 +52,45 @@ def queue_absentees_for_session(session_id, absent_roll_nos, actor="system"):
             WHERE a.id=%s
         """, (session_id,)).fetchone()
         if not session:
-            return 0, 0
+            return {"queued_count": 0, "blocked_count": 0, "duplicate_count": 0, "skipped_no_phone": 0, "cap_blocked": 0}
+
         hod_username = session.get("hod_username")
         send_date = session["attendance_date"]
-        cap = int(get_setting("sms_daily_cap", "62") or 62)
-        already_row = c.execute(
-            "SELECT COUNT(*) AS n FROM sms_queue WHERE send_date=%s", (send_date,)
-        ).fetchone()
-        already_today = already_row["n"] if already_row else 0
-        queued, skipped = 0, 0
+        cap = int(get_setting("sms_daily_cap", "1000") or 1000)
+        already_today = c.execute("SELECT COUNT(*) AS n FROM sms_queue WHERE send_date=%s", (send_date,)).fetchone()["n"]
+        repeat_mode = repeat_every_attendance()
+        queued = blocked = duplicate = skipped_no_phone = cap_blocked = 0
 
         for roll_no in absent_roll_nos:
-            if already_today + queued >= cap:
-                break
             student = c.execute("""
                 SELECT name, parent_phone, hod_username
                 FROM students WHERE roll_no=%s AND active=1
             """, (roll_no,)).fetchone()
-            if not student or not (student["parent_phone"] or "").strip():
-                skipped += 1
+
+            if not student:
+                blocked += 1
                 continue
 
-            student_hod = student.get("hod_username")
+            if not repeat_mode:
+                existing = c.execute(
+                    "SELECT id,status FROM sms_queue WHERE roll_no=%s AND send_date=%s ORDER BY id DESC LIMIT 1",
+                    (roll_no, send_date),
+                ).fetchone()
+                if existing:
+                    duplicate += 1
+                    continue
+
+            if already_today + queued >= cap:
+                cap_blocked += 1
+                continue
+
+            student_phone = (student.get("parent_phone") or "").strip()
             routing_error = None
             gateway_id = None
-            if not hod_username or not student_hod or student_hod != hod_username:
+            if not hod_username or not student.get("hod_username") or student.get("hod_username") != hod_username:
                 routing_error = "Attendance/student HOD ownership mismatch; SMS is blocked until ownership is corrected."
+            elif not student_phone:
+                routing_error = "Parent phone number is missing for this student."
             else:
                 gateway = c.execute("""
                     SELECT id, active, gateway_mode, device_id, username, password, local_url, modem_port
@@ -78,29 +112,40 @@ def queue_absentees_for_session(session_id, absent_roll_nos, actor="system"):
                     elif mode not in ("cloud", "local", "modem"):
                         routing_error = f"Unsupported SMS gateway mode: {mode or 'empty'}."
 
-            message = MESSAGE_TEMPLATE.format(
-                student=student["name"], subject=session["subject_name"], date=send_date
-            )
+            message = MESSAGE_TEMPLATE.format(student=student["name"], subject=session["subject_name"], date=send_date)
             cur = c.execute("""
-                INSERT IGNORE INTO sms_queue(
+                INSERT INTO sms_queue(
                     roll_no,parent_phone,message,attendance_session_id,send_date,
                     hod_username,gateway_id,approved,status,error
                 ) VALUES(%s,%s,%s,%s,%s,%s,%s,0,'PENDING',%s)
+                ON DUPLICATE KEY UPDATE id=id
             """, (
-                roll_no, student["parent_phone"], message, session_id, send_date,
+                roll_no, student_phone, message, session_id, send_date,
                 hod_username, gateway_id, routing_error,
             ))
-            if cur.rowcount:
-                queued += 1
+            if cur.rowcount == 1:
                 if routing_error:
+                    blocked += 1
                     audit(c, actor, "SMS_BLOCKED", "sms_queue", f"roll={roll_no}; {routing_error}")
+                else:
+                    queued += 1
+                already_today += 1
+            else:
+                duplicate += 1
 
-        if queued:
+        if queued or blocked:
             audit(
                 c, actor, "SMS_QUEUED", "attendance_session",
-                f"session={session_id}; queued={queued}; skipped_no_phone={skipped}; hod={hod_username or 'UNASSIGNED'}",
+                f"session={session_id}; queued={queued}; blocked={blocked}; duplicate={duplicate}; no_phone={skipped_no_phone}; cap_blocked={cap_blocked}; repeat_mode={int(repeat_mode)}; hod={hod_username or 'UNASSIGNED'}",
             )
-        return queued, skipped
+        return {
+            "queued_count": queued,
+            "blocked_count": blocked,
+            "duplicate_count": duplicate,
+            "skipped_no_phone": skipped_no_phone,
+            "cap_blocked": cap_blocked,
+            "repeat_every_attendance": repeat_mode,
+        }
 
 
 def pending_approval_for_hod(hod_username: str, send_date: str | None = None):
@@ -126,19 +171,20 @@ def pending_approval_for_hod(hod_username: str, send_date: str | None = None):
 
 
 def approve_sms_batch(hod_username: str, send_date: str, actor: str):
-    """Approve a whole HOD/day batch only after routing is valid.
+    """Approve a whole HOD/day batch only after every row is actually sendable.
 
-    A row that was created without a gateway can be safely repaired only to
-    the currently configured gateway of the *same HOD*. Existing rows with a
-    different gateway are never silently rerouted.
+    The existing gateway snapshot is retained. A missing snapshot may be filled
+    only from the active gateway of the same HOD; rows never cross HOD scopes.
+    Missing recipient numbers and ownership problems remain blocked.
     """
     with connect() as c:
         rows = c.execute("""
-            SELECT q.id, q.gateway_id, q.error, g.active, g.gateway_mode,
-                   g.device_id, g.username, g.password, g.local_url, g.modem_port
+            SELECT q.*, s.name AS student_name, s.parent_phone AS current_parent_phone,
+                   s.hod_username AS student_hod_username
             FROM sms_queue q
-            LEFT JOIN sms_gateways g ON g.id=q.gateway_id
-            WHERE q.hod_username=%s AND q.send_date=%s AND q.status='PENDING' AND q.approved=0
+            LEFT JOIN students s ON s.roll_no=q.roll_no
+            WHERE q.hod_username=%s AND q.send_date=%s
+              AND q.status='PENDING' AND q.approved=0
             FOR UPDATE
         """, (hod_username, send_date)).fetchall()
         if not rows:
@@ -149,49 +195,50 @@ def approve_sms_batch(hod_username: str, send_date: str, actor: str):
             (hod_username,),
         ).fetchone()
 
+        updates = []
         for row in rows:
-            gateway = None
-            if row["gateway_id"]:
-                gateway = c.execute("SELECT * FROM sms_gateways WHERE id=%s", (row["gateway_id"],)).fetchone()
-            elif active_gateway:
-                # No gateway existed at queue time. Assigning the current
-                # gateway for the same HOD is safe and deterministic.
-                gateway = active_gateway
-                c.execute("UPDATE sms_queue SET gateway_id=%s WHERE id=%s", (gateway["id"], row["id"]))
+            parent_phone = (row.get("current_parent_phone") or row.get("parent_phone") or "").strip()
+            if not parent_phone:
+                raise ValueError(f"Cannot approve {row['roll_no']}: parent phone number is missing.")
+            if row.get("student_hod_username") != hod_username:
+                raise ValueError(f"Cannot approve {row['roll_no']}: student HOD ownership does not match this approval scope.")
 
-            if not gateway or not gateway["active"]:
-                raise ValueError("Cannot approve this batch: one or more messages have no active gateway for their HOD scope.")
+            gateway = None
+            if row.get("gateway_id"):
+                gateway = c.execute("SELECT * FROM sms_gateways WHERE id=%s", (row["gateway_id"],)).fetchone()
+            if gateway is None:
+                gateway = active_gateway
+                if gateway:
+                    c.execute("UPDATE sms_queue SET gateway_id=%s WHERE id=%s", (gateway["id"], row["id"]))
+            if not gateway or not gateway["active"] or gateway.get("hod_username") != hod_username:
+                raise ValueError(f"Cannot approve {row['roll_no']}: no active gateway is assigned to this HOD.")
 
             mode = (gateway.get("gateway_mode") or "").lower()
-            valid = True
-            reason = None
             if mode == "cloud":
                 valid = bool(gateway.get("device_id") and gateway.get("username") and gateway.get("password"))
-                if not valid:
-                    reason = "Cloud gateway is missing device ID or credentials."
+                reason = "Cloud gateway is missing device ID or credentials."
             elif mode == "local":
                 valid = bool(gateway.get("local_url"))
-                if not valid:
-                    reason = "Local gateway URL is missing."
+                reason = "Local gateway URL is missing."
             elif mode == "modem":
                 valid = bool(gateway.get("modem_port"))
-                if not valid:
-                    reason = "Modem port is missing."
+                reason = "Modem port is missing."
             else:
                 valid = False
                 reason = f"Unsupported SMS gateway mode: {mode or 'empty'}."
             if not valid:
                 c.execute("UPDATE sms_queue SET error=%s WHERE id=%s", (reason, row["id"]))
                 raise ValueError(f"Cannot approve this batch: {reason}")
+            updates.append((row["id"], parent_phone, gateway["id"]))
 
-        ids = [r["id"] for r in rows]
-        placeholders = ",".join("%s" for _ in ids)
-        c.execute(
-            f"UPDATE sms_queue SET approved=1,error=NULL WHERE id IN ({placeholders}) AND status='PENDING' AND approved=0",
-            ids,
-        )
-        audit(c, actor, "SMS_BATCH_APPROVED", "sms_queue", f"hod={hod_username}; date={send_date}; count={len(ids)}")
-        return len(ids)
+        for row_id, parent_phone, gateway_id in updates:
+            c.execute("""
+                UPDATE sms_queue
+                SET parent_phone=%s, gateway_id=%s, approved=1, error=NULL
+                WHERE id=%s AND status='PENDING' AND approved=0
+            """, (parent_phone, gateway_id, row_id))
+        audit(c, actor, "SMS_BATCH_APPROVED", "sms_queue", f"hod={hod_username}; date={send_date}; count={len(updates)}")
+        return len(updates)
 
 
 def pending_sms(limit=25, hod_username=None):

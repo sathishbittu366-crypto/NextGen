@@ -859,7 +859,7 @@ def init_db(db_name=None):
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             sent_at DATETIME,
             error TEXT,
-            UNIQUE(roll_no,send_date),
+            UNIQUE KEY uq_sms_queue_roll_session (roll_no,attendance_session_id),
             FOREIGN KEY(roll_no) REFERENCES students(roll_no) ON UPDATE CASCADE ON DELETE CASCADE,
             FOREIGN KEY(attendance_session_id) REFERENCES attendance_sessions(id),
             FOREIGN KEY(gateway_id) REFERENCES sms_gateways(id) ON UPDATE CASCADE ON DELETE RESTRICT
@@ -893,6 +893,30 @@ def init_db(db_name=None):
             # and the worker will not be able to claim rows safely until the
             # schema is repaired.
             print(f"[SMS QUEUE MIGRATION] Warning updating status CHECK: {exc}")
+
+        # Demo mode is session-scoped: a student may generate another absentee
+        # SMS in a later attendance session on the same day. Older deployments
+        # have UNIQUE(roll_no,send_date), which silently suppresses the second
+        # class. Replace that unique key with (roll_no,attendance_session_id).
+        try:
+            idx_rows = c.execute("SHOW INDEX FROM sms_queue").fetchall()
+            grouped = {}
+            for r in idx_rows:
+                if int(r.get("Non_unique", 1)) == 0 and r.get("Key_name") != "PRIMARY":
+                    grouped.setdefault(r.get("Key_name"), []).append(r)
+            old_unique_names = []
+            for name, cols in grouped.items():
+                ordered = sorted(cols, key=lambda x: int(x.get("Seq_in_index") or 0))
+                names = [x.get("Column_name") for x in ordered]
+                if names == ["roll_no", "send_date"]:
+                    old_unique_names.append(name)
+            for name in old_unique_names:
+                c.execute(f"ALTER TABLE sms_queue DROP INDEX `{name}`")
+            has_session_unique = any(name == "uq_sms_queue_roll_session" for name in grouped)
+            if not has_session_unique:
+                c.execute("ALTER TABLE sms_queue ADD UNIQUE KEY uq_sms_queue_roll_session (roll_no,attendance_session_id)")
+        except Exception as exc:
+            print(f"[SMS QUEUE MIGRATION] Warning updating session uniqueness: {exc}")
 
         # Existing deployments may already have sms_queue without the new
         # routing/approval columns. Add them without destroying queued data.
@@ -1111,15 +1135,15 @@ def init_db(db_name=None):
         for key,value in [("institution_name","VCET CSD Student Management System"),("attendance_threshold","75"),("academic_year","2024-25"),("department","CSD"),("open_student_registration","1")]:
             c.execute("INSERT IGNORE INTO settings(`key`,`value`) VALUES(%s,%s)",(key,value))
         for k, v in [
-            ("sms_enabled", "1"),
+            ("sms_enabled", os.environ.get("SMS_ENABLED", "1")),
+            ("sms_repeat_every_attendance", os.environ.get("SMS_REPEAT_EVERY_ATTENDANCE", "1")),
             ("sms_gateway_type", "cloud"),
             ("sms_department_number", "+916300743637"),
             ("sms_modem_port", "/dev/ttyUSB0"),
             ("sms_modem_baud", "115200"),
-            ("sms_daily_cap", "62"),
+            ("sms_daily_cap", os.environ.get("SMS_DAILY_CAP", "1000")),
         ]:
             c.execute("INSERT IGNORE INTO settings(`key`,`value`) VALUES(%s,%s)", (k, v))
-        c.execute("UPDATE settings SET `value`='1' WHERE `key`='sms_enabled'")
 
         semesters=[("I-I","I Year - I Semester",1,0),("I-II","I Year - II Semester",2,0),("II-I","II Year - I Semester",3,1),("II-II","II Year - II Semester",4,1),("III-I","III Year - I Semester",5,1),("III-II","III Year - II Semester",6,1),("IV-I","IV Year - I Semester",7,1),("IV-II","IV Year - II Semester",8,1)]
         for code,name,order,is_active in semesters:
@@ -1201,11 +1225,6 @@ def init_db(db_name=None):
                 JOIN sms_gateways g ON g.id=q.gateway_id
                 SET q.hod_username=g.hod_username
                 WHERE q.hod_username IS NULL
-            """)
-            c.execute("""
-                UPDATE sms_queue
-                SET approved=1
-                WHERE status='PENDING' AND approved=0 AND gateway_id IS NOT NULL AND hod_username IS NOT NULL
             """)
 
         for col in ("aadhaar_number", "apaar_id"):

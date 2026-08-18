@@ -47,15 +47,15 @@ export function AttendanceRegisterPage({ user, onLoggedOut }: AttendanceRegister
   const { sessionId: sessionIdParam } = useParams<{ sessionId: string }>();
   const sessionId = Number(sessionIdParam);
 
-  const [session, setSession]   = useState<AttendanceSession | null>(null);
+  const [session, setSession] = useState<AttendanceSession | null>(null);
   const [editable, setEditable] = useState(false);
-  const [roster, setRoster]     = useState<RosterEntry[]>([]);
+  const [roster, setRoster] = useState<RosterEntry[]>([]);
 
-  const [loading, setLoading]     = useState(true);
-  const [error, setError]         = useState<string | null>(null);
-  const [saving, setSaving]       = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
   const [markingAll, setMarkingAll] = useState(false);
-  const [saveNote, setSaveNote]   = useState<string | null>(null);
+  const [saveNote, setSaveNote] = useState<string | null>(null);
 
   // Quick Present — ported from the old app's /quick-mark (see
   // webapp/routes/attendance.py's quick_mark()), but purely client-side
@@ -63,7 +63,7 @@ export function AttendanceRegisterPage({ user, onLoggedOut }: AttendanceRegister
   // any other tap. Accepts full roll numbers or 2/4-digit trailing
   // suffixes, comma/space/newline separated.
   const [quickRolls, setQuickRolls] = useState("");
-  const [quickNote, setQuickNote]   = useState<string | null>(null);
+  const [quickNote, setQuickNote] = useState<string | null>(null);
 
   // — InitialLoad
   const load = useCallback(async () => {
@@ -163,10 +163,12 @@ export function AttendanceRegisterPage({ user, onLoggedOut }: AttendanceRegister
       const res = await saveRegister(sessionId, presentRollNos);
       setSession(res.session);
       setRoster(res.roster);
-      const queuedMsg = typeof res.sms_queued === "number" && res.sms_queued > 0
-        ? ` — ${res.sms_queued} absentee SMS queued for HOD approval.`
-        : "";
-      setSaveNote(`Saved successfully!${queuedMsg}`);
+      const parts: string[] = ["Saved successfully!"];
+      if ((res.sms_queued || 0) > 0) parts.push(`${res.sms_queued} absentee SMS queued for HOD approval.`);
+      if ((res.sms_blocked || 0) > 0) parts.push(`${res.sms_blocked} SMS blocked — review the HOD SMS page for the reason.`);
+      if ((res.sms_duplicate || 0) > 0) parts.push(`${res.sms_duplicate} duplicate SMS skipped.`);
+      if ((res.sms_cap_blocked || 0) > 0) parts.push(`${res.sms_cap_blocked} SMS skipped because the daily cap was reached.`);
+      setSaveNote(parts.join(" "));
     } catch (err) {
       if (err instanceof ApiClientError && err.code === "EDIT_WINDOW_EXPIRED") {
         setEditable(false);

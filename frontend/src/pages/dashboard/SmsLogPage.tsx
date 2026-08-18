@@ -12,7 +12,6 @@ import {
   saveSmsSettings,
   testSmsGateway,
   testSmsGatewayConnection,
-  triggerSmsQueue,
   updateSmsGateway,
   type SmsApprovalRow,
   type SmsGateway,
@@ -237,20 +236,6 @@ export function SmsLogPage({ user, onLoggedOut }: Props) {
     }
   };
 
-  const dispatchQueue = async () => {
-    setBusy("dispatch");
-    setError(null);
-    try {
-      const result = await triggerSmsQueue();
-      setSuccess(`Dispatched queue: ${result.sent_count} sent, ${result.failed_count} failed.`);
-      await load();
-    } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : "Could not process SMS queue");
-    } finally {
-      setBusy(null);
-    }
-  };
-
   return (
     <AppShell user={user as any} activeNav="sms-log" heading="Absentee SMS" onLoggedOut={onLoggedOut}>
       <ErrorPopup message={error} onClose={() => setError(null)} />
@@ -369,7 +354,6 @@ export function SmsLogPage({ user, onLoggedOut }: Props) {
           </div>
           <div style={actionsStyle}>
             <button className="btn btn-primary" onClick={() => void saveOperationsSettings()} disabled={busy !== null}>{busy === "settings" ? "Saving…" : "Save settings"}</button>
-            <button className="btn btn-outline" onClick={() => void dispatchQueue()} disabled={busy !== null}>{busy === "dispatch" ? "Dispatching…" : "Dispatch approved queue now"}</button>
             <button className="btn btn-outline" onClick={() => void sendTest()} disabled={busy !== null || !currentGateway}>{busy === "test-sms" ? "Sending…" : "Send test SMS"}</button>
           </div>
           <p style={{ ...muted, marginTop: 12 }}>A test SMS is independent of the absentee approval queue and uses only the currently selected HOD gateway. It never changes absentee routing.</p>
@@ -406,8 +390,10 @@ const rowStyle: CSSProperties = { display: "flex", alignItems: "center", gap: 14
 const thStyle: CSSProperties = { textAlign: "left", padding: "9px 8px", borderBottom: "1px solid var(--border)", fontSize: 11, color: "var(--muted)", textTransform: "uppercase" };
 const tdStyle: CSSProperties = { padding: "10px 8px", borderBottom: "1px solid var(--border)", fontSize: 12, verticalAlign: "top" };
 
-function pill(kind: "good" | "bad" | "muted") : CSSProperties {
-  return { display: "inline-flex", padding: "4px 8px", borderRadius: 999, fontSize: 10, fontWeight: 900, letterSpacing: .5,
+function pill(kind: "good" | "bad" | "muted"): CSSProperties {
+  return {
+    display: "inline-flex", padding: "4px 8px", borderRadius: 999, fontSize: 10, fontWeight: 900, letterSpacing: .5,
     background: kind === "good" ? "rgba(16,185,129,.12)" : kind === "bad" ? "rgba(239,68,68,.12)" : "var(--chip-bg-muted)",
-    color: kind === "good" ? "#059669" : kind === "bad" ? "#dc2626" : "var(--muted)" };
+    color: kind === "good" ? "#059669" : kind === "bad" ? "#dc2626" : "var(--muted)"
+  };
 }

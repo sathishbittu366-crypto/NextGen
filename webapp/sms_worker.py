@@ -10,7 +10,7 @@ import logging
 import os
 
 from database import connect, get_setting
-from sms_app.services.sms_service import mark_failed, mark_sent, pending_sms
+from sms_app.services.sms_service import mark_failed, mark_sent, pending_sms, sms_enabled
 from webapp.sms_modem import ModemError, send_sms
 from webapp.sms_android_gateway import AndroidGatewayError, send_android_sms
 from webapp.sms_cloud_gateway import CloudGatewayError, send_cloud_sms
@@ -86,7 +86,7 @@ def send_single_sms(phone, message, gateway=None, *, message_id=None):
 
 def process_pending_sms_now(hod_username=None):
     """Process approved absentee rows with per-row gateway routing."""
-    if get_setting("sms_enabled", "0") != "1":
+    if not sms_enabled():
         return 0, 0
     sent_count, failed_count = 0, 0
     rows = pending_sms(limit=25, hod_username=hod_username)
@@ -128,7 +128,7 @@ async def run_forever():
 
 
 async def _poll_once():
-    if get_setting("sms_enabled", "0") != "1":
+    if not sms_enabled():
         return
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, process_pending_sms_now)

@@ -11,6 +11,7 @@ Route mapping (old -> new, per plan §3.2 pattern):
 
 from __future__ import annotations
 
+import os
 from fastapi import APIRouter, Depends, Query
 
 from database import connect
@@ -239,8 +240,9 @@ from database import get_setting, set_setting
 
 
 class SmsSettingsBody(BaseModel):
-    sms_enabled: str = "0"
-    sms_daily_cap: str = "62"
+    sms_enabled: str = "1"
+    sms_daily_cap: str = "1000"
+    sms_repeat_every_attendance: str = "1"
 
 
 class SmsTestBody(BaseModel):
@@ -501,9 +503,14 @@ async def approve_sms(body: SmsApprovalBody, user: CurrentUser = Depends(get_cur
 async def get_sms_settings(user: CurrentUser = Depends(get_current_user)):
     if user.role not in ("HOD", "ADMIN"):
         raise ApiError("HOD or Admin access only", status_code=403, code="FORBIDDEN")
+    env_enabled = os.environ.get("SMS_ENABLED")
+    env_repeat = os.environ.get("SMS_REPEAT_EVERY_ATTENDANCE")
     return ok({
-        "sms_enabled": get_setting("sms_enabled", "0"),
-        "sms_daily_cap": get_setting("sms_daily_cap", "62"),
+        "sms_enabled": env_enabled if env_enabled is not None else get_setting("sms_enabled", "1"),
+        "sms_daily_cap": os.environ.get("SMS_DAILY_CAP") or get_setting("sms_daily_cap", "1000"),
+        "sms_repeat_every_attendance": env_repeat if env_repeat is not None else get_setting("sms_repeat_every_attendance", "1"),
+        "sms_enabled_env_override": env_enabled is not None,
+        "sms_repeat_env_override": env_repeat is not None,
     })
 
 
@@ -511,8 +518,8 @@ async def get_sms_settings(user: CurrentUser = Depends(get_current_user)):
 async def save_sms_settings(body: SmsSettingsBody, user: CurrentUser = Depends(get_current_user)):
     if user.role not in ("HOD", "ADMIN"):
         raise ApiError("Access denied", status_code=403, code="FORBIDDEN")
-    if body.sms_enabled not in ("0", "1"):
-        raise ApiError("sms_enabled must be 0 or 1", 400, "VALIDATION_ERROR")
+    if body.sms_enabled not in ("0", "1") or body.sms_repeat_every_attendance not in ("0", "1"):
+        raise ApiError("SMS toggles must be 0 or 1", 400, "VALIDATION_ERROR")
     try:
         cap = int(body.sms_daily_cap)
     except ValueError:
@@ -521,6 +528,7 @@ async def save_sms_settings(body: SmsSettingsBody, user: CurrentUser = Depends(g
         raise ApiError("Daily SMS cap must be a positive integer", 400, "VALIDATION_ERROR")
     set_setting("sms_enabled", body.sms_enabled, actor=user.username)
     set_setting("sms_daily_cap", str(cap), actor=user.username)
+    set_setting("sms_repeat_every_attendance", body.sms_repeat_every_attendance, actor=user.username)
     return ok({"ok": True})
 
 
