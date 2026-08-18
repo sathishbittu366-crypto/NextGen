@@ -10,7 +10,6 @@ import logging
 import os
 
 from database import connect, get_setting
-from field_encryption import decrypt_field
 from sms_app.services.sms_service import mark_failed, mark_sent, pending_sms
 from webapp.sms_modem import ModemError, send_sms
 from webapp.sms_android_gateway import AndroidGatewayError, send_android_sms
@@ -64,14 +63,14 @@ def send_single_sms(phone, message, gateway=None, *, message_id=None):
     mode = (gateway.get("gateway_mode") or "").strip().lower()
     if mode == "cloud":
         return send_cloud_sms(
-            gateway.get("username"), decrypt_field(gateway.get("password")), gateway.get("device_id"),
+            gateway.get("username"), gateway.get("password"), gateway.get("device_id"),
             phone, message,
             sim_number=gateway.get("sim_number"),
             message_id=message_id,
         )
     if mode == "local":
         return send_android_sms(
-            gateway.get("local_url"), gateway.get("username") or "", decrypt_field(gateway.get("password")) or "",
+            gateway.get("local_url"), gateway.get("username") or "", gateway.get("password") or "",
             phone, message,
         )
     if mode == "modem":

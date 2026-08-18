@@ -236,7 +236,6 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 from database import get_setting, set_setting
-from field_encryption import encrypt_field, decrypt_field, looks_encrypted
 
 
 class SmsSettingsBody(BaseModel):
@@ -337,7 +336,7 @@ async def create_sms_gateway(body: SmsGatewayBody, user: CurrentUser = Depends(g
             ) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         """, (
             hod_username, body.gateway_name.strip() or "SMSGate Phone", body.gateway_mode.strip().lower(),
-            body.device_id, body.local_url, body.username, encrypt_field(body.password),
+            body.device_id, body.local_url, body.username, body.password,
             body.modem_port, body.modem_baud, body.sim_number, int(body.active),
         ))
         from database import audit
@@ -385,7 +384,7 @@ async def update_sms_gateway(gateway_id: int, body: SmsGatewayBody, user: Curren
             body.device_id if body.device_id is not None else row.get("device_id"),
             body.local_url if body.local_url is not None else row.get("local_url"),
             body.username if body.username is not None else row.get("username"),
-            encrypt_field(body.password) if body.password else row.get("password"),
+            body.password if body.password else row.get("password"),
             body.modem_port if body.modem_port is not None else row.get("modem_port"),
             body.modem_baud or row.get("modem_baud") or "115200",
             body.sim_number if body.sim_number is not None else row.get("sim_number"),
@@ -411,7 +410,7 @@ async def test_sms_gateway_connection(gateway_id: int, user: CurrentUser = Depen
     try:
         if mode == "cloud":
             from webapp.sms_cloud_gateway import test_cloud_gateway
-            device = test_cloud_gateway(gateway.get("username"), decrypt_field(gateway.get("password")), gateway.get("device_id"))
+            device = test_cloud_gateway(gateway.get("username"), gateway.get("password"), gateway.get("device_id"))
             return ok({"ok": True, "mode": "cloud", "device": device})
         if mode == "local":
             import urllib.request

@@ -15,6 +15,8 @@ sms.db
 frontend/dist/
 frontend/node_modules/
 
+USERMANUAL.txt
+
 IMPLEMENTATION_STATE.md
 VERSION.md
 spec.md

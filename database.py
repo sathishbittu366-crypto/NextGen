@@ -1186,11 +1186,11 @@ def init_db(db_name=None):
                 if not looks_encrypted(value):
                     c.execute(f"UPDATE students SET {col}=%s WHERE id=%s", (encrypt_field(value), srow["id"]))
 
-        # Gateway passwords are credentials, not ordinary settings. Encrypt
-        # legacy plaintext values once and keep the plaintext out of API output.
-        for grow in c.execute("SELECT id,password FROM sms_gateways WHERE password IS NOT NULL AND password != ''").fetchall():
-            if not looks_encrypted(grow["password"]):
-                c.execute("UPDATE sms_gateways SET password=%s WHERE id=%s", (encrypt_field(grow["password"]), grow["id"]))
+        # SMSGate gateway credentials are stored as gateway configuration.
+        # They intentionally do not use SMS_FIELD_ENCRYPTION_KEY: that key is
+        # reserved for student Aadhaar/APAAR field encryption. This keeps SMS
+        # gateway setup usable on a clean deployment without coupling it to
+        # the student-PII encryption key.
 
 
 def get_conn():
