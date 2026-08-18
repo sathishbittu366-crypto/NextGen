@@ -12,6 +12,7 @@ import {
   saveSmsSettings,
   testSmsGateway,
   testSmsGatewayConnection,
+  triggerSmsQueue,
   updateSmsGateway,
   type SmsApprovalRow,
   type SmsGateway,
@@ -236,6 +237,20 @@ export function SmsLogPage({ user, onLoggedOut }: Props) {
     }
   };
 
+  const dispatchQueue = async () => {
+    setBusy("dispatch");
+    setError(null);
+    try {
+      const result = await triggerSmsQueue();
+      setSuccess(`Dispatched queue: ${result.sent_count} sent, ${result.failed_count} failed.`);
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : "Could not process SMS queue");
+    } finally {
+      setBusy(null);
+    }
+  };
+
   return (
     <AppShell user={user as any} activeNav="sms-log" heading="Absentee SMS" onLoggedOut={onLoggedOut}>
       <ErrorPopup message={error} onClose={() => setError(null)} />
@@ -354,6 +369,7 @@ export function SmsLogPage({ user, onLoggedOut }: Props) {
           </div>
           <div style={actionsStyle}>
             <button className="btn btn-primary" onClick={() => void saveOperationsSettings()} disabled={busy !== null}>{busy === "settings" ? "Saving…" : "Save settings"}</button>
+            <button className="btn btn-outline" onClick={() => void dispatchQueue()} disabled={busy !== null}>{busy === "dispatch" ? "Dispatching…" : "Dispatch approved queue now"}</button>
             <button className="btn btn-outline" onClick={() => void sendTest()} disabled={busy !== null || !currentGateway}>{busy === "test-sms" ? "Sending…" : "Send test SMS"}</button>
           </div>
           <p style={{ ...muted, marginTop: 12 }}>A test SMS is independent of the absentee approval queue and uses only the currently selected HOD gateway. It never changes absentee routing.</p>

@@ -7,6 +7,8 @@ LOCAL DEV: python run_api.py
 
 import os
 import sys
+import threading
+import asyncio
 import uvicorn
 
 try:
@@ -23,6 +25,27 @@ if __name__ == "__main__":
     # to it; 8001 stays as the local-dev fallback so `python run_api.py` on
     # your own machine is unaffected.
     port = int(os.environ.get("PORT", 8001))
+
+    # The absentee SMS worker is part of the local backend process.
+    # Previously run_api.py started FastAPI only, leaving approved queue rows
+    # stuck in PENDING forever unless an admin manually triggered the queue.
+    # Keep it in a daemon thread so `python run_api.py` is sufficient to run
+    # the complete local backend + SMS dispatcher. Set SMS_WORKER_AUTOSTART=0
+    # for tests or deployments that run the worker as a separate service.
+    if os.environ.get("SMS_WORKER_AUTOSTART", "1") == "1":
+        def _start_sms_worker():
+            try:
+                import database
+                database.init_db()
+                from webapp.sms_worker import run_forever
+                print("[*] SMS worker started (automatic dispatch enabled).")
+                asyncio.run(run_forever())
+            except Exception as exc:
+                print(f"[!] SMS worker stopped: {exc}")
+
+        threading.Thread(target=_start_sms_worker, name="sms-worker", daemon=True).start()
+    else:
+        print("[*] SMS worker autostart disabled (SMS_WORKER_AUTOSTART=0).")
 
     print(f"[*] Starting VCET CSD SMS Backend on http://0.0.0.0:{port} ...")
     uvicorn.run("api.app:app", host="0.0.0.0", port=port, reload=False)

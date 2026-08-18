@@ -852,7 +852,7 @@ def init_db(db_name=None):
             hod_username VARCHAR(64) NULL,
             gateway_id INT NULL,
             approved TINYINT(1) NOT NULL DEFAULT 0 CHECK(approved IN (0,1)),
-            status VARCHAR(32) NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING','SENT','FAILED')),
+            status VARCHAR(32) NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING','PROCESSING','SENT','FAILED')),
             attempt_count INT NOT NULL DEFAULT 0,
             processing_started_at DATETIME NULL,
             provider_message_id VARCHAR(255),
@@ -865,6 +865,34 @@ def init_db(db_name=None):
             FOREIGN KEY(gateway_id) REFERENCES sms_gateways(id) ON UPDATE CASCADE ON DELETE RESTRICT
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """)
+
+        # Existing deployments may already have sms_queue with the old
+        # PENDING/SENT/FAILED CHECK constraint. The worker now uses a short
+        # PROCESSING lease while it owns a row, so upgrade that constraint
+        # in-place without dropping any queue data.
+        try:
+            check_rows = c.execute("""
+                SELECT tc.CONSTRAINT_NAME, cc.CHECK_CLAUSE
+                FROM information_schema.TABLE_CONSTRAINTS tc
+                JOIN information_schema.CHECK_CONSTRAINTS cc
+                  ON cc.CONSTRAINT_SCHEMA=tc.CONSTRAINT_SCHEMA
+                 AND cc.CONSTRAINT_NAME=tc.CONSTRAINT_NAME
+                WHERE tc.CONSTRAINT_SCHEMA=DATABASE()
+                  AND tc.TABLE_NAME='sms_queue'
+                  AND tc.CONSTRAINT_TYPE='CHECK'
+            """).fetchall()
+            for chk in check_rows:
+                clause = str(chk.get("CHECK_CLAUSE") or "").upper()
+                if "STATUS" in clause and "PENDING" in clause and "SENT" in clause and "FAILED" in clause and "PROCESSING" not in clause:
+                    name = chk["CONSTRAINT_NAME"]
+                    c.execute(f"ALTER TABLE sms_queue DROP CHECK `{name}`")
+                    c.execute("ALTER TABLE sms_queue ADD CONSTRAINT `chk_sms_queue_status` CHECK(status IN ('PENDING','PROCESSING','SENT','FAILED'))")
+                    break
+        except Exception as exc:
+            # Do not hide the real migration failure; startup logs the problem
+            # and the worker will not be able to claim rows safely until the
+            # schema is repaired.
+            print(f"[SMS QUEUE MIGRATION] Warning updating status CHECK: {exc}")
 
         # Existing deployments may already have sms_queue without the new
         # routing/approval columns. Add them without destroying queued data.

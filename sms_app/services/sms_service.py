@@ -273,6 +273,36 @@ def mark_failed(sms_id, error, *, retryable=True, actor="system"):
         audit(c, actor, "SMS_FAILED" if terminal else "SMS_RETRY_SCHEDULED", "student", f"{row['roll_no']}: {str(error)[:200]}")
 
 
+def retry_failed_sms(sms_id: int, hod_username: str | None = None, actor="system"):
+    """Put one terminally failed row back into the approved queue.
+
+    Routing is never changed here. The existing gateway_id/HOD snapshot is
+    retained, so retry cannot accidentally switch a message to another HOD's
+    phone.
+    """
+    with connect() as c:
+        row = c.execute(
+            "SELECT id,hod_username,gateway_id,status,attempt_count FROM sms_queue WHERE id=%s",
+            (sms_id,),
+        ).fetchone()
+        if not row:
+            raise ValueError("SMS queue row not found")
+        if hod_username and row.get("hod_username") != hod_username:
+            raise ValueError("You cannot retry another HOD's SMS")
+        if row.get("status") != "FAILED":
+            raise ValueError("Only failed SMS rows can be retried")
+        if not row.get("gateway_id"):
+            raise ValueError("This SMS has no assigned gateway and cannot be retried")
+        c.execute("""
+            UPDATE sms_queue
+            SET status='PENDING', approved=1, error=NULL, processing_started_at=NULL,
+                attempt_count=0
+            WHERE id=%s AND status='FAILED'
+        """, (sms_id,))
+        audit(c, actor, "SMS_RETRY_REQUESTED", "sms_queue", f"id={sms_id}; hod={row.get('hod_username')}")
+        return True
+
+
 def recent_sms(limit=100, hod_username=None):
     with connect() as c:
         where = ""

@@ -94,12 +94,20 @@ async def health():
 
 
 @app.on_event("startup")
-def startup_db_init():
+async def startup_db_init():
     try:
         import database
         database.init_db()
         print("[*] Database initialized successfully on startup.")
     except Exception as e:
         print(f"[!] Database init error: {e}")
+    try:
+        import asyncio
+        from webapp.sms_worker import run_forever
+        asyncio.create_task(run_forever())
+        print("[*] SMS background worker scheduled successfully.")
+    except Exception as e:
+        print(f"[!] SMS background worker startup error: {e}")
+
 
 
