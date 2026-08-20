@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from database import audit, connect
+from database import audit, connect, _set_student_semester_in_transaction
 
 VALID_SESSION_TYPES = ("CLASS", "LAB")
 VALID_CLASS_HOURS = (1, 2, 3)
@@ -145,15 +145,18 @@ def delete_calendar_upload(*, semester_id, kind, actor):
 def list_subjects(semester_id, username=None, role=None):
     with connect() as c:
         if role == "FACULTY":
-            rows = c.execute("""
+            # SECURITY/LOGIC: faculty must see only subjects explicitly
+            # assigned to them. Never fall back to the semester-wide subject
+            # list when their assignment set is empty. That fallback made a
+            # faculty member appear able to mark attendance for another
+            # faculty's subject.
+            return c.execute("""
                 SELECT s.id,s.code,s.name,s.has_lab
                 FROM subjects s
                 JOIN subject_faculty sf ON sf.subject_id=s.id
                 WHERE s.semester_id=%s AND s.active=1 AND sf.faculty_username=%s
                 ORDER BY s.name
             """, (semester_id, username)).fetchall()
-            if rows:
-                return rows
         return c.execute("SELECT id,code,name,has_lab FROM subjects WHERE semester_id=%s AND active=1 ORDER BY name", (semester_id,)).fetchall()
 
 
@@ -341,6 +344,13 @@ def get_or_create_session(*, attendance_date, semester_id, subject_id, faculty_u
             hod_username = faculty_username
         if not hod_username:
             raise ValueError("This faculty account is not assigned to a HOD scope")
+        if faculty["role"] == "FACULTY":
+            assigned = c.execute(
+                "SELECT 1 FROM subject_faculty WHERE subject_id=%s AND faculty_username=%s",
+                (subject_id, faculty_username),
+            ).fetchone()
+            if not assigned:
+                raise ValueError("This subject is not assigned to the selected faculty account")
 
         row = c.execute("""
             SELECT * FROM attendance_sessions
@@ -401,17 +411,250 @@ def session_is_editable(session, role):
 
 def load_register(session_id):
     with connect() as c:
-        session = c.execute("SELECT hod_username FROM attendance_sessions WHERE id=%s", (session_id,)).fetchone()
+        session = c.execute("SELECT * FROM attendance_sessions WHERE id=%s", (session_id,)).fetchone()
         if not session or not session.get("hod_username"):
             raise ValueError("Attendance session has no HOD ownership assigned")
         students = c.execute(
-            "SELECT roll_no,name FROM students WHERE department='CSD' AND hod_username=%s AND active=1 ORDER BY roll_no",
-            (session["hod_username"],),
+            """
+            SELECT DISTINCT st.roll_no, st.name
+            FROM students st
+            JOIN attendance_sessions a ON a.id=%s
+            LEFT JOIN student_semester_history h
+              ON h.roll_no=st.roll_no
+             AND h.effective_from <= CAST(a.attendance_date AS DATE)
+             AND (h.effective_to IS NULL OR h.effective_to >= CAST(a.attendance_date AS DATE))
+             AND h.id = (
+                 SELECT h2.id
+                 FROM student_semester_history h2
+                 WHERE h2.roll_no=st.roll_no
+                   AND h2.effective_from <= CAST(a.attendance_date AS DATE)
+                   AND (h2.effective_to IS NULL OR h2.effective_to >= CAST(a.attendance_date AS DATE))
+                 ORDER BY h2.effective_from DESC, h2.id DESC
+                 LIMIT 1
+             )
+            WHERE st.department='CSD'
+              AND st.hod_username=a.hod_username
+              AND st.active=1
+              AND (
+                    (
+                        h.semester_id=a.semester_id
+                        AND (h.effective_to IS NOT NULL OR h.semester_id=st.current_semester_id)
+                    )
+                    OR (h.id IS NULL AND st.current_semester_id=a.semester_id)
+                  )
+            ORDER BY st.roll_no
+            """,
+            (session_id,),
         ).fetchall()
         existing = {r["roll_no"]: r["status"] for r in c.execute(
             "SELECT roll_no,status FROM attendance_records WHERE session_id=%s", (session_id,)
         ).fetchall()}
     return students, existing
+
+
+def _set_student_semester_on_connection(c, *, roll_no, semester_id, actor, effective_from=None):
+    """Compatibility wrapper around the canonical DB transaction helper."""
+    return _set_student_semester_in_transaction(
+        c, roll_no=roll_no, semester_id=semester_id, actor=actor, effective_from=effective_from
+    )
+
+def set_student_semester(*, roll_no, semester_id, actor, effective_from=None):
+    """Change a student's current semester and history atomically."""
+    with connect() as c:
+        _set_student_semester_on_connection(
+            c, roll_no=roll_no, semester_id=semester_id, actor=actor, effective_from=effective_from
+        )
+
+
+def month_register(*, faculty_username, semester_id, subject_id, year, month):
+    """Build the month/register view strictly from: assigned subject, the
+    selected semester, actual sessions conducted by that faculty, and central
+    holiday rows. Calendar days with no session are blank (not A)."""
+    import calendar
+
+    first_day = datetime(int(year), int(month), 1).date()
+    last_day = datetime(int(year), int(month), calendar.monthrange(int(year), int(month))[1]).date()
+    with connect() as c:
+        faculty = c.execute(
+            "SELECT username,role,hod_username,full_name FROM users WHERE username=%s AND active=1",
+            (faculty_username,),
+        ).fetchone()
+        if not faculty:
+            raise ValueError("Faculty account is not active")
+        if faculty["role"] == "FACULTY":
+            assigned = c.execute(
+                "SELECT 1 FROM subject_faculty WHERE subject_id=%s AND faculty_username=%s",
+                (subject_id, faculty_username),
+            ).fetchone()
+            if not assigned:
+                raise ValueError("This subject is not assigned to the faculty account")
+        subject = c.execute(
+            """SELECT s.id,s.code,s.name,s.semester_id,sem.code AS semester_code,sem.name AS semester_name
+               FROM subjects s JOIN academic_semesters sem ON sem.id=s.semester_id
+               WHERE s.id=%s AND s.active=1""", (subject_id,)
+        ).fetchone()
+        if not subject or int(subject["semester_id"]) != int(semester_id):
+            raise ValueError("Subject does not belong to the selected semester")
+
+        sessions = c.execute(
+            """SELECT id,attendance_date,session_type,duration_hours,topic,created_at
+               FROM attendance_sessions
+               WHERE faculty_username=%s AND semester_id=%s AND subject_id=%s
+                 AND attendance_date BETWEEN %s AND %s
+               ORDER BY attendance_date""",
+            (faculty_username, semester_id, subject_id, first_day.isoformat(), last_day.isoformat()),
+        ).fetchall()
+        sessions_by_date: dict[str, list[dict]] = {}
+        for row in sessions:
+            sessions_by_date.setdefault(str(row["attendance_date"]), []).append(dict(row))
+        holidays = c.execute(
+            """SELECT holiday_date, holiday_name FROM academic_holidays
+               WHERE active=1 AND holiday_date BETWEEN %s AND %s
+                 AND (semester_id IS NULL OR semester_id=%s)
+               ORDER BY holiday_date""",
+            (first_day.isoformat(), last_day.isoformat(), semester_id),
+        ).fetchall()
+        holiday_map = {str(r["holiday_date"]): r["holiday_name"] for r in holidays}
+        # Sundays are statutory/default holidays for the register and do not
+        # need a DB row. HOD-entered holidays remain the source for festivals,
+        # second Saturdays, special closures, etc.
+        sunday_map = {
+            (first_day.replace(day=day)).isoformat(): "Sunday"
+            for day in range(1, calendar.monthrange(int(year), int(month))[1] + 1)
+            if first_day.replace(day=day).weekday() == 6
+        }
+        for sunday_date, sunday_name in sunday_map.items():
+            holiday_map.setdefault(sunday_date, sunday_name)
+
+        # A monthly register may span a semester transition, but roster inclusion
+        # is decided against the actual conducted session dates. A historical row
+        # only qualifies when it is the latest assignment effective on that session
+        # date. If no history exists at all, the current pointer is the fallback.
+        students = c.execute(
+            """SELECT DISTINCT st.roll_no, st.name, st.current_semester_id
+               FROM students st
+               WHERE st.department='CSD' AND st.hod_username=%s AND st.active=1
+                 AND EXISTS (
+                     SELECT 1
+                     FROM attendance_sessions ss
+                     WHERE ss.faculty_username=%s
+                       AND ss.semester_id=%s
+                       AND ss.subject_id=%s
+                       AND ss.attendance_date BETWEEN %s AND %s
+                       AND (
+                           EXISTS (
+                               SELECT 1
+                               FROM student_semester_history h
+                               WHERE h.roll_no=st.roll_no
+                                 AND h.semester_id=%s
+                                 AND h.effective_from <= ss.attendance_date
+                                 AND (h.effective_to IS NULL OR h.effective_to >= ss.attendance_date)
+                                 AND (h.effective_to IS NOT NULL OR h.semester_id=st.current_semester_id)
+                                 AND NOT EXISTS (
+                                     SELECT 1
+                                     FROM student_semester_history newer
+                                     WHERE newer.roll_no=h.roll_no
+                                       AND (newer.effective_from > h.effective_from
+                                            OR (newer.effective_from = h.effective_from AND newer.id > h.id))
+                                       AND newer.effective_from <= ss.attendance_date
+                                 )
+                           )
+                           OR (
+                               NOT EXISTS (SELECT 1 FROM student_semester_history any_h WHERE any_h.roll_no=st.roll_no)
+                               AND st.current_semester_id=%s
+                           )
+                       )
+                 )
+               ORDER BY st.roll_no""",
+            (
+                faculty.get("hod_username") or faculty_username,
+                faculty_username, semester_id, subject_id, first_day.isoformat(), last_day.isoformat(),
+                semester_id, semester_id,
+            ),
+        ).fetchall()
+
+        history_by_roll = {}
+        if students:
+            rolls = [r["roll_no"] for r in students]
+            placeholders = ",".join("%s" for _ in rolls)
+            for h in c.execute(
+                f"SELECT roll_no,semester_id,effective_from,effective_to FROM student_semester_history "
+                f"WHERE roll_no IN ({placeholders}) ORDER BY roll_no,effective_from DESC,id DESC",
+                rolls,
+            ).fetchall():
+                history_by_roll.setdefault(h["roll_no"], []).append(h)
+
+        records = {}
+        if sessions:
+            ids = [r["id"] for r in sessions]
+            placeholders = ",".join("%s" for _ in ids)
+            rows = c.execute(
+                f"SELECT session_id,roll_no,status FROM attendance_records WHERE session_id IN ({placeholders})", ids
+            ).fetchall()
+            for r in rows:
+                records[(int(r["session_id"]), r["roll_no"])] = r["status"]
+
+    days = []
+    for day in range(1, calendar.monthrange(int(year), int(month))[1] + 1):
+        d = datetime(int(year), int(month), day).date().isoformat()
+        day_sessions = sessions_by_date.get(d, [])
+        representative = day_sessions[-1] if day_sessions else None
+        days.append({
+            "day": day, "date": d, "weekday": first_day.replace(day=day).strftime("%a"),
+            "holiday": d in holiday_map, "holiday_name": holiday_map.get(d),
+            "session_id": representative["id"] if representative else None,
+            "session_ids": [s["id"] for s in day_sessions],
+            "session_count": len(day_sessions),
+            "session_type": representative["session_type"] if representative else None,
+            "duration_hours": sum(int(s["duration_hours"] or 0) for s in day_sessions) if day_sessions else None,
+            "topic": representative["topic"] if representative else None,
+        })
+
+    roster = []
+    for st in students:
+        cells = []
+        for day in days:
+            status = None
+            if day["holiday"]:
+                status = "H"
+            elif day["session_ids"]:
+                # A student can be present in the month roster because they were
+                # valid for at least one session in the month, but a transition day
+                # must not leak attendance from the other semester.
+                assigned_semester = None
+                history = history_by_roll.get(st["roll_no"], [])
+                target_date = day["date"]
+                for h in history:
+                    if (
+                        str(h["effective_from"]) <= target_date
+                        and (h["effective_to"] is None or str(h["effective_to"]) >= target_date)
+                        and (h["effective_to"] is not None or h["semester_id"] == st.get("current_semester_id"))
+                    ):
+                        assigned_semester = h["semester_id"]
+                        break
+                if not history:
+                    assigned_semester = st.get("current_semester_id")
+                if assigned_semester is not None and int(assigned_semester) == int(semester_id):
+                    statuses = [records.get((sid, st["roll_no"])) for sid in day["session_ids"]]
+                    if statuses and all(v == "Present" for v in statuses):
+                        status = "P"
+                    elif any(v == "Absent" for v in statuses):
+                        status = "A"
+            cells.append({
+                "day": day["day"], "status": status,
+                "session_id": day["session_id"], "session_ids": day["session_ids"],
+            })
+        roster.append({"roll_no": st["roll_no"], "name": st["name"], "cells": cells})
+
+    return {
+        "faculty_username": faculty_username,
+        "faculty_name": faculty.get("full_name") or faculty_username,
+        "semester": dict(subject) | {"id": subject["semester_id"]},
+        "subject": dict(subject),
+        "year": int(year), "month": int(month),
+        "month_label": first_day.strftime("%B %Y"),
+        "days": days, "roster": roster,
+    }
 
 
 def sessions_last_n_days(days=15, on_date=None, semester_id=None, year=None, hod_username=None):
