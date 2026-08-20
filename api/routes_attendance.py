@@ -45,6 +45,7 @@ from sms_app.services.attendance_service import (
     list_semesters,
     list_subjects,
     load_register,
+    month_register,
     save_register,
     session_details,
     session_is_editable,
@@ -185,6 +186,78 @@ async def subjects_for_semester(
             for s in subjects
         ],
     })
+
+
+# ──────────────────────────────────────────────
+# GET /api/attendance/register — monthly staff register
+# ──────────────────────────────────────────────
+
+@router.get("/register")
+async def monthly_register(
+    semester_id: int = Query(...),
+    subject_id: int = Query(...),
+    year: int = Query(..., ge=2000, le=2100),
+    month: int = Query(..., ge=1, le=12),
+    faculty_username: str | None = Query(default=None),
+    user: CurrentUser = Depends(get_current_user),
+):
+    _require_staff(user)
+    target_faculty = user.username if user.role == "FACULTY" else (faculty_username or user.username)
+    # HOD/ADMIN can inspect a faculty register explicitly; FACULTY cannot
+    # impersonate another faculty account through a query parameter. HODs are
+    # also scoped to their own organizational faculty accounts.
+    if user.role == "HOD":
+        from database import connect
+        with connect() as c:
+            target = c.execute(
+                "SELECT username, role, hod_username, active FROM users WHERE username=%s",
+                (target_faculty,),
+            ).fetchone()
+        if not target or not target["active"] or target["role"] != "FACULTY" or target.get("hod_username") != user.username:
+            raise ApiError("Faculty account is outside your HOD scope", 403, "FORBIDDEN")
+    try:
+        data = month_register(
+            faculty_username=target_faculty,
+            semester_id=semester_id, subject_id=subject_id, year=year, month=month,
+        )
+    except ValueError as exc:
+        raise ApiError(str(exc), 400, "VALIDATION_ERROR")
+    return ok(data)
+
+
+@router.get("/register/pdf")
+async def monthly_register_pdf(
+    semester_id: int = Query(...),
+    subject_id: int = Query(...),
+    year: int = Query(..., ge=2000, le=2100),
+    month: int = Query(..., ge=1, le=12),
+    faculty_username: str | None = Query(default=None),
+    user: CurrentUser = Depends(get_current_user),
+):
+    _require_staff(user)
+    target_faculty = user.username if user.role == "FACULTY" else (faculty_username or user.username)
+    if user.role == "HOD":
+        from database import connect
+        with connect() as c:
+            target = c.execute(
+                "SELECT username, role, hod_username, active FROM users WHERE username=%s",
+                (target_faculty,),
+            ).fetchone()
+        if not target or not target["active"] or target["role"] != "FACULTY" or target.get("hod_username") != user.username:
+            raise ApiError("Faculty account is outside your HOD scope", 403, "FORBIDDEN")
+    try:
+        data = month_register(
+            faculty_username=target_faculty,
+            semester_id=semester_id, subject_id=subject_id, year=year, month=month,
+        )
+        from sms_app.services.attendance_pdf import build_monthly_attendance_pdf
+        pdf = build_monthly_attendance_pdf(data)
+    except ValueError as exc:
+        raise ApiError(str(exc), 400, "VALIDATION_ERROR")
+    return Response(
+        content=pdf, media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="attendance-{data["subject"]["code"]}-{year}-{month:02d}.pdf"'},
+    )
 
 
 # ──────────────────────────────────────────────

@@ -14,6 +14,7 @@ than guessing an ID and producing a confusing failure.
 """
 import datetime
 from pathlib import Path
+# pyrefly: ignore [missing-import]
 import pytest
 
 
@@ -181,4 +182,76 @@ class TestLiveSessionFlow:
         assert after_refetch["present"] == before["present"], (
             "mark-all-present appears to have written to the DB — "
             "this violates the single-write-boundary rule (save_register() "
-            "must be the only path that persists attendance)." )
+            "must be the only path that persists attendance)."
+        )
+
+
+class TestMonthlyAttendanceRegister:
+    @pytest.fixture(scope="class")
+    def real_subject_and_faculty(self, client, hod_headers):
+        import database
+        with database.connect() as c:
+            row = c.execute(
+                """SELECT sf.subject_id, sf.faculty_username, s.semester_id
+                   FROM subject_faculty sf
+                   JOIN subjects s ON s.id = sf.subject_id
+                   JOIN users u ON u.username = sf.faculty_username
+                   WHERE u.active = 1 AND u.hod_username = 'admin' AND s.active = 1
+                   LIMIT 1"""
+            ).fetchone()
+            if not row:
+                pytest.skip("No faculty-subject assignment found in DB for test HOD")
+            return row["semester_id"], row["subject_id"], row["faculty_username"]
+
+    def test_register_requires_auth(self, client):
+        r = client.get("/api/attendance/register?semester_id=1&subject_id=1&year=2026&month=1")
+        assert r.status_code == 401
+
+    def test_register_forbidden_for_student(self, client, student_headers):
+        r = client.get(
+            "/api/attendance/register?semester_id=1&subject_id=1&year=2026&month=1",
+            headers=student_headers,
+        )
+        assert r.status_code == 403
+        assert r.json()["error"]["code"] == "FORBIDDEN"
+
+    def test_register_pdf_requires_auth(self, client):
+        r = client.get("/api/attendance/register/pdf?semester_id=1&subject_id=1&year=2026&month=1")
+        assert r.status_code == 401
+
+    def test_register_pdf_forbidden_for_student(self, client, student_headers):
+        r = client.get(
+            "/api/attendance/register/pdf?semester_id=1&subject_id=1&year=2026&month=1",
+            headers=student_headers,
+        )
+        assert r.status_code == 403
+        assert r.json()["error"]["code"] == "FORBIDDEN"
+
+    def test_register_for_valid_subject_returns_expected_structure(self, client, hod_headers, real_subject_and_faculty):
+        sid, sub_id, faculty = real_subject_and_faculty
+        today = datetime.date.today()
+        r = client.get(
+            f"/api/attendance/register?semester_id={sid}&subject_id={sub_id}&year={today.year}&month={today.month}&faculty_username={faculty}",
+            headers=hod_headers,
+        )
+        assert r.status_code == 200
+        data = r.json()["data"]
+        assert "days" in data
+        assert "roster" in data
+        assert "semester" in data
+        assert "subject" in data
+        assert len(data["days"]) >= 28
+
+    def test_register_pdf_returns_pdf_stream(self, client, hod_headers, real_subject_and_faculty):
+        sid, sub_id, faculty = real_subject_and_faculty
+        today = datetime.date.today()
+        r = client.get(
+            f"/api/attendance/register/pdf?semester_id={sid}&subject_id={sub_id}&year={today.year}&month={today.month}&faculty_username={faculty}",
+            headers=hod_headers,
+        )
+        assert r.status_code == 200
+        assert r.headers["content-type"] == "application/pdf"
+        assert r.content.startswith(b"%PDF")
+
+
+

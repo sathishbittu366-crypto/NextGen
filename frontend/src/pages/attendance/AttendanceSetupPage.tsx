@@ -8,14 +8,17 @@
 // date, session type (Class/Lab), duration, topic -> Open button
 // (POST /api/attendance/sessions) -> navigate to the register screen with
 // the returned session id.
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   type SemesterOption,
   type SubjectOption,
   type SessionType,
+  type MonthlyAttendanceRegister,
   getSetup,
   getSubjectsForSemester,
+  getMonthlyRegister,
+  monthlyRegisterPdfUrl,
   openSession,
 } from "../../api/attendance";
 import { getDashboard, type SessionRow } from "../../api/dashboard";
@@ -118,6 +121,58 @@ export function AttendanceSetupPage({ user, onLoggedOut }: AttendanceSetupPagePr
     }
   }, [sessionType]);
 
+  // — Monthly Attendance Register state
+  const [month, setMonth] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  });
+  const [register, setRegister] = useState<MonthlyAttendanceRegister | null>(null);
+  const [loadingRegister, setLoadingRegister] = useState(false);
+  const [registerError, setRegisterError] = useState<string | null>(null);
+  const [selectedGridDate, setSelectedGridDate] = useState<string | null>(null);
+
+  const [regYear, regMonthNum] = useMemo(() => {
+    const parts = month.split("-").map(Number);
+    return [parts[0] || new Date().getFullYear(), parts[1] || new Date().getMonth() + 1];
+  }, [month]);
+
+  useEffect(() => {
+    if (!semesterId || !subjectId || !regYear || !regMonthNum) {
+      setRegister(null);
+      return;
+    }
+    let cancelled = false;
+    setLoadingRegister(true);
+    setRegisterError(null);
+    getMonthlyRegister({
+      semesterId,
+      subjectId,
+      year: regYear,
+      month: regMonthNum,
+    })
+      .then((data) => {
+        if (!cancelled) setRegister(data);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setRegister(null);
+          setRegisterError(err instanceof ApiClientError ? err.message : "Failed to load monthly register");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingRegister(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [semesterId, subjectId, regYear, regMonthNum]);
+
+  const printPdfUrl = (register && semesterId && subjectId)
+    ? monthlyRegisterPdfUrl({ semesterId, subjectId, year: regYear, month: regMonthNum })
+    : "";
+
+  const selectedDayInfo = register?.days.find((d) => d.date === selectedGridDate) ?? null;
+
   // — OpenSession
   async function handleOpen(e: React.FormEvent) {
     e.preventDefault();
@@ -150,7 +205,7 @@ export function AttendanceSetupPage({ user, onLoggedOut }: AttendanceSetupPagePr
       {error && <div className="login-error">{error}</div>}
 
       {!loading && (
-        <div style={{ maxWidth: 820, margin: "0 auto", display: "flex", flexDirection: "column", gap: 28 }}>
+        <div style={{ maxWidth: 1040, margin: "0 auto", display: "flex", flexDirection: "column", gap: 28 }}>
 
           {/* ── Main Setup Card ── */}
           <div style={{
@@ -431,6 +486,364 @@ export function AttendanceSetupPage({ user, onLoggedOut }: AttendanceSetupPagePr
                 </button>
               </form>
             </div>
+          </div>
+
+
+          {/* ── Monthly Attendance Register Grid Card ── */}
+          <div
+            className="card card-pad"
+            style={{
+              background: "var(--card-glass)",
+              border: "1.5px solid var(--border)",
+              borderRadius: 20,
+              padding: 24,
+              boxShadow: "0 20px 50px rgba(0,0,0,0.12)",
+              display: "flex",
+              flexDirection: "column",
+              gap: 20,
+            }}
+          >
+            {/* Header & Controls */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16 }}>
+              <div>
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <div style={{
+                    width: 44, height: 44, borderRadius: 12,
+                    background: "linear-gradient(135deg, #059669, #10b981)",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    color: "#fff", fontSize: 20,
+                    boxShadow: "0 6px 16px rgba(16, 185, 129, 0.35)",
+                  }}>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
+                      <line x1="16" y1="2" x2="16" y2="6"/>
+                      <line x1="8" y1="2" x2="8" y2="6"/>
+                      <line x1="3" y1="10" x2="21" y2="10"/>
+                    </svg>
+                  </div>
+                  <div>
+                    <h3 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: "var(--text)" }}>
+                      Monthly Attendance Register {selectedSubject ? `— ${selectedSubject.code}` : ""}
+                    </h3>
+                    <p style={{ margin: "2px 0 0 0", color: "var(--muted)", fontSize: 13 }}>
+                      {register?.month_label || "Select semester and subject to view the calendar register."} · Faculty: {register?.faculty_name || user.full_name || user.username}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Month Picker & Print Button */}
+              <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <label htmlFor="month-picker" style={{ fontSize: 12, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase" }}>
+                    Month:
+                  </label>
+                  <input
+                    id="month-picker"
+                    type="month"
+                    className="input-field"
+                    style={{ width: 170, padding: "8px 12px", borderRadius: 10, fontSize: 13, fontWeight: 600 }}
+                    value={month}
+                    onChange={(e) => setMonth(e.target.value)}
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  className="btn btn-outline"
+                  disabled={!printPdfUrl}
+                  onClick={() => {
+                    if (printPdfUrl) {
+                      window.open(printPdfUrl, "_blank", "noopener,noreferrer");
+                    }
+                  }}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 8,
+                    padding: "9px 16px",
+                    borderRadius: 10,
+                    fontWeight: 700,
+                    fontSize: 13,
+                    opacity: !printPdfUrl ? 0.5 : 1,
+                    cursor: !printPdfUrl ? "not-allowed" : "pointer",
+                  }}
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+                  Print Register (PDF)
+                </button>
+              </div>
+            </div>
+
+            {/* Status Legend */}
+            <div style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 16,
+              flexWrap: "wrap",
+              padding: "10px 16px",
+              background: "var(--chip-bg-muted)",
+              borderRadius: 12,
+              fontSize: 12,
+              fontWeight: 600,
+              color: "var(--muted)",
+            }}>
+              <span style={{ fontWeight: 800, color: "var(--text)" }}>Legend:</span>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                <span style={{ width: 18, height: 18, borderRadius: 4, background: "#067647", color: "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 900 }}>P</span>
+                Present
+              </span>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                <span style={{ width: 18, height: 18, borderRadius: 4, background: "#b42318", color: "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 900 }}>A</span>
+                Absent
+              </span>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                <span style={{ width: 18, height: 18, borderRadius: 4, background: "#d97706", color: "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 900 }}>H</span>
+                Central / Sunday Holiday
+              </span>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                <span style={{ width: 18, height: 18, borderRadius: 4, background: "rgba(0,0,0,0.06)", color: "var(--muted)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 900 }}>·</span>
+                No Session
+              </span>
+              {register && (
+                <span style={{ marginLeft: "auto", color: "var(--text)", fontWeight: 700 }}>
+                  Students: {register.roster.length} · Teaching Days: {register.days.filter(d => d.session_count > 0).length}
+                </span>
+              )}
+            </div>
+
+            {/* Selected Date Inspector Banner */}
+            {selectedGridDate && selectedDayInfo && (
+              <div style={{
+                background: "linear-gradient(135deg, rgba(2, 132, 199, 0.08) 0%, rgba(37, 99, 235, 0.06) 100%)",
+                border: "1px solid rgba(56, 189, 248, 0.3)",
+                borderRadius: 12,
+                padding: "14px 18px",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                flexWrap: "wrap",
+                gap: 12,
+              }}>
+                <div>
+                  <div style={{ fontWeight: 800, fontSize: 14, color: "var(--text)" }}>
+                    📅 {selectedDayInfo.date} ({selectedDayInfo.weekday})
+                    {selectedDayInfo.holiday && (
+                      <span className="chip chip-yellow" style={{ marginLeft: 8, fontSize: 11, padding: "2px 8px" }}>
+                        🎉 Holiday: {selectedDayInfo.holiday_name || "Holiday"}
+                      </span>
+                    )}
+                    {selectedDayInfo.session_id && (
+                      <span className="chip chip-green" style={{ marginLeft: 8, fontSize: 11, padding: "2px 8px" }}>
+                        ✅ {selectedDayInfo.session_type || "CLASS"} ({selectedDayInfo.duration_hours}h)
+                      </span>
+                    )}
+                  </div>
+                  {selectedDayInfo.topic && (
+                    <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
+                      Topic: <em>"{selectedDayInfo.topic}"</em>
+                    </div>
+                  )}
+                  {!selectedDayInfo.holiday && !selectedDayInfo.session_id && (
+                    <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
+                      No attendance session was recorded on this day.
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ display: "flex", gap: 10 }}>
+                  {selectedDayInfo.session_id && (
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      onClick={() => navigate(`/attendance/sessions/${selectedDayInfo.session_id}`)}
+                      style={{ padding: "6px 14px", borderRadius: 8, fontWeight: 700, fontSize: 13 }}
+                    >
+                      👁️ Open Saved Session
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-sm"
+                    onClick={() => setSelectedGridDate(null)}
+                    style={{ padding: "6px 10px", borderRadius: 8, fontSize: 12 }}
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Error / Loading States */}
+            {registerError && <div className="login-error">{registerError}</div>}
+            {loadingRegister && <div className="empty-note">Loading monthly register data…</div>}
+
+            {/* Empty state if no subject/semester selected */}
+            {!loadingRegister && !register && !registerError && (
+              <div className="empty-note" style={{ padding: 24, background: "rgba(0,0,0,0.02)", borderRadius: 10 }}>
+                {!semesterId || !subjectId
+                  ? "Please select a semester and subject from the dropdown above to view the monthly register."
+                  : "No attendance register data found for this selection."}
+              </div>
+            )}
+
+            {/* Register Grid Table */}
+            {!loadingRegister && register && (
+              <div
+                className="table-wrap"
+                style={{
+                  overflowX: "auto",
+                  border: "1px solid var(--border)",
+                  borderRadius: 12,
+                  boxShadow: "inset 0 1px 3px rgba(0,0,0,0.05)",
+                }}
+              >
+                <table
+                  className="data-table"
+                  style={{
+                    minWidth: 960,
+                    width: "100%",
+                    borderCollapse: "collapse",
+                    fontSize: 12,
+                  }}
+                >
+                  <thead>
+                    <tr style={{ background: "var(--panel)" }}>
+                      <th style={{
+                        position: "sticky", left: 0, zIndex: 4, background: "var(--panel)",
+                        width: 42, padding: "10px 8px", textAlign: "center", borderRight: "1px solid var(--border)",
+                      }}>#</th>
+                      <th style={{
+                        position: "sticky", left: 42, zIndex: 4, background: "var(--panel)",
+                        minWidth: 120, padding: "10px 10px", textAlign: "left", borderRight: "1px solid var(--border)",
+                      }}>Hall Ticket</th>
+                      <th style={{
+                        position: "sticky", left: 162, zIndex: 4, background: "var(--panel)",
+                        minWidth: 180, padding: "10px 10px", textAlign: "left", borderRight: "2px solid var(--border)",
+                        boxShadow: "2px 0 6px rgba(0,0,0,0.05)",
+                      }}>Student Name</th>
+                      {register.days.map((d) => {
+                        const isSunday = d.weekday === "Sunday";
+                        const isHoliday = d.holiday;
+                        const hasSession = d.session_count > 0;
+                        const isSelected = selectedGridDate === d.date;
+                        return (
+                          <th
+                            key={d.date}
+                            onClick={() => setSelectedGridDate(d.date)}
+                            title={d.holiday_name || d.topic || (hasSession ? "Open session" : "No session recorded")}
+                            style={{
+                              minWidth: 34,
+                              maxWidth: 38,
+                              padding: "6px 2px",
+                              textAlign: "center",
+                              cursor: "pointer",
+                              background: isSelected
+                                ? "rgba(56, 189, 248, 0.25)"
+                                : isHoliday
+                                ? "#fff4d6"
+                                : undefined,
+                              borderRight: "1px solid var(--border)",
+                              transition: "background 0.15s ease",
+                            }}
+                          >
+                            <div style={{ fontWeight: 800, fontSize: 12, color: isHoliday ? "#9a6700" : hasSession ? "var(--heading-accent)" : "var(--text)" }}>
+                              {String(d.day).padStart(2, "0")}
+                            </div>
+                            <div style={{ fontSize: 9, fontWeight: 700, color: isSunday ? "#ef4444" : isHoliday ? "#b45309" : "var(--muted)", textTransform: "uppercase" }}>
+                              {d.weekday.slice(0, 2)}
+                            </div>
+                          </th>
+                        );
+                      })}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {register.roster.map((row, rowIdx) => (
+                      <tr
+                        key={row.roll_no}
+                        style={{
+                          borderBottom: "1px solid var(--border)",
+                          background: rowIdx % 2 === 1 ? "var(--chip-bg-muted)" : undefined,
+                        }}
+                      >
+                        <td style={{
+                          position: "sticky", left: 0, zIndex: 2,
+                          background: "var(--panel)",
+                          textAlign: "center", fontSize: 11, color: "var(--muted)",
+                          borderRight: "1px solid var(--border)",
+                          padding: "6px 4px",
+                        }}>
+                          {rowIdx + 1}
+                        </td>
+                        <td style={{
+                          position: "sticky", left: 42, zIndex: 2,
+                          background: "var(--panel)",
+                          fontWeight: 700, fontSize: 12, color: "var(--text)",
+                          borderRight: "1px solid var(--border)",
+                          padding: "6px 10px",
+                          whiteSpace: "nowrap",
+                        }}>
+                          {row.roll_no}
+                        </td>
+                        <td style={{
+                          position: "sticky", left: 162, zIndex: 2,
+                          background: "var(--panel)",
+                          fontSize: 12, color: "var(--text)",
+                          borderRight: "2px solid var(--border)",
+                          padding: "6px 10px",
+                          whiteSpace: "nowrap",
+                          boxShadow: "2px 0 6px rgba(0,0,0,0.05)",
+                        }}>
+                          {row.name}
+                        </td>
+                        {row.cells.map((cell, cIdx) => {
+                          const dayObj = register.days[cIdx];
+                          const isHoliday = cell.status === "H" || dayObj?.holiday;
+                          const isSelected = selectedGridDate === dayObj?.date;
+                          return (
+                            <td
+                              key={cIdx}
+                              onClick={() => dayObj && setSelectedGridDate(dayObj.date)}
+                              title={dayObj ? `${dayObj.date}: ${cell.status === "P" ? "Present" : cell.status === "A" ? "Absent" : cell.status === "H" ? `Holiday (${dayObj.holiday_name || "Holiday"})` : "No session"}` : ""}
+                              style={{
+                                textAlign: "center",
+                                padding: "6px 2px",
+                                fontWeight: 800,
+                                fontSize: 12,
+                                cursor: "pointer",
+                                borderRight: "1px solid var(--border)",
+                                background: isSelected
+                                  ? "rgba(56, 189, 248, 0.2)"
+                                  : isHoliday
+                                  ? "#fff8e7"
+                                  : undefined,
+                                color: cell.status === "P"
+                                  ? "#067647"
+                                  : cell.status === "A"
+                                  ? "#b42318"
+                                  : cell.status === "H"
+                                  ? "#9a6700"
+                                  : "var(--muted)",
+                              }}
+                            >
+                              {cell.status || "·"}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                    {register.roster.length === 0 && (
+                      <tr>
+                        <td colSpan={register.days.length + 3} style={{ textAlign: "center", padding: 24, color: "var(--muted)" }}>
+                          No students are currently assigned to this semester / HOD scope.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
 
 

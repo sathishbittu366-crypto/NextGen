@@ -89,3 +89,67 @@ def build_attendance_pdf(session, roster) -> bytes:
 
     doc.build(story)
     return buf.getvalue()
+
+
+def build_monthly_attendance_pdf(data) -> bytes:
+    """Plain landscape monthly register: students down, calendar days across."""
+    from reportlab.lib.pagesizes import landscape
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.platypus import PageBreak
+    from reportlab.lib.enums import TA_LEFT
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=landscape(A4), topMargin=10*mm, bottomMargin=10*mm,
+        leftMargin=8*mm, rightMargin=8*mm,
+    )
+    story = []
+    center = ParagraphStyle("mcenter", alignment=TA_CENTER, fontName="Helvetica-Bold", fontSize=12, leading=14)
+    sub = ParagraphStyle("msub", alignment=TA_CENTER, fontName="Helvetica", fontSize=7.5, leading=9)
+    story.append(Paragraph("VISVESVARAYA COLLEGE OF ENGINEERING &amp; TECHNOLOGY", center))
+    story.append(Paragraph("An Autonomous Institution · Affiliated to JNTU, Hyderabad", sub))
+    story.append(Paragraph("Bongloor X Road, MP Patelguda (V), Ibrahimpatnam (M), Hyderabad-501510", sub))
+    story.append(Paragraph(data["semester"]["name"] + " · " + data["subject"]["name"], sub))
+    story.append(Paragraph(f"ATTENDANCE REGISTER · {data['month_label']} · Faculty: {data['faculty_name']}", center))
+    story.append(Spacer(1, 4*mm))
+
+    day_headers = [["Sl", "Hall Ticket No.", "Student Name"] + [f"{d['day']:02d}" for d in data["days"]]]
+    day_headers.append(["", "", ""] + [d["weekday"][:2] for d in data["days"]])
+    rows = day_headers
+    for idx, student in enumerate(data["roster"], 1):
+        rows.append([str(idx), student["roll_no"], student["name"]] + [c["status"] or "" for c in student["cells"]])
+
+    # Landscape A4: fixed identity columns + narrow day columns.
+    total_days = len(data["days"])
+    day_w = 7.1 * mm if total_days > 28 else 8.5 * mm
+    widths = [8*mm, 28*mm, 54*mm] + [day_w] * total_days
+    tbl = Table(rows, colWidths=widths, repeatRows=2, splitByRow=1)
+    style = [
+        ("FONTNAME", (0,0), (-1,1), "Helvetica-Bold"),
+        ("FONTNAME", (0,2), (-1,-1), "Helvetica"),
+        ("FONTSIZE", (0,0), (-1,-1), 6.8),
+        ("ALIGN", (0,0), (-1,-1), "CENTER"),
+        ("ALIGN", (2,2), (2,-1), "LEFT"),
+        ("BACKGROUND", (0,0), (-1,1), colors.HexColor("#f2f4f7")),
+        ("GRID", (0,0), (-1,-1), 0.3, colors.HexColor("#bfc5cc")),
+        ("TOPPADDING", (0,0), (-1,-1), 2.5), ("BOTTOMPADDING", (0,0), (-1,-1), 2.5),
+    ]
+    # H = central holiday; P/A = actual attendance. Blank = no session.
+    for cidx, day in enumerate(data["days"], start=3):
+        if day["holiday"]:
+            style.append(("BACKGROUND", (cidx,0), (cidx,-1), colors.HexColor("#fff4d6")))
+    for ridx, student in enumerate(data["roster"], start=2):
+        for cidx, cell in enumerate(student["cells"], start=3):
+            if cell["status"] == "H":
+                style.append(("BACKGROUND", (cidx,ridx), (cidx,ridx), colors.HexColor("#fff4d6")))
+            elif cell["status"] == "P":
+                style.append(("TEXTCOLOR", (cidx,ridx), (cidx,ridx), colors.HexColor("#067647")))
+            elif cell["status"] == "A":
+                style.append(("TEXTCOLOR", (cidx,ridx), (cidx,ridx), colors.HexColor("#b42318")))
+    tbl.setStyle(TableStyle(style))
+    story.append(tbl)
+    story.append(Spacer(1, 3*mm))
+    story.append(Paragraph("P = Present · A = Absent · H = Central Holiday · blank = no class/session recorded", sub))
+    doc.build(story)
+    return buf.getvalue()
+

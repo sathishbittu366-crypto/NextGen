@@ -138,3 +138,58 @@ export function registerPdfUrl(sessionId: number, kind?: "present" | "absent"): 
   const qs = kind ? `?kind=${kind}` : "";
   return getAuthUrl(`/api/attendance/sessions/${sessionId}/pdf${qs}`);
 }
+
+export interface MonthlyAttendanceDay {
+  day: number;
+  date: string;
+  weekday: string;
+  holiday: boolean;
+  holiday_name: string | null;
+  session_id: number | null;
+  session_ids: number[];
+  session_count: number;
+  session_type: string | null;
+  duration_hours: number | null;
+  topic: string | null;
+}
+
+export interface MonthlyAttendanceRow {
+  roll_no: string;
+  name: string;
+  cells: Array<{ day: number; status: "P" | "A" | "H" | null; session_id: number | null; session_ids: number[] }>;
+}
+
+export interface MonthlyAttendanceRegister {
+  faculty_username: string;
+  faculty_name: string;
+  semester: { id: number; code: string; name: string };
+  subject: { id: number; code: string; name: string; semester_id: number };
+  year: number;
+  month: number;
+  month_label: string;
+  days: MonthlyAttendanceDay[];
+  roster: MonthlyAttendanceRow[];
+}
+
+export function getMonthlyRegister(params: { semesterId: number; subjectId: number; year: number; month: number; facultyUsername?: string }) {
+  const q = new URLSearchParams({
+    semester_id: String(params.semesterId),
+    subject_id: String(params.subjectId),
+    year: String(params.year),
+    month: String(params.month),
+  });
+  if (params.facultyUsername) q.set("faculty_username", params.facultyUsername);
+  return apiFetch<MonthlyAttendanceRegister>(`/api/attendance/register?${q.toString()}`);
+}
+
+export function monthlyRegisterPdfUrl(params: { semesterId: number; subjectId: number; year: number; month: number; facultyUsername?: string }) {
+  const q = new URLSearchParams({
+    semester_id: String(params.semesterId),
+    subject_id: String(params.subjectId),
+    year: String(params.year),
+    month: String(params.month),
+  });
+  if (params.facultyUsername) q.set("faculty_username", params.facultyUsername);
+  return getAuthUrl(`/api/attendance/register/pdf?${q.toString()}`);
+}
+
