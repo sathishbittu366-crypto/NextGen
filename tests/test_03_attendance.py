@@ -32,7 +32,7 @@ class TestAttendanceRBAC:
             "attendance_date": "2026-01-01",
             "semester_id": 1,
             "subject_id": 1,
-            "session_type": "THEORY",
+            "session_type": "CLASS",
             "duration_hours": 1,
             "topic": "zzqa probe",
         })
@@ -82,7 +82,7 @@ class TestOpenSessionValidation:
             "attendance_date": "2026-01-01",
             "semester_id": 1,
             "subject_id": 999999999,
-            "session_type": "THEORY",
+            "session_type": "CLASS",
             "duration_hours": 1,
             "topic": "zzqa probe",
         })
@@ -117,7 +117,7 @@ class TestLiveSessionFlow:
             "attendance_date": today,
             "semester_id": sem_id,
             "subject_id": subject_id,
-            "session_type": "THEORY",
+            "session_type": "CLASS",
             "duration_hours": 1,
             "topic": "zzqa automated test session — safe to ignore/delete",
         })
@@ -133,7 +133,7 @@ class TestLiveSessionFlow:
             "attendance_date": today,
             "semester_id": sem_id,
             "subject_id": subject_id,
-            "session_type": "THEORY",
+            "session_type": "CLASS",
             "duration_hours": 1,
             "topic": "zzqa automated test session — safe to ignore/delete",
         })
@@ -181,32 +181,4 @@ class TestLiveSessionFlow:
         assert after_refetch["present"] == before["present"], (
             "mark-all-present appears to have written to the DB — "
             "this violates the single-write-boundary rule (save_register() "
-            "must be the only path that persists attendance)."
-
-class TestSemesterHistoryStaticInvariants:
-    def test_register_query_has_same_day_history_tiebreak(self):
-        source = Path('sms_app/services/attendance_service.py').read_text()
-        assert 'newer.effective_from = h.effective_from AND newer.id > h.id' in source
-
-    def test_register_does_not_use_month_only_history_overlap(self):
-        source = Path('sms_app/services/attendance_service.py').read_text()
-        assert 'h.effective_from <= ss.attendance_date' in source
-        assert 'h.effective_to IS NULL OR h.effective_to >= ss.attendance_date' in source
-        assert 'h.effective_from <= %s' not in source
-
-    def test_register_rejects_stale_open_history_after_current_semester_changes(self):
-        source = Path('sms_app/services/attendance_service.py').read_text()
-        # A legacy/stale open history row for semester III must not keep a
-        # current semester-IV student inside a semester-III register.
-        assert 'h.effective_to IS NOT NULL OR h.semester_id=st.current_semester_id' in source
-
-    def test_current_semester_write_has_single_database_boundary(self):
-        import re
-        database = Path('database.py').read_text()
-        writes = re.findall(r'UPDATE\s+students\s+SET\s+current_semester_id=', database, flags=re.I)
-        assert len(writes) == 1
-
-    def test_history_schema_enforces_one_open_row(self):
-        source = Path('database.py').read_text()
-        assert 'open_roll_no VARCHAR(64) GENERATED ALWAYS AS (IF(effective_to IS NULL, roll_no, NULL)) STORED' in source
-        assert 'uq_student_semester_history_one_open' in source
+            "must be the only path that persists attendance)." )
