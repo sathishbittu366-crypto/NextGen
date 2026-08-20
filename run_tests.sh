@@ -11,8 +11,8 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# — Edit this default to your actual checkout path so step 2 above is optional.
-: "${SMS_PROJECT_ROOT:=$HOME/sms-project/NextGen_SMS_live_cleaned}"
+# — Defaults to current directory (the folder containing api/app.py)
+: "${SMS_PROJECT_ROOT:=.}"
 export SMS_PROJECT_ROOT
 
 if [ ! -f "$SMS_PROJECT_ROOT/api/app.py" ]; then

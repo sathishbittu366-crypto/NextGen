@@ -24,11 +24,12 @@ import uuid
 import pytest
 
 # — Make the real project importable (api/app.py, database.py, etc.)
-PROJECT_ROOT = os.environ.get("SMS_PROJECT_ROOT")
-if not PROJECT_ROOT:
+DEFAULT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.environ.get("SMS_PROJECT_ROOT") or DEFAULT_ROOT
+if not os.path.exists(os.path.join(PROJECT_ROOT, "api", "app.py")):
     raise RuntimeError(
-        "SMS_PROJECT_ROOT env var not set. Point it at the folder containing "
-        "api/app.py (your NextGen_SMS_live_cleaned checkout) before running pytest.\n"
+        f"SMS_PROJECT_ROOT ({PROJECT_ROOT}) does not contain api/app.py. "
+        "Point SMS_PROJECT_ROOT at the folder containing api/app.py before running pytest.\n"
         "Example: SMS_PROJECT_ROOT=/path/to/NextGen_SMS_live_cleaned pytest"
     )
 sys.path.insert(0, PROJECT_ROOT)
@@ -70,6 +71,26 @@ TEST_RUN_TAG = "zzqa" + uuid.uuid4().hex[:8]
 @pytest.fixture(scope="session")
 def run_tag() -> str:
     return TEST_RUN_TAG
+
+
+@pytest.fixture(autouse=True)
+def reset_rate_limits():
+    def _clear():
+        try:
+            from api.rate_limit import _attempts
+            _attempts.clear()
+        except Exception:
+            pass
+        try:
+            from api.firewall import auth_requests_log, general_requests_log
+            auth_requests_log.clear()
+            general_requests_log.clear()
+        except Exception:
+            pass
+
+    _clear()
+    yield
+    _clear()
 
 
 @pytest.fixture(scope="session")

@@ -163,6 +163,7 @@ class TestLogout:
     def test_logout_clears_refresh_cookie(self, client, hod_creds):
         username, password = hod_creds
         login_resp = client.post("/api/auth/login", json={"username": username, "password": password})
+        assert login_resp.status_code == 200, f"Login failed ({login_resp.status_code}): {login_resp.text}"
         token = login_resp.json()["data"]["access_token"]
         r = client.post("/api/auth/logout", headers={"Authorization": f"Bearer {token}"})
         assert r.status_code == 200

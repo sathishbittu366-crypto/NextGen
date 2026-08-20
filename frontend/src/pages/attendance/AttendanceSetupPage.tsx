@@ -126,15 +126,33 @@ export function AttendanceSetupPage({ user, onLoggedOut }: AttendanceSetupPagePr
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
   });
+  const [studentSearch, setStudentSearch] = useState("");
   const [register, setRegister] = useState<MonthlyAttendanceRegister | null>(null);
   const [loadingRegister, setLoadingRegister] = useState(false);
   const [registerError, setRegisterError] = useState<string | null>(null);
   const [selectedGridDate, setSelectedGridDate] = useState<string | null>(null);
+  const [hoveredRow, setHoveredRow] = useState<number | null>(null);
 
   const [regYear, regMonthNum] = useMemo(() => {
     const parts = month.split("-").map(Number);
     return [parts[0] || new Date().getFullYear(), parts[1] || new Date().getMonth() + 1];
   }, [month]);
+
+  // Month stepping helpers
+  const handlePrevMonth = () => {
+    const d = new Date(regYear, regMonthNum - 2, 1);
+    setMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+  };
+
+  const handleNextMonth = () => {
+    const d = new Date(regYear, regMonthNum, 1);
+    setMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+  };
+
+  const handleCurrentMonth = () => {
+    const d = new Date();
+    setMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+  };
 
   useEffect(() => {
     if (!semesterId || !subjectId || !regYear || !regMonthNum) {
@@ -173,6 +191,58 @@ export function AttendanceSetupPage({ user, onLoggedOut }: AttendanceSetupPagePr
 
   const selectedDayInfo = register?.days.find((d) => d.date === selectedGridDate) ?? null;
 
+  // Filter roster by studentSearch
+  const filteredRoster = useMemo(() => {
+    if (!register) return [];
+    if (!studentSearch.trim()) return register.roster;
+    const q = studentSearch.trim().toLowerCase();
+    return register.roster.filter(
+      (r) => r.roll_no.toLowerCase().includes(q) || r.name.toLowerCase().includes(q)
+    );
+  }, [register, studentSearch]);
+
+  // Derived statistics for the register
+  const registerStats = useMemo(() => {
+    if (!register || register.roster.length === 0) {
+      return { totalStudents: 0, totalSessions: 0, classAvgPct: 0, eligibleCount: 0, shortageCount: 0 };
+    }
+    const teachingDays = register.days.filter((d) => d.session_count > 0);
+    const totalSessions = teachingDays.length;
+    const studentStats = register.roster.map((row) => {
+      let present = 0;
+      row.cells.forEach((cell, idx) => {
+        const day = register.days[idx];
+        if (day && day.session_count > 0 && cell.status === "P") {
+          present += 1;
+        }
+      });
+      const pct = totalSessions > 0 ? Math.round((present / totalSessions) * 100) : 100;
+      return { present, totalSessions, pct };
+    });
+
+    const totalStudents = studentStats.length;
+    const sumPct = studentStats.reduce((acc, s) => acc + s.pct, 0);
+    const classAvgPct = totalStudents > 0 ? Math.round(sumPct / totalStudents) : 0;
+    const eligibleCount = studentStats.filter((s) => s.pct >= 75).length;
+    const shortageCount = totalStudents - eligibleCount;
+
+    return { totalStudents, totalSessions, classAvgPct, eligibleCount, shortageCount };
+  }, [register]);
+
+  // Per-day summary calculations (for table footer)
+  const dailyAttendanceSummary = useMemo(() => {
+    if (!register || register.roster.length === 0) return [];
+    return register.days.map((day, dIdx) => {
+      if (day.session_count === 0) return null;
+      let pCount = 0;
+      register.roster.forEach((row) => {
+        if (row.cells[dIdx]?.status === "P") pCount += 1;
+      });
+      const pct = Math.round((pCount / register.roster.length) * 100);
+      return { presentCount: pCount, total: register.roster.length, pct };
+    });
+  }, [register]);
+
   // — OpenSession
   async function handleOpen(e: React.FormEvent) {
     e.preventDefault();
@@ -205,34 +275,34 @@ export function AttendanceSetupPage({ user, onLoggedOut }: AttendanceSetupPagePr
       {error && <div className="login-error">{error}</div>}
 
       {!loading && (
-        <div style={{ maxWidth: 1040, margin: "0 auto", display: "flex", flexDirection: "column", gap: 28 }}>
+        <div style={{ maxWidth: 1200, margin: "0 auto", display: "flex", flexDirection: "column", gap: 24 }}>
 
           {/* ── Main Setup Card ── */}
           <div style={{
-            background: "var(--card-glass)",
-            border: "1.5px solid var(--border)",
-            borderRadius: 20,
+            background: "#ffffff",
+            border: "1px solid var(--border)",
+            borderRadius: 16,
             overflow: "hidden",
-            boxShadow: "0 24px 64px rgba(0,0,0,0.18), 0 4px 16px rgba(0,0,0,0.08)"
+            boxShadow: "0 10px 30px rgba(0,0,0,0.06)",
           }}>
             {/* Card header strip */}
             <div style={{
-              background: "linear-gradient(135deg, rgba(2, 132, 199, 0.15) 0%, rgba(37, 99, 235, 0.12) 100%)",
+              background: "linear-gradient(135deg, rgba(2, 132, 199, 0.08) 0%, rgba(37, 99, 235, 0.06) 100%)",
               borderBottom: "1px solid var(--border)",
-              padding: "22px 28px",
+              padding: "18px 24px",
               display: "flex",
               alignItems: "center",
-              gap: 16,
+              gap: 14,
             }}>
               <div style={{
-                width: 52, height: 52, borderRadius: 16,
+                width: 44, height: 44, borderRadius: 12,
                 background: "linear-gradient(135deg, #0284c7, #2563eb)",
                 display: "flex", alignItems: "center", justifyContent: "center",
-                fontSize: 24, color: "#fff",
-                boxShadow: "0 8px 24px rgba(56, 189, 248, 0.4)",
+                fontSize: 22, color: "#fff",
+                boxShadow: "0 6px 16px rgba(56, 189, 248, 0.35)",
                 flexShrink: 0,
               }}>
-                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <rect x="3" y="4" width="18" height="18" rx="2"/>
                   <line x1="16" y1="2" x2="16" y2="6"/>
                   <line x1="8" y1="2" x2="8" y2="6"/>
@@ -242,22 +312,22 @@ export function AttendanceSetupPage({ user, onLoggedOut }: AttendanceSetupPagePr
                 </svg>
               </div>
               <div>
-                <h2 style={{ margin: 0, fontSize: 20, fontWeight: 800, color: "var(--text)" }}>Open Attendance Session</h2>
-                <p style={{ margin: "4px 0 0 0", color: "var(--muted)", fontSize: 13, lineHeight: 1.5 }}>
-                  Select semester, subject, session type &amp; date to launch attendance register.
+                <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: "var(--text)" }}>Open Attendance Session</h2>
+                <p style={{ margin: "3px 0 0 0", color: "var(--muted)", fontSize: 13 }}>
+                  Select semester, subject, session type &amp; date to mark student attendance.
                 </p>
               </div>
             </div>
 
-            <div style={{ padding: "28px" }}>
+            <div style={{ padding: "24px" }}>
               <form onSubmit={handleOpen}>
                 {/* Row 1: Semester + Subject */}
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 18, marginBottom: 4 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 16, marginBottom: 16 }}>
 
                   <div className="field">
-                    <label htmlFor="semester-select">
+                    <label htmlFor="semester-select" style={{ fontSize: 12, fontWeight: 700 }}>
                       <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                        <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/></svg>
+                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/></svg>
                         Semester *
                       </span>
                     </label>
@@ -269,6 +339,7 @@ export function AttendanceSetupPage({ user, onLoggedOut }: AttendanceSetupPagePr
                         const val = e.target.value;
                         handleSemesterChange(val ? Number(val) : null);
                       }}
+                      style={{ height: 42, borderRadius: 10, fontSize: 13 }}
                     >
                       <option value="">— Select Semester —</option>
                       {semesters.map((s) => (
@@ -278,9 +349,9 @@ export function AttendanceSetupPage({ user, onLoggedOut }: AttendanceSetupPagePr
                   </div>
 
                   <div className="field">
-                    <label htmlFor="subject-select">
+                    <label htmlFor="subject-select" style={{ fontSize: 12, fontWeight: 700 }}>
                       <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                        <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
                         Subject *
                       </span>
                     </label>
@@ -290,6 +361,7 @@ export function AttendanceSetupPage({ user, onLoggedOut }: AttendanceSetupPagePr
                       value={subjectId ?? ""}
                       onChange={(e) => setSubjectId(e.target.value ? Number(e.target.value) : null)}
                       disabled={subjects.length === 0}
+                      style={{ height: 42, borderRadius: 10, fontSize: 13 }}
                     >
                       {subjects.length === 0 ? (
                         <option value="">No subjects for this semester</option>
@@ -306,75 +378,68 @@ export function AttendanceSetupPage({ user, onLoggedOut }: AttendanceSetupPagePr
                 </div>
 
                 {/* Session Type Pills */}
-                <div className="field" style={{ marginBottom: 20 }}>
-                  <label>
+                <div className="field" style={{ marginBottom: 16 }}>
+                  <label style={{ fontSize: 12, fontWeight: 700 }}>
                     <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                      <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
                       Session Type *
                     </span>
                   </label>
-                  <div style={{ display: "flex", gap: 14 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                     {[
-                      { type: "CLASS", label: "Regular Class", sub: "Theory — 1 hour", icon: (
-                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+                      { type: "CLASS", label: "Regular Class", sub: "Theory Session · 1 Hour", icon: (
+                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
                       )},
-                      { type: "LAB", label: "Lab Session", sub: "Fixed · 3 Hours", icon: (
-                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 3H5a2 2 0 0 0-2 2v4m6-6h10a2 2 0 0 1 2 2v4M9 3v11l-5 5h16l-5-5V3"/></svg>
+                      { type: "LAB", label: "Lab Session", sub: "Practical Lab · Fixed 3 Hours", icon: (
+                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 3H5a2 2 0 0 0-2 2v4m6-6h10a2 2 0 0 1 2 2v4M9 3v11l-5 5h16l-5-5V3"/></svg>
                       )},
                     ].map(({ type, label, sub, icon }) => {
                       const isLab = type === "LAB";
-                      const disabled = false;
                       const active = sessionType === type;
                       return (
                         <button
                           key={type}
                           type="button"
-                          disabled={disabled}
                           onClick={() => {
                             setSessionType(type as "CLASS" | "LAB");
                             setDurationHours(isLab ? 3 : 1);
                           }}
                           style={{
-                            flex: 1,
-                            padding: "14px 18px",
-                            borderRadius: 14,
+                            padding: "12px 16px",
+                            borderRadius: 12,
                             fontWeight: 700,
-                            fontSize: 14,
-                            cursor: disabled ? "not-allowed" : "pointer",
-                            opacity: disabled ? 0.45 : 1,
-                            border: active ? "2px solid var(--heading-accent)" : "1.5px solid var(--border)",
+                            fontSize: 13,
+                            cursor: "pointer",
+                            border: active ? "2px solid #0284c7" : "1px solid var(--border)",
                             background: active
-                              ? "linear-gradient(135deg, rgba(2, 132, 199, 0.15), rgba(37, 99, 235, 0.12))"
-                              : "var(--chip-bg-muted)",
+                              ? "linear-gradient(135deg, rgba(2, 132, 199, 0.1), rgba(37, 99, 235, 0.08))"
+                              : "#ffffff",
                             color: "var(--text)",
                             boxShadow: active
-                              ? "0 0 0 3px rgba(56, 189, 248, 0.18), 0 8px 24px rgba(56, 189, 248, 0.15)"
-                              : "0 2px 6px rgba(0,0,0,0.06)",
-                            transition: "all 0.22s cubic-bezier(0.4, 0, 0.2, 1)",
+                              ? "0 0 0 3px rgba(56, 189, 248, 0.2), 0 4px 12px rgba(56, 189, 248, 0.12)"
+                              : "0 1px 3px rgba(0,0,0,0.04)",
+                            transition: "all 0.18s ease",
                             display: "flex",
                             alignItems: "center",
-                            gap: 12,
+                            gap: 10,
                             textAlign: "left",
                           }}
                         >
                           <div style={{
-                            width: 38, height: 38, borderRadius: 10, flexShrink: 0,
+                            width: 34, height: 34, borderRadius: 8, flexShrink: 0,
                             display: "flex", alignItems: "center", justifyContent: "center",
-                            background: active ? "linear-gradient(135deg, #0284c7, #2563eb)" : "var(--bg)",
+                            background: active ? "#0284c7" : "var(--chip-bg-muted)",
                             color: active ? "#fff" : "var(--muted)",
-                            boxShadow: active ? "0 4px 12px rgba(56,189,248,0.3)" : "none",
-                            transition: "all 0.22s ease",
+                            transition: "all 0.18s ease",
                           }}>
                             {icon}
                           </div>
-                          <div>
-                            <div style={{ fontWeight: 800, fontSize: 14, color: active ? "var(--heading-accent)" : "var(--text)" }}>{label}</div>
-                            <div style={{ fontSize: 11, color: "var(--muted)", fontWeight: 600, marginTop: 2 }}>{sub}</div>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ fontWeight: 800, fontSize: 13, color: active ? "#0284c7" : "var(--text)" }}>{label}</div>
+                            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 1 }}>{sub}</div>
                           </div>
                           {active && (
-                            <div style={{ marginLeft: "auto", flexShrink: 0 }}>
-                              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--heading-accent)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-                            </div>
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#0284c7" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
                           )}
                         </button>
                       );
@@ -383,11 +448,11 @@ export function AttendanceSetupPage({ user, onLoggedOut }: AttendanceSetupPagePr
                 </div>
 
                 {/* Row 2: Date + Duration */}
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 18, marginBottom: 4 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 16, marginBottom: 16 }}>
                   <div className="field">
-                    <label htmlFor="date-input">
+                    <label htmlFor="date-input" style={{ fontSize: 12, fontWeight: 700 }}>
                       <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                        <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
                         Attendance Date *
                       </span>
                     </label>
@@ -397,15 +462,16 @@ export function AttendanceSetupPage({ user, onLoggedOut }: AttendanceSetupPagePr
                       className="input-field"
                       value={attendanceDate}
                       onChange={(e) => setAttendanceDate(e.target.value)}
+                      style={{ height: 42, borderRadius: 10, fontSize: 13 }}
                       required
                     />
                   </div>
 
                   <div className="field">
-                    <label htmlFor="duration-input">
+                    <label htmlFor="duration-input" style={{ fontSize: 12, fontWeight: 700 }}>
                       <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                        <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-                        Duration (Hours) {sessionType === "LAB" ? "· Fixed 3h for Lab" : "*"}
+                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                        Duration (Hours) {sessionType === "LAB" ? "· Locked 3h for Lab" : "*"}
                       </span>
                     </label>
                     <input
@@ -418,10 +484,13 @@ export function AttendanceSetupPage({ user, onLoggedOut }: AttendanceSetupPagePr
                       disabled={sessionType === "LAB"}
                       onChange={(e) => setDurationHours(Number(e.target.value))}
                       style={{
-                        background: sessionType === "LAB" ? "rgba(2, 132, 199, 0.08)" : undefined,
-                        borderColor: sessionType === "LAB" ? "var(--heading-accent)" : undefined,
-                        color: sessionType === "LAB" ? "var(--heading-accent)" : undefined,
-                        fontWeight: 800,
+                        height: 42,
+                        borderRadius: 10,
+                        fontSize: 13,
+                        background: sessionType === "LAB" ? "rgba(2, 132, 199, 0.06)" : undefined,
+                        borderColor: sessionType === "LAB" ? "#0284c7" : undefined,
+                        color: sessionType === "LAB" ? "#0284c7" : undefined,
+                        fontWeight: 700,
                       }}
                       required
                     />
@@ -429,10 +498,10 @@ export function AttendanceSetupPage({ user, onLoggedOut }: AttendanceSetupPagePr
                 </div>
 
                 {/* Topic */}
-                <div className="field" style={{ marginBottom: 28 }}>
-                  <label htmlFor="topic-input">
+                <div className="field" style={{ marginBottom: 20 }}>
+                  <label htmlFor="topic-input" style={{ fontSize: 12, fontWeight: 700 }}>
                     <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                      <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                       Topic / Lecture Notes *
                     </span>
                   </label>
@@ -442,7 +511,8 @@ export function AttendanceSetupPage({ user, onLoggedOut }: AttendanceSetupPagePr
                     className="input-field"
                     value={topic}
                     onChange={(e) => setTopic(e.target.value)}
-                    placeholder="e.g. Binary Search Trees &amp; AVL Trees (Required)"
+                    placeholder="e.g. Binary Search Trees & AVL Trees (Required)"
+                    style={{ height: 42, borderRadius: 10, fontSize: 13 }}
                     required
                   />
                 </div>
@@ -454,21 +524,19 @@ export function AttendanceSetupPage({ user, onLoggedOut }: AttendanceSetupPagePr
                   className="btn btn-block"
                   style={{
                     width: "100%",
-                    height: 52,
-                    borderRadius: 14,
-                    background: "linear-gradient(135deg, #0284c7 0%, #1d4ed8 60%, #2563eb 100%)",
+                    height: 46,
+                    borderRadius: 12,
+                    background: "linear-gradient(135deg, #0284c7 0%, #2563eb 100%)",
                     color: "#ffffff",
-                    fontWeight: 800,
-                    fontSize: 16,
+                    fontWeight: 700,
+                    fontSize: 15,
                     border: "none",
-                    boxShadow: "0 12px 32px rgba(56, 189, 248, 0.35), inset 0 1px 0 rgba(255,255,255,0.2)",
+                    boxShadow: "0 8px 20px rgba(56, 189, 248, 0.3)",
                     cursor: "pointer",
-                    letterSpacing: "-0.01em",
-                    transition: "all 0.22s cubic-bezier(0.4, 0, 0.2, 1)",
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "center",
-                    gap: 10,
+                    gap: 8,
                   }}
                   disabled={submitting || !semesterId || !subjectId || !attendanceDate || !topic.trim()}
                 >
@@ -489,15 +557,14 @@ export function AttendanceSetupPage({ user, onLoggedOut }: AttendanceSetupPagePr
           </div>
 
 
-          {/* ── Monthly Attendance Register Grid Card ── */}
+          {/* ── Monthly Attendance Register Card ── */}
           <div
-            className="card card-pad"
             style={{
-              background: "var(--card-glass)",
-              border: "1.5px solid var(--border)",
-              borderRadius: 20,
+              background: "#ffffff",
+              border: "1px solid var(--border)",
+              borderRadius: 16,
               padding: 24,
-              boxShadow: "0 20px 50px rgba(0,0,0,0.12)",
+              boxShadow: "0 10px 30px rgba(0,0,0,0.06)",
               display: "flex",
               flexDirection: "column",
               gap: 20,
@@ -513,6 +580,7 @@ export function AttendanceSetupPage({ user, onLoggedOut }: AttendanceSetupPagePr
                     display: "flex", alignItems: "center", justifyContent: "center",
                     color: "#fff", fontSize: 20,
                     boxShadow: "0 6px 16px rgba(16, 185, 129, 0.35)",
+                    flexShrink: 0,
                   }}>
                     <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
@@ -532,22 +600,71 @@ export function AttendanceSetupPage({ user, onLoggedOut }: AttendanceSetupPagePr
                 </div>
               </div>
 
-              {/* Month Picker & Print Button */}
-              <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <label htmlFor="month-picker" style={{ fontSize: 12, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase" }}>
-                    Month:
-                  </label>
+              {/* Month Stepper, Picker & Print PDF */}
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                {/* Month stepper buttons */}
+                <div style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  background: "var(--chip-bg-muted)",
+                  padding: "3px 6px",
+                  borderRadius: 10,
+                  border: "1px solid var(--border)",
+                  gap: 4,
+                }}>
+                  <button
+                    type="button"
+                    onClick={handlePrevMonth}
+                    title="Previous Month"
+                    style={{
+                      background: "#ffffff", border: "1px solid var(--border)", borderRadius: 6,
+                      width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center",
+                      cursor: "pointer", color: "var(--text)", fontWeight: 800, fontSize: 13,
+                    }}
+                  >
+                    ◀
+                  </button>
+
                   <input
                     id="month-picker"
                     type="month"
                     className="input-field"
-                    style={{ width: 170, padding: "8px 12px", borderRadius: 10, fontSize: 13, fontWeight: 600 }}
+                    style={{
+                      width: 155, height: 30, padding: "2px 8px", borderRadius: 6,
+                      fontSize: 12, fontWeight: 700, border: "none", background: "transparent",
+                    }}
                     value={month}
                     onChange={(e) => setMonth(e.target.value)}
                   />
+
+                  <button
+                    type="button"
+                    onClick={handleNextMonth}
+                    title="Next Month"
+                    style={{
+                      background: "#ffffff", border: "1px solid var(--border)", borderRadius: 6,
+                      width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center",
+                      cursor: "pointer", color: "var(--text)", fontWeight: 800, fontSize: 13,
+                    }}
+                  >
+                    ▶
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleCurrentMonth}
+                    title="Jump to current month"
+                    style={{
+                      background: "#ffffff", border: "1px solid var(--border)", borderRadius: 6,
+                      padding: "0 8px", height: 28, display: "flex", alignItems: "center", justifyContent: "center",
+                      cursor: "pointer", color: "var(--text)", fontWeight: 700, fontSize: 11,
+                    }}
+                  >
+                    Current
+                  </button>
                 </div>
 
+                {/* Print PDF Button */}
                 <button
                   type="button"
                   className="btn btn-outline"
@@ -561,12 +678,14 @@ export function AttendanceSetupPage({ user, onLoggedOut }: AttendanceSetupPagePr
                     display: "inline-flex",
                     alignItems: "center",
                     gap: 8,
-                    padding: "9px 16px",
+                    height: 38,
+                    padding: "0 14px",
                     borderRadius: 10,
                     fontWeight: 700,
                     fontSize: 13,
                     opacity: !printPdfUrl ? 0.5 : 1,
                     cursor: !printPdfUrl ? "not-allowed" : "pointer",
+                    background: "#ffffff",
                   }}
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
@@ -575,48 +694,159 @@ export function AttendanceSetupPage({ user, onLoggedOut }: AttendanceSetupPagePr
               </div>
             </div>
 
-            {/* Status Legend */}
-            <div style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 16,
-              flexWrap: "wrap",
-              padding: "10px 16px",
-              background: "var(--chip-bg-muted)",
-              borderRadius: 12,
-              fontSize: 12,
-              fontWeight: 600,
-              color: "var(--muted)",
-            }}>
-              <span style={{ fontWeight: 800, color: "var(--text)" }}>Legend:</span>
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                <span style={{ width: 18, height: 18, borderRadius: 4, background: "#067647", color: "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 900 }}>P</span>
-                Present
-              </span>
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                <span style={{ width: 18, height: 18, borderRadius: 4, background: "#b42318", color: "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 900 }}>A</span>
-                Absent
-              </span>
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                <span style={{ width: 18, height: 18, borderRadius: 4, background: "#d97706", color: "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 900 }}>H</span>
-                Central / Sunday Holiday
-              </span>
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                <span style={{ width: 18, height: 18, borderRadius: 4, background: "rgba(0,0,0,0.06)", color: "var(--muted)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 900 }}>·</span>
-                No Session
-              </span>
-              {register && (
-                <span style={{ marginLeft: "auto", color: "var(--text)", fontWeight: 700 }}>
-                  Students: {register.roster.length} · Teaching Days: {register.days.filter(d => d.session_count > 0).length}
-                </span>
-              )}
-            </div>
+            {/* KPI Stat Badges & Search Filter */}
+            {register && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                <div style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+                  gap: 12,
+                }}>
+                  <div style={{
+                    padding: "12px 14px", borderRadius: 12, background: "#f8fafc",
+                    border: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 10,
+                  }}>
+                    <div style={{ fontSize: 20 }}>👥</div>
+                    <div>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase" }}>Total Students</div>
+                      <div style={{ fontSize: 18, fontWeight: 800, color: "var(--text)" }}>{registerStats.totalStudents}</div>
+                    </div>
+                  </div>
+
+                  <div style={{
+                    padding: "12px 14px", borderRadius: 12, background: "#f8fafc",
+                    border: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 10,
+                  }}>
+                    <div style={{ fontSize: 20 }}>📅</div>
+                    <div>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase" }}>Teaching Days</div>
+                      <div style={{ fontSize: 18, fontWeight: 800, color: "var(--text)" }}>{registerStats.totalSessions}</div>
+                    </div>
+                  </div>
+
+                  <div style={{
+                    padding: "12px 14px", borderRadius: 12, background: "#f8fafc",
+                    border: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 10,
+                  }}>
+                    <div style={{ fontSize: 20 }}>📊</div>
+                    <div>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase" }}>Avg Attendance</div>
+                      <div style={{
+                        fontSize: 18, fontWeight: 800,
+                        color: registerStats.classAvgPct >= 75 ? "#15803d" : registerStats.classAvgPct >= 60 ? "#b45309" : "#b91c1c",
+                      }}>
+                        {registerStats.classAvgPct}%
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{
+                    padding: "12px 14px", borderRadius: 12, background: "#f8fafc",
+                    border: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 10,
+                  }}>
+                    <div style={{ fontSize: 20 }}>🎯</div>
+                    <div>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase" }}>Eligible (≥75%)</div>
+                      <div style={{ fontSize: 18, fontWeight: 800, color: "#15803d" }}>
+                        {registerStats.eligibleCount} <span style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)" }}>students</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{
+                    padding: "12px 14px", borderRadius: 12, background: "#f8fafc",
+                    border: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 10,
+                  }}>
+                    <div style={{ fontSize: 20 }}>⚠️</div>
+                    <div>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase" }}>Shortage (&lt;75%)</div>
+                      <div style={{ fontSize: 18, fontWeight: 800, color: registerStats.shortageCount > 0 ? "#b91c1c" : "#15803d" }}>
+                        {registerStats.shortageCount} <span style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)" }}>students</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Search / Filter bar + Legend */}
+                <div style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  flexWrap: "wrap",
+                  gap: 12,
+                  padding: "10px 14px",
+                  background: "#f8fafc",
+                  borderRadius: 12,
+                  border: "1px solid var(--border)",
+                }}>
+                  {/* Search box */}
+                  <div style={{ position: "relative", minWidth: 240, flex: "1 1 240px", maxWidth: 360 }}>
+                    <input
+                      type="text"
+                      className="input-field"
+                      placeholder="🔍 Search roll no or student name…"
+                      value={studentSearch}
+                      onChange={(e) => setStudentSearch(e.target.value)}
+                      style={{
+                        height: 34,
+                        padding: "0 28px 0 10px",
+                        fontSize: 12,
+                        borderRadius: 8,
+                        background: "#ffffff",
+                      }}
+                    />
+                    {studentSearch && (
+                      <button
+                        type="button"
+                        onClick={() => setStudentSearch("")}
+                        style={{
+                          position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)",
+                          background: "none", border: "none", color: "var(--muted)", cursor: "pointer",
+                          fontSize: 12, fontWeight: 700,
+                        }}
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Status Legend */}
+                  <div style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
+                    flexWrap: "wrap",
+                    fontSize: 12,
+                    fontWeight: 600,
+                    color: "var(--muted)",
+                  }}>
+                    <span style={{ fontWeight: 800, color: "var(--text)" }}>Legend:</span>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                      <span style={{ width: 20, height: 20, borderRadius: 5, background: "#dcfce7", color: "#15803d", border: "1px solid #bbf7d0", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 900 }}>P</span>
+                      Present
+                    </span>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                      <span style={{ width: 20, height: 20, borderRadius: 5, background: "#fee2e2", color: "#b91c1c", border: "1px solid #fecaca", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 900 }}>A</span>
+                      Absent
+                    </span>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                      <span style={{ width: 20, height: 20, borderRadius: 5, background: "#fef3c7", color: "#b45309", border: "1px solid #fde68a", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 900 }}>H</span>
+                      Holiday / Sunday
+                    </span>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                      <span style={{ width: 20, height: 20, borderRadius: 5, background: "#f1f5f9", color: "#94a3b8", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 900 }}>·</span>
+                      No Class
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Selected Date Inspector Banner */}
             {selectedGridDate && selectedDayInfo && (
               <div style={{
-                background: "linear-gradient(135deg, rgba(2, 132, 199, 0.08) 0%, rgba(37, 99, 235, 0.06) 100%)",
-                border: "1px solid rgba(56, 189, 248, 0.3)",
+                background: "linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%)",
+                border: "1.5px solid #38bdf8",
                 borderRadius: 12,
                 padding: "14px 18px",
                 display: "flex",
@@ -624,28 +854,29 @@ export function AttendanceSetupPage({ user, onLoggedOut }: AttendanceSetupPagePr
                 alignItems: "center",
                 flexWrap: "wrap",
                 gap: 12,
+                boxShadow: "0 4px 14px rgba(56, 189, 248, 0.15)",
               }}>
                 <div>
-                  <div style={{ fontWeight: 800, fontSize: 14, color: "var(--text)" }}>
-                    📅 {selectedDayInfo.date} ({selectedDayInfo.weekday})
+                  <div style={{ fontWeight: 800, fontSize: 14, color: "#0369a1", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                    <span>📅 {selectedDayInfo.date} ({selectedDayInfo.weekday})</span>
                     {selectedDayInfo.holiday && (
-                      <span className="chip chip-yellow" style={{ marginLeft: 8, fontSize: 11, padding: "2px 8px" }}>
+                      <span style={{ background: "#fef3c7", color: "#b45309", border: "1px solid #fde68a", padding: "2px 8px", borderRadius: 6, fontSize: 11, fontWeight: 800 }}>
                         🎉 Holiday: {selectedDayInfo.holiday_name || "Holiday"}
                       </span>
                     )}
                     {selectedDayInfo.session_id && (
-                      <span className="chip chip-green" style={{ marginLeft: 8, fontSize: 11, padding: "2px 8px" }}>
+                      <span style={{ background: "#dcfce7", color: "#15803d", border: "1px solid #bbf7d0", padding: "2px 8px", borderRadius: 6, fontSize: 11, fontWeight: 800 }}>
                         ✅ {selectedDayInfo.session_type || "CLASS"} ({selectedDayInfo.duration_hours}h)
                       </span>
                     )}
                   </div>
                   {selectedDayInfo.topic && (
-                    <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
-                      Topic: <em>"{selectedDayInfo.topic}"</em>
+                    <div style={{ fontSize: 12, color: "#334155", marginTop: 4 }}>
+                      Topic: <strong>"{selectedDayInfo.topic}"</strong>
                     </div>
                   )}
                   {!selectedDayInfo.holiday && !selectedDayInfo.session_id && (
-                    <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
+                    <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>
                       No attendance session was recorded on this day.
                     </div>
                   )}
@@ -657,7 +888,10 @@ export function AttendanceSetupPage({ user, onLoggedOut }: AttendanceSetupPagePr
                       type="button"
                       className="btn btn-sm"
                       onClick={() => navigate(`/attendance/sessions/${selectedDayInfo.session_id}`)}
-                      style={{ padding: "6px 14px", borderRadius: 8, fontWeight: 700, fontSize: 13 }}
+                      style={{
+                        padding: "6px 14px", borderRadius: 8, fontWeight: 700, fontSize: 13,
+                        background: "#0284c7", color: "#fff", border: "none", cursor: "pointer",
+                      }}
                     >
                       👁️ Open Saved Session
                     </button>
@@ -666,7 +900,7 @@ export function AttendanceSetupPage({ user, onLoggedOut }: AttendanceSetupPagePr
                     type="button"
                     className="btn btn-outline btn-sm"
                     onClick={() => setSelectedGridDate(null)}
-                    style={{ padding: "6px 10px", borderRadius: 8, fontSize: 12 }}
+                    style={{ padding: "6px 12px", borderRadius: 8, fontSize: 12, background: "#fff" }}
                   >
                     Close
                   </button>
@@ -680,9 +914,9 @@ export function AttendanceSetupPage({ user, onLoggedOut }: AttendanceSetupPagePr
 
             {/* Empty state if no subject/semester selected */}
             {!loadingRegister && !register && !registerError && (
-              <div className="empty-note" style={{ padding: 24, background: "rgba(0,0,0,0.02)", borderRadius: 10 }}>
+              <div className="empty-note" style={{ padding: 32, background: "#f8fafc", borderRadius: 12, textAlign: "center" }}>
                 {!semesterId || !subjectId
-                  ? "Please select a semester and subject from the dropdown above to view the monthly register."
+                  ? "Please select a semester and subject from the form above to view the monthly register."
                   : "No attendance register data found for this selection."}
               </div>
             )}
@@ -690,38 +924,91 @@ export function AttendanceSetupPage({ user, onLoggedOut }: AttendanceSetupPagePr
             {/* Register Grid Table */}
             {!loadingRegister && register && (
               <div
-                className="table-wrap"
                 style={{
+                  position: "relative",
+                  width: "100%",
                   overflowX: "auto",
                   border: "1px solid var(--border)",
                   borderRadius: 12,
-                  boxShadow: "inset 0 1px 3px rgba(0,0,0,0.05)",
+                  boxShadow: "0 2px 6px rgba(0,0,0,0.04)",
+                  background: "#ffffff",
                 }}
               >
                 <table
-                  className="data-table"
                   style={{
-                    minWidth: 960,
-                    width: "100%",
-                    borderCollapse: "collapse",
+                    width: "max-content",
+                    minWidth: "100%",
+                    borderCollapse: "separate",
+                    borderSpacing: 0,
                     fontSize: 12,
                   }}
                 >
                   <thead>
-                    <tr style={{ background: "var(--panel)" }}>
+                    <tr style={{ background: "#f8fafc" }}>
+                      {/* Column 1: # */}
                       <th style={{
-                        position: "sticky", left: 0, zIndex: 4, background: "var(--panel)",
-                        width: 42, padding: "10px 8px", textAlign: "center", borderRight: "1px solid var(--border)",
-                      }}>#</th>
+                        position: "sticky",
+                        left: 0,
+                        top: 0,
+                        zIndex: 30,
+                        background: "#f8fafc",
+                        width: 44,
+                        minWidth: 44,
+                        maxWidth: 44,
+                        padding: "10px 4px",
+                        textAlign: "center",
+                        borderRight: "1px solid var(--border)",
+                        borderBottom: "2px solid var(--border)",
+                        fontWeight: 800,
+                        color: "var(--muted)",
+                      }}>
+                        #
+                      </th>
+
+                      {/* Column 2: Hall Ticket */}
                       <th style={{
-                        position: "sticky", left: 42, zIndex: 4, background: "var(--panel)",
-                        minWidth: 120, padding: "10px 10px", textAlign: "left", borderRight: "1px solid var(--border)",
-                      }}>Hall Ticket</th>
+                        position: "sticky",
+                        left: 44,
+                        top: 0,
+                        zIndex: 30,
+                        background: "#f8fafc",
+                        width: 125,
+                        minWidth: 125,
+                        maxWidth: 125,
+                        padding: "10px 10px",
+                        textAlign: "left",
+                        borderRight: "1px solid var(--border)",
+                        borderBottom: "2px solid var(--border)",
+                        fontWeight: 800,
+                        color: "var(--text)",
+                        textTransform: "uppercase",
+                        letterSpacing: "0.03em",
+                      }}>
+                        Hall Ticket
+                      </th>
+
+                      {/* Column 3: Student Name */}
                       <th style={{
-                        position: "sticky", left: 162, zIndex: 4, background: "var(--panel)",
-                        minWidth: 180, padding: "10px 10px", textAlign: "left", borderRight: "2px solid var(--border)",
-                        boxShadow: "2px 0 6px rgba(0,0,0,0.05)",
-                      }}>Student Name</th>
+                        position: "sticky",
+                        left: 169,
+                        top: 0,
+                        zIndex: 30,
+                        background: "#f8fafc",
+                        width: 190,
+                        minWidth: 190,
+                        maxWidth: 190,
+                        padding: "10px 12px",
+                        textAlign: "left",
+                        borderRight: "2px solid #cbd5e1",
+                        borderBottom: "2px solid var(--border)",
+                        boxShadow: "4px 0 8px -2px rgba(15, 23, 42, 0.08)",
+                        fontWeight: 800,
+                        color: "var(--text)",
+                      }}>
+                        Student Name
+                      </th>
+
+                      {/* Date Columns 01..31 */}
                       {register.days.map((d) => {
                         const isSunday = d.weekday === "Sunday";
                         const isHoliday = d.holiday;
@@ -731,116 +1018,409 @@ export function AttendanceSetupPage({ user, onLoggedOut }: AttendanceSetupPagePr
                           <th
                             key={d.date}
                             onClick={() => setSelectedGridDate(d.date)}
-                            title={d.holiday_name || d.topic || (hasSession ? "Open session" : "No session recorded")}
+                            title={d.holiday_name || d.topic || (hasSession ? `${d.session_type} session (${d.duration_hours}h)` : "No session recorded")}
                             style={{
-                              minWidth: 34,
-                              maxWidth: 38,
+                              width: 36,
+                              minWidth: 36,
+                              maxWidth: 36,
                               padding: "6px 2px",
                               textAlign: "center",
                               cursor: "pointer",
                               background: isSelected
-                                ? "rgba(56, 189, 248, 0.25)"
+                                ? "#e0f2fe"
                                 : isHoliday
-                                ? "#fff4d6"
-                                : undefined,
+                                ? "#fffbeb"
+                                : hasSession
+                                ? "#f0fdf4"
+                                : "#f8fafc",
                               borderRight: "1px solid var(--border)",
-                              transition: "background 0.15s ease",
+                              borderBottom: "2px solid var(--border)",
+                              transition: "all 0.15s ease",
                             }}
                           >
-                            <div style={{ fontWeight: 800, fontSize: 12, color: isHoliday ? "#9a6700" : hasSession ? "var(--heading-accent)" : "var(--text)" }}>
+                            <div style={{
+                              fontWeight: 800,
+                              fontSize: 12,
+                              color: isHoliday ? "#b45309" : hasSession ? "#15803d" : "var(--text)",
+                            }}>
                               {String(d.day).padStart(2, "0")}
                             </div>
-                            <div style={{ fontSize: 9, fontWeight: 700, color: isSunday ? "#ef4444" : isHoliday ? "#b45309" : "var(--muted)", textTransform: "uppercase" }}>
+                            <div style={{
+                              fontSize: 9,
+                              fontWeight: 700,
+                              color: isSunday ? "#dc2626" : isHoliday ? "#b45309" : hasSession ? "#16a34a" : "var(--muted)",
+                              textTransform: "uppercase",
+                            }}>
                               {d.weekday.slice(0, 2)}
                             </div>
+                            {hasSession && (
+                              <div style={{
+                                width: 4, height: 4, borderRadius: "50%", background: "#16a34a",
+                                margin: "2px auto 0 auto",
+                              }} />
+                            )}
                           </th>
                         );
                       })}
+
+                      {/* Right Summary Columns */}
+                      <th style={{
+                        position: "sticky",
+                        right: 70,
+                        top: 0,
+                        zIndex: 28,
+                        background: "#f8fafc",
+                        width: 70,
+                        minWidth: 70,
+                        padding: "10px 6px",
+                        textAlign: "center",
+                        borderLeft: "2px solid #cbd5e1",
+                        borderRight: "1px solid var(--border)",
+                        borderBottom: "2px solid var(--border)",
+                        fontWeight: 800,
+                        color: "var(--text)",
+                      }}>
+                        Attd
+                      </th>
+                      <th style={{
+                        position: "sticky",
+                        right: 0,
+                        top: 0,
+                        zIndex: 28,
+                        background: "#f8fafc",
+                        width: 70,
+                        minWidth: 70,
+                        padding: "10px 6px",
+                        textAlign: "center",
+                        borderBottom: "2px solid var(--border)",
+                        fontWeight: 800,
+                        color: "var(--text)",
+                      }}>
+                        % Attd
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
-                    {register.roster.map((row, rowIdx) => (
-                      <tr
-                        key={row.roll_no}
-                        style={{
-                          borderBottom: "1px solid var(--border)",
-                          background: rowIdx % 2 === 1 ? "var(--chip-bg-muted)" : undefined,
-                        }}
-                      >
-                        <td style={{
-                          position: "sticky", left: 0, zIndex: 2,
-                          background: "var(--panel)",
-                          textAlign: "center", fontSize: 11, color: "var(--muted)",
-                          borderRight: "1px solid var(--border)",
-                          padding: "6px 4px",
-                        }}>
-                          {rowIdx + 1}
-                        </td>
-                        <td style={{
-                          position: "sticky", left: 42, zIndex: 2,
-                          background: "var(--panel)",
-                          fontWeight: 700, fontSize: 12, color: "var(--text)",
-                          borderRight: "1px solid var(--border)",
-                          padding: "6px 10px",
-                          whiteSpace: "nowrap",
-                        }}>
-                          {row.roll_no}
-                        </td>
-                        <td style={{
-                          position: "sticky", left: 162, zIndex: 2,
-                          background: "var(--panel)",
-                          fontSize: 12, color: "var(--text)",
-                          borderRight: "2px solid var(--border)",
-                          padding: "6px 10px",
-                          whiteSpace: "nowrap",
-                          boxShadow: "2px 0 6px rgba(0,0,0,0.05)",
-                        }}>
-                          {row.name}
-                        </td>
-                        {row.cells.map((cell, cIdx) => {
-                          const dayObj = register.days[cIdx];
-                          const isHoliday = cell.status === "H" || dayObj?.holiday;
-                          const isSelected = selectedGridDate === dayObj?.date;
-                          return (
-                            <td
-                              key={cIdx}
-                              onClick={() => dayObj && setSelectedGridDate(dayObj.date)}
-                              title={dayObj ? `${dayObj.date}: ${cell.status === "P" ? "Present" : cell.status === "A" ? "Absent" : cell.status === "H" ? `Holiday (${dayObj.holiday_name || "Holiday"})` : "No session"}` : ""}
-                              style={{
-                                textAlign: "center",
-                                padding: "6px 2px",
-                                fontWeight: 800,
-                                fontSize: 12,
-                                cursor: "pointer",
-                                borderRight: "1px solid var(--border)",
-                                background: isSelected
-                                  ? "rgba(56, 189, 248, 0.2)"
-                                  : isHoliday
-                                  ? "#fff8e7"
-                                  : undefined,
-                                color: cell.status === "P"
-                                  ? "#067647"
-                                  : cell.status === "A"
-                                  ? "#b42318"
-                                  : cell.status === "H"
-                                  ? "#9a6700"
-                                  : "var(--muted)",
-                              }}
-                            >
-                              {cell.status || "·"}
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    ))}
-                    {register.roster.length === 0 && (
+                    {filteredRoster.map((row, rowIdx) => {
+                      const isHovered = hoveredRow === rowIdx;
+                      const isAlt = rowIdx % 2 === 1;
+                      const rowBg = isHovered ? "#f0f7ff" : isAlt ? "#f8fafc" : "#ffffff";
+
+                      // Calculate student metrics
+                      const teachingDays = register.days.filter((d) => d.session_count > 0);
+                      const totalSessions = teachingDays.length;
+                      let presentCount = 0;
+                      row.cells.forEach((cell, idx) => {
+                        const day = register.days[idx];
+                        if (day && day.session_count > 0 && cell.status === "P") {
+                          presentCount += 1;
+                        }
+                      });
+                      const studentPct = totalSessions > 0 ? Math.round((presentCount / totalSessions) * 100) : 100;
+
+                      return (
+                        <tr
+                          key={row.roll_no}
+                          onMouseEnter={() => setHoveredRow(rowIdx)}
+                          onMouseLeave={() => setHoveredRow(null)}
+                          style={{
+                            background: rowBg,
+                            transition: "background 0.1s ease",
+                          }}
+                        >
+                          {/* Column 1: # */}
+                          <td style={{
+                            position: "sticky",
+                            left: 0,
+                            zIndex: 20,
+                            background: rowBg,
+                            textAlign: "center",
+                            fontSize: 11,
+                            fontWeight: 600,
+                            color: "var(--muted)",
+                            borderRight: "1px solid var(--border)",
+                            borderBottom: "1px solid var(--border)",
+                            width: 44,
+                            minWidth: 44,
+                            maxWidth: 44,
+                            padding: "6px 2px",
+                          }}>
+                            {rowIdx + 1}
+                          </td>
+
+                          {/* Column 2: Hall Ticket */}
+                          <td style={{
+                            position: "sticky",
+                            left: 44,
+                            zIndex: 20,
+                            background: rowBg,
+                            fontWeight: 700,
+                            fontSize: 12,
+                            fontFamily: "monospace",
+                            color: "var(--text)",
+                            borderRight: "1px solid var(--border)",
+                            borderBottom: "1px solid var(--border)",
+                            width: 125,
+                            minWidth: 125,
+                            maxWidth: 125,
+                            padding: "6px 10px",
+                            whiteSpace: "nowrap",
+                          }}>
+                            {row.roll_no}
+                          </td>
+
+                          {/* Column 3: Student Name */}
+                          <td style={{
+                            position: "sticky",
+                            left: 169,
+                            zIndex: 20,
+                            background: rowBg,
+                            fontSize: 12,
+                            fontWeight: 600,
+                            color: "var(--text)",
+                            borderRight: "2px solid #cbd5e1",
+                            borderBottom: "1px solid var(--border)",
+                            boxShadow: "4px 0 8px -2px rgba(15, 23, 42, 0.08)",
+                            width: 190,
+                            minWidth: 190,
+                            maxWidth: 190,
+                            padding: "6px 12px",
+                            whiteSpace: "nowrap",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                          }}>
+                            {row.name}
+                          </td>
+
+                          {/* Date Cells */}
+                          {row.cells.map((cell, cIdx) => {
+                            const dayObj = register.days[cIdx];
+                            const isHoliday = cell.status === "H" || dayObj?.holiday;
+                            const isSelected = selectedGridDate === dayObj?.date;
+                            const hasSession = (dayObj?.session_count ?? 0) > 0;
+
+                            return (
+                              <td
+                                key={cIdx}
+                                onClick={() => dayObj && setSelectedGridDate(dayObj.date)}
+                                title={dayObj ? `${dayObj.date} (${dayObj.weekday}): ${cell.status === "P" ? "Present" : cell.status === "A" ? "Absent" : cell.status === "H" ? `Holiday (${dayObj.holiday_name || "Holiday"})` : "No class"}` : ""}
+                                style={{
+                                  textAlign: "center",
+                                  padding: "4px 2px",
+                                  cursor: "pointer",
+                                  width: 36,
+                                  minWidth: 36,
+                                  maxWidth: 36,
+                                  borderRight: "1px solid var(--border)",
+                                  borderBottom: "1px solid var(--border)",
+                                  background: isSelected
+                                    ? "#e0f2fe"
+                                    : isHoliday
+                                    ? "#fffdf5"
+                                    : undefined,
+                                }}
+                              >
+                                {cell.status === "P" ? (
+                                  <span style={{
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    width: 24,
+                                    height: 24,
+                                    borderRadius: 6,
+                                    background: "#dcfce7",
+                                    color: "#15803d",
+                                    border: "1px solid #bbf7d0",
+                                    fontWeight: 800,
+                                    fontSize: 11,
+                                  }}>
+                                    P
+                                  </span>
+                                ) : cell.status === "A" ? (
+                                  <span style={{
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    width: 24,
+                                    height: 24,
+                                    borderRadius: 6,
+                                    background: "#fee2e2",
+                                    color: "#b91c1c",
+                                    border: "1px solid #fecaca",
+                                    fontWeight: 800,
+                                    fontSize: 11,
+                                  }}>
+                                    A
+                                  </span>
+                                ) : isHoliday ? (
+                                  <span style={{
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    width: 24,
+                                    height: 24,
+                                    borderRadius: 6,
+                                    background: "#fef3c7",
+                                    color: "#b45309",
+                                    border: "1px solid #fde68a",
+                                    fontWeight: 800,
+                                    fontSize: 10,
+                                  }}>
+                                    H
+                                  </span>
+                                ) : (
+                                  <span style={{ color: "#cbd5e1", fontSize: 16, fontWeight: 700, lineHeight: 1 }}>
+                                    ·
+                                  </span>
+                                )}
+                              </td>
+                            );
+                          })}
+
+                          {/* Right Summary Columns */}
+                          <td style={{
+                            position: "sticky",
+                            right: 70,
+                            zIndex: 18,
+                            background: rowBg,
+                            textAlign: "center",
+                            padding: "6px 4px",
+                            fontSize: 12,
+                            fontWeight: 700,
+                            color: "var(--text)",
+                            borderLeft: "2px solid #cbd5e1",
+                            borderRight: "1px solid var(--border)",
+                            borderBottom: "1px solid var(--border)",
+                            width: 70,
+                            minWidth: 70,
+                          }}>
+                            {presentCount} / {totalSessions}
+                          </td>
+
+                          <td style={{
+                            position: "sticky",
+                            right: 0,
+                            zIndex: 18,
+                            background: rowBg,
+                            textAlign: "center",
+                            padding: "6px 4px",
+                            borderBottom: "1px solid var(--border)",
+                            width: 70,
+                            minWidth: 70,
+                          }}>
+                            <span style={{
+                              display: "inline-block",
+                              padding: "2px 6px",
+                              borderRadius: 6,
+                              fontSize: 11,
+                              fontWeight: 800,
+                              background: studentPct >= 75 ? "#dcfce7" : studentPct >= 60 ? "#fef3c7" : "#fee2e2",
+                              color: studentPct >= 75 ? "#15803d" : studentPct >= 60 ? "#b45309" : "#b91c1c",
+                              border: studentPct >= 75 ? "1px solid #bbf7d0" : studentPct >= 60 ? "1px solid #fde68a" : "1px solid #fecaca",
+                            }}>
+                              {studentPct}%
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+
+                    {filteredRoster.length === 0 && (
                       <tr>
-                        <td colSpan={register.days.length + 3} style={{ textAlign: "center", padding: 24, color: "var(--muted)" }}>
-                          No students are currently assigned to this semester / HOD scope.
+                        <td
+                          colSpan={register.days.length + 5}
+                          style={{ textAlign: "center", padding: 32, color: "var(--muted)", background: "#ffffff" }}
+                        >
+                          {studentSearch
+                            ? `No students matching "${studentSearch}".`
+                            : "No students are assigned to this semester / HOD scope."}
                         </td>
                       </tr>
                     )}
                   </tbody>
+
+                  {/* Daily Total Summary Footer */}
+                  {filteredRoster.length > 0 && (
+                    <tfoot>
+                      <tr style={{ background: "#f1f5f9", fontWeight: 800 }}>
+                        <td
+                          colSpan={3}
+                          style={{
+                            position: "sticky",
+                            left: 0,
+                            zIndex: 25,
+                            background: "#f1f5f9",
+                            padding: "10px 14px",
+                            textAlign: "right",
+                            borderTop: "2px solid #cbd5e1",
+                            borderRight: "2px solid #cbd5e1",
+                            boxShadow: "4px 0 8px -2px rgba(15, 23, 42, 0.08)",
+                            color: "var(--text)",
+                            fontSize: 12,
+                          }}
+                        >
+                          Daily Attendance (Present):
+                        </td>
+
+                        {dailyAttendanceSummary.map((sum, sIdx) => {
+                          const day = register.days[sIdx];
+                          return (
+                            <td
+                              key={sIdx}
+                              style={{
+                                textAlign: "center",
+                                padding: "6px 2px",
+                                borderTop: "2px solid #cbd5e1",
+                                borderRight: "1px solid var(--border)",
+                                fontSize: 10,
+                                fontWeight: 800,
+                                color: sum ? (sum.pct >= 75 ? "#15803d" : "#b45309") : "var(--muted)",
+                                background: sum ? "#f8fafc" : "#f1f5f9",
+                              }}
+                            >
+                              {sum ? `${sum.presentCount}` : "—"}
+                            </td>
+                          );
+                        })}
+
+                        <td
+                          style={{
+                            position: "sticky",
+                            right: 70,
+                            zIndex: 22,
+                            background: "#f1f5f9",
+                            textAlign: "center",
+                            padding: "8px 4px",
+                            fontSize: 11,
+                            fontWeight: 800,
+                            borderTop: "2px solid #cbd5e1",
+                            borderLeft: "2px solid #cbd5e1",
+                            borderRight: "1px solid var(--border)",
+                            color: "var(--text)",
+                          }}
+                        >
+                          Avg
+                        </td>
+
+                        <td
+                          style={{
+                            position: "sticky",
+                            right: 0,
+                            zIndex: 22,
+                            background: "#f1f5f9",
+                            textAlign: "center",
+                            padding: "8px 4px",
+                            fontSize: 11,
+                            fontWeight: 800,
+                            borderTop: "2px solid #cbd5e1",
+                            color: registerStats.classAvgPct >= 75 ? "#15803d" : "#b45309",
+                          }}
+                        >
+                          {registerStats.classAvgPct}%
+                        </td>
+                      </tr>
+                    </tfoot>
+                  )}
                 </table>
               </div>
             )}
@@ -849,21 +1429,20 @@ export function AttendanceSetupPage({ user, onLoggedOut }: AttendanceSetupPagePr
 
           {/* Semester View - Attendance History for Selected Semester */}
           <div
-            className="card card-pad"
             style={{
-              background: "var(--card-glass)",
+              background: "#ffffff",
               border: "1px solid var(--border)",
               borderRadius: 16,
               padding: 24,
-              boxShadow: "0 15px 35px rgba(0,0,0,0.1)"
+              boxShadow: "0 10px 30px rgba(0,0,0,0.06)",
             }}
           >
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
               <div>
                 <h3 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: "var(--text)" }}>
                   📋 Semester Attendance View {selectedSemester ? `— ${selectedSemester.code}` : ""}
                 </h3>
-                <p style={{ margin: "4px 0 0 0", color: "var(--muted)", fontSize: 13 }}>
+                <p style={{ margin: "3px 0 0 0", color: "var(--muted)", fontSize: 13 }}>
                   {selectedSemester ? `Recent sessions recorded for ${selectedSemester.name}` : "Select a semester above to view its attendance history."}
                 </p>
               </div>
@@ -877,7 +1456,7 @@ export function AttendanceSetupPage({ user, onLoggedOut }: AttendanceSetupPagePr
             {loadingSessions && <div className="empty-note">Loading semester sessions…</div>}
 
             {!loadingSessions && semesterSessions.length === 0 && (
-              <div className="empty-note" style={{ padding: 24, background: "rgba(0,0,0,0.02)", borderRadius: 10 }}>
+              <div className="empty-note" style={{ padding: 24, background: "#f8fafc", borderRadius: 10, textAlign: "center" }}>
                 {semesterId
                   ? `No attendance sessions recorded yet for ${selectedSemester?.code ?? "this semester"}.`
                   : "Please select a semester from the dropdown to view sessions."}
@@ -897,11 +1476,11 @@ export function AttendanceSetupPage({ user, onLoggedOut }: AttendanceSetupPagePr
                         justifyContent: "space-between",
                         alignItems: "center",
                         padding: "14px 18px",
-                        background: "var(--chip-bg-muted)",
+                        background: "#f8fafc",
                         borderRadius: 12,
                         border: "1px solid var(--border)",
                         flexWrap: "wrap",
-                        gap: 12
+                        gap: 12,
                       }}
                     >
                       <div style={{ flex: 1, minWidth: 200 }}>
@@ -939,7 +1518,7 @@ export function AttendanceSetupPage({ user, onLoggedOut }: AttendanceSetupPagePr
                           type="button"
                           className="btn btn-outline btn-sm"
                           onClick={() => navigate(`/attendance/sessions/${sess.id}`)}
-                          style={{ padding: "6px 14px", borderRadius: 8, fontWeight: 700, fontSize: 13 }}
+                          style={{ padding: "6px 14px", borderRadius: 8, fontWeight: 700, fontSize: 13, background: "#ffffff" }}
                         >
                           👁️ View Register
                         </button>
@@ -955,3 +1534,4 @@ export function AttendanceSetupPage({ user, onLoggedOut }: AttendanceSetupPagePr
     </AppShell>
   );
 }
+
