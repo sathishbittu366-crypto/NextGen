@@ -11,6 +11,7 @@ sms.db
 *.sqlite
 *.sqlite3
 
+.venv/
 # Build outputs
 frontend/dist/
 frontend/node_modules/
