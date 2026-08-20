@@ -7,46 +7,29 @@
    way — don't reinterpret the palette, don't add new tokens speculatively. */
 
 :root {
-  --nav: #092b49;
-  --nav2: #123f6c;
+  --nav: #1e3a5f;
+  --nav2: #2563a8;
   --blue: #1769e8;
   --green: #18a957;
   --yellow: #d97706;
   --red: #dc3545;
-  --bg: #060b19;
-  --bg-card: #0f172a;
-  --text: #f8fafc;
-  --muted: #94a3b8;
-  --border: rgba(255, 255, 255, 0.12);
-  --border-light: rgba(255, 255, 255, 0.07);
-  --row-alt: #0d1527;
-  --row-tint: #111c35;
 
-  /* Theme responsive tokens */
-  --card-glass: rgba(15, 23, 42, 0.85);
-  --input-bg: rgba(15, 23, 42, 0.75);
-  --input-border: rgba(56, 189, 248, 0.3);
-  --heading-accent: #38bdf8;
-  --subtext: #e2e8f0;
-  --chip-bg-muted: rgba(255, 255, 255, 0.05);
-}
-
-[data-theme="light"] {
-  --bg: #f8fafc;
+  /* Light mode as the permanent default */
+  --bg: #f0f4f8;
   --bg-card: #ffffff;
-  --text: #000000;
-  --muted: #1e1e1e;
+  --text: #1a202c;
+  --muted: #4a5568;
   --border: #cbd5e1;
   --border-light: #e2e8f0;
-  --row-alt: #f1f5f9;
-  --row-tint: #e2e8f0;
+  --row-alt: #f7fafc;
+  --row-tint: #edf2f7;
 
-  /* Theme responsive tokens */
+  /* Theme-responsive tokens — light values baked in */
   --card-glass: #ffffff;
   --input-bg: #ffffff;
-  --input-border: #64748b;
-  --heading-accent: #0284c7;
-  --subtext: #000000;
+  --input-border: #94a3b8;
+  --heading-accent: #1d6fe5;
+  --subtext: #2d3748;
   --chip-bg-muted: #e2e8f0;
 }
 
@@ -205,13 +188,13 @@ button { font-family: inherit; cursor: pointer; }
   width: 248px;
   flex-shrink: 0;
   background: linear-gradient(180deg,
-    rgba(6, 11, 25, 0.98) 0%,
-    rgba(10, 18, 40, 0.98) 50%,
-    rgba(7, 13, 30, 0.98) 100%);
-  border-right: 1px solid rgba(56, 189, 248, 0.12);
+    #1e3a5f 0%,
+    #1a3356 50%,
+    #162d4d 100%);
+  border-right: 1px solid rgba(30, 58, 95, 0.2);
   box-shadow:
-    4px 0 40px rgba(0, 0, 0, 0.5),
-    inset -1px 0 0 rgba(255, 255, 255, 0.04);
+    4px 0 24px rgba(30, 58, 95, 0.15),
+    inset -1px 0 0 rgba(255, 255, 255, 0.08);
   color: white;
   display: flex;
   flex-direction: column;
@@ -1174,15 +1157,15 @@ table.data-table td.roll { color: var(--muted); font-family: monospace; }
     max-width: 520px;
     z-index: 1000;
     
-    /* macOS Dock Glassmorphism */
-    background: rgba(15, 23, 42, 0.88);
+    /* macOS Dock — light glassmorphism */
+    background: rgba(255, 255, 255, 0.9);
     backdrop-filter: blur(32px) saturate(200%);
     -webkit-backdrop-filter: blur(32px) saturate(200%);
-    border: 1.5px solid rgba(255, 255, 255, 0.16);
+    border: 1.5px solid rgba(100, 116, 139, 0.2);
     box-shadow:
-      0 24px 60px rgba(0, 0, 0, 0.55),
-      0 4px 16px rgba(0, 0, 0, 0.3),
-      inset 0 1px 0 rgba(255, 255, 255, 0.25);
+      0 24px 60px rgba(30, 58, 95, 0.18),
+      0 4px 16px rgba(0, 0, 0, 0.1),
+      inset 0 1px 0 rgba(255, 255, 255, 0.95);
     border-radius: 26px;
     padding: 6px 8px;
     box-sizing: border-box;
@@ -1229,7 +1212,6 @@ table.data-table td.roll { color: var(--muted); font-family: monospace; }
     display: none;
   }
 
-  /* macOS Dock Item */
   .mac-dock-item {
     display: flex;
     flex-direction: column;
@@ -1246,7 +1228,7 @@ table.data-table td.roll { color: var(--muted); font-family: monospace; }
     cursor: pointer;
     transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
     -webkit-tap-highlight-color: transparent;
-    color: var(--muted);
+    color: #4a5568;
     font-family: inherit;
     position: relative;
   }
@@ -1257,11 +1239,11 @@ table.data-table td.roll { color: var(--muted); font-family: monospace; }
 
   .mac-dock-item:hover {
     transform: translateY(-3px) scale(1.06);
-    color: var(--text);
+    color: #1a202c;
   }
 
   .mac-dock-item.active {
-    color: #ffffff;
+    color: #1d6fe5;
   }
 
   /* Icon Box */
@@ -1272,8 +1254,8 @@ table.data-table td.roll { color: var(--muted); font-family: monospace; }
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(255, 255, 255, 0.08);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(30, 58, 95, 0.08);
+    border: 1px solid rgba(30, 58, 95, 0.12);
     position: relative;
     transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
   }
@@ -1334,7 +1316,7 @@ table.data-table td.roll { color: var(--muted); font-family: monospace; }
   .mac-dock-divider {
     width: 1px;
     height: 28px;
-    background: rgba(255, 255, 255, 0.14);
+    background: rgba(100, 116, 139, 0.2);
     margin: 0 4px;
     flex-shrink: 0;
   }
@@ -1422,25 +1404,25 @@ table.data-table td.roll { color: var(--muted); font-family: monospace; }
 
   /* ── Logout button — visually separated, always red-tinted ── */
   .dynamic-nav-item.logout-nav-item {
-    color: rgba(252, 165, 165, 0.75);
+    color: rgba(185, 28, 28, 0.8);
     flex: 0 0 auto;
     padding: 8px 12px;
     margin-left: 2px;
-    border-left: 1px solid rgba(255, 255, 255, 0.07);
+    border-left: 1px solid rgba(100, 116, 139, 0.15);
   }
 
   .dynamic-nav-item.logout-nav-item .nav-icon-wrapper {
-    background: rgba(239, 68, 68, 0.1);
+    background: rgba(239, 68, 68, 0.08);
     border-radius: 12px;
   }
 
   .dynamic-nav-item.logout-nav-item:hover,
   .dynamic-nav-item.logout-nav-item:focus {
-    color: #fca5a5;
+    color: #dc2626;
   }
 
   .dynamic-nav-item.logout-nav-item:active {
-    color: #f87171;
+    color: #b91c1c;
     transform: scale(0.88);
   }
 
@@ -1464,12 +1446,12 @@ table.data-table td.roll { color: var(--muted); font-family: monospace; }
 
   .mobile-drawer-sheet {
     width: 100%;
-    background: var(--bg, #0f172a);
-    border-top: 1px solid rgba(255, 255, 255, 0.15);
+    background: var(--bg, #f0f4f8);
+    border-top: 1px solid rgba(100, 116, 139, 0.2);
     border-top-left-radius: 28px;
     border-top-right-radius: 28px;
     padding: 12px 20px calc(32px + env(safe-area-inset-bottom));
-    box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.5);
+    box-shadow: 0 -10px 40px rgba(30, 58, 95, 0.12);
     max-height: 85vh;
     overflow-y: auto;
     animation: slideUpSheet 0.3s cubic-bezier(0.16, 1, 0.3, 1);
@@ -1483,7 +1465,7 @@ table.data-table td.roll { color: var(--muted); font-family: monospace; }
   .drawer-handle-bar {
     width: 40px;
     height: 4px;
-    background: rgba(255, 255, 255, 0.25);
+    background: rgba(100, 116, 139, 0.3);
     border-radius: 2px;
     margin: 4px auto 16px;
   }
@@ -1493,14 +1475,14 @@ table.data-table td.roll { color: var(--muted); font-family: monospace; }
     align-items: center;
     justify-content: space-between;
     padding-bottom: 16px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    border-bottom: 1px solid rgba(100, 116, 139, 0.2);
     margin-bottom: 20px;
   }
 
   .drawer-close-btn {
-    background: rgba(255, 255, 255, 0.1);
+    background: rgba(100, 116, 139, 0.12);
     border: none;
-    color: var(--fg, #ffffff);
+    color: var(--text, #1a202c);
     width: 32px;
     height: 32px;
     border-radius: 50%;
@@ -1525,17 +1507,18 @@ table.data-table td.roll { color: var(--muted); font-family: monospace; }
     justify-content: center;
     gap: 8px;
     padding: 16px 8px;
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.8);
+    border: 1px solid rgba(100, 116, 139, 0.15);
     border-radius: 16px;
     text-decoration: none;
-    color: var(--fg, #ffffff);
+    color: var(--text, #1a202c);
     transition: all 0.2s ease;
+    box-shadow: 0 2px 8px rgba(30, 58, 95, 0.06);
   }
 
   .drawer-card:active {
     transform: scale(0.95);
-    background: rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.95);
   }
 
   .drawer-card.active {
@@ -1574,14 +1557,14 @@ table.data-table td.roll { color: var(--muted); font-family: monospace; }
   }
 
   .drawer-action-btn.report {
-    background: rgba(251, 191, 36, 0.15);
-    color: #fbbf24;
-    border: 1px solid rgba(251, 191, 36, 0.3);
+    background: rgba(245, 158, 11, 0.1);
+    color: #92400e;
+    border: 1px solid rgba(245, 158, 11, 0.35);
   }
 
   .drawer-action-btn.logout {
-    background: rgba(239, 68, 68, 0.15);
-    color: #f87171;
+    background: rgba(239, 68, 68, 0.1);
+    color: #991b1b;
     border: 1px solid rgba(239, 68, 68, 0.3);
   }
 
@@ -1675,14 +1658,14 @@ body:has(.animlogin-container) {
   display: flex;
   min-height: 100vh;
   width: 100vw;
-  background: #060c1e;
+  background: #f0f4f8;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
 }
 
 .brandlogin-side {
   width: 44%;
   flex-shrink: 0;
-  background: linear-gradient(145deg, #070e24 0%, #0d1b40 50%, #050a1b 100%);
+  background: linear-gradient(145deg, #1e3a5f 0%, #1a3356 50%, #162d4d 100%);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1691,7 +1674,7 @@ body:has(.animlogin-container) {
   text-align: center;
   position: relative;
   overflow: hidden;
-  border-right: 1px solid #1c2e5c;
+  border-right: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .brandlogin-logo-container {
@@ -1776,29 +1759,29 @@ body:has(.animlogin-container) {
   align-items: center;
   justify-content: center;
   padding: 32px 24px;
-  background: #060c1e;
+  background: #f0f4f8;
 }
 
-/* SOLID OPAQUE CENTER CARD — ZERO TRANSPARENCY */
+/* SOLID OPAQUE CENTER CARD */
 .brandlogin-card {
   width: 100%;
   max-width: 440px;
-  background: #0e1a3a;
-  border: 1px solid #1e3160;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
   border-radius: 20px;
   padding: 38px 36px;
-  box-shadow: 0 25px 60px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 10px 40px rgba(30, 58, 95, 0.1), 0 2px 8px rgba(30, 58, 95, 0.05);
 }
 
 .brandlogin-card h2 {
-  color: #ffffff;
+  color: #0f172a;
   font-size: 28px;
   font-weight: 700;
   margin: 0 0 6px;
 }
 
 .brandlogin-card .sub {
-  color: #93a0c4;
+  color: #64748b;
   font-size: 14px;
   margin: 0 0 26px;
 }
@@ -1811,7 +1794,7 @@ body:has(.animlogin-container) {
 .brandlogin-field label {
   display: block;
   font-size: 13px;
-  color: #38bdf8;
+  color: #1d6fe5;
   margin-bottom: 6px;
   font-weight: 600;
 }
@@ -1819,20 +1802,20 @@ body:has(.animlogin-container) {
 .brandlogin-field input {
   width: 100%;
   height: 48px;
-  background: #13234b;
-  border: 1px solid #233973;
+  background: #f8fafc;
+  border: 1px solid #cbd5e1;
   border-radius: 10px;
   outline: none;
   font-size: 15px;
-  color: #ffffff;
+  color: #0f172a;
   padding: 0 14px;
   transition: all 0.2s ease;
 }
 
 .brandlogin-field input:focus {
-  border-color: #38bdf8;
-  background: #162958;
-  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.2);
+  border-color: #1d6fe5;
+  background: #ffffff;
+  box-shadow: 0 0 0 3px rgba(29, 111, 229, 0.15);
 }
 
 .brandlogin-checkbox {
@@ -1841,7 +1824,7 @@ body:has(.animlogin-container) {
   gap: 8px;
   margin: 18px 0 6px;
   font-size: 13px;
-  color: #93a0c4;
+  color: #64748b;
   cursor: pointer;
 }
 
@@ -1890,7 +1873,7 @@ body:has(.animlogin-container) {
   border: none;
   padding: 4px;
   margin: 0;
-  color: #93a0c4;
+  color: #64748b;
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -1899,7 +1882,7 @@ body:has(.animlogin-container) {
 }
 
 .brandlogin-eye:hover {
-  color: #23d3ee;
+  color: #1d6fe5;
 }
 
 /* Forgot-password link under the password field */
@@ -1912,7 +1895,7 @@ body:has(.animlogin-container) {
 
 .brandlogin-links a,
 .forgot-password-link {
-  color: #23d3ee;
+  color: #1d6fe5;
   text-decoration: none;
   font-weight: 500;
   display: inline-flex;
@@ -1923,7 +1906,7 @@ body:has(.animlogin-container) {
 
 .brandlogin-links a:hover,
 .forgot-password-link:hover {
-  color: #67e8f9;
+  color: #0c439e;
   text-decoration: underline;
 }
 
@@ -1942,9 +1925,9 @@ body:has(.animlogin-container) {
   width: 40px;
   height: 40px;
   border-radius: 10px;
-  background: rgba(35, 211, 238, 0.12);
-  border: 1px solid rgba(35, 211, 238, 0.25);
-  color: #23d3ee;
+  background: rgba(29, 111, 229, 0.1);
+  border: 1px solid rgba(29, 111, 229, 0.25);
+  color: #1d6fe5;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1956,11 +1939,11 @@ body:has(.animlogin-container) {
   margin-top: 22px;
   text-align: center;
   font-size: 14px;
-  color: #93a0c4;
+  color: #64748b;
 }
 
 .brandlogin-switch a {
-  color: #23d3ee;
+  color: #1d6fe5;
   text-decoration: none;
   font-weight: 600;
 }
@@ -2801,7 +2784,7 @@ body:has(.animlogin-container) {
 .splash-container {
   position: fixed;
   inset: 0;
-  background: #060b19;
+  background: #f0f4f8;
   z-index: 999999;
   display: flex;
   align-items: center;
