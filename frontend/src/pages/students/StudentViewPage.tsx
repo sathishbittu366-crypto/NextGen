@@ -38,6 +38,11 @@ export function StudentViewPage({ user, onLoggedOut }: StudentViewPageProps) {
   const [photoUploading, setPhotoUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Permanent Delete Modal State
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deletingStudent, setDeletingStudent] = useState(false);
+  const [deleteKeyInput, setDeleteKeyInput] = useState("");
+
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -64,14 +69,17 @@ export function StudentViewPage({ user, onLoggedOut }: StudentViewPageProps) {
     }
   }
 
-  async function handleDeleteStudent() {
+  async function handleConfirmDeleteStudent() {
     if (!detail) return;
-    if (!window.confirm(`Are you sure you want to permanently delete profile for ${detail.student.name} (${detail.student.roll_no})? This action cannot be undone.`)) return;
+    setDeletingStudent(true);
+    setError(null);
     try {
       await deleteStudent(id);
       navigate("/students");
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : "Failed to delete student profile");
+    } finally {
+      setDeletingStudent(false);
     }
   }
 
@@ -233,8 +241,9 @@ export function StudentViewPage({ user, onLoggedOut }: StudentViewPageProps) {
             {r.active ? "Deactivate Student" : "Activate Student"}
           </button>
           <button
-            className="btn btn-warn"
-            onClick={handleDeleteStudent}
+            className="btn btn-red"
+            style={{ fontWeight: 800 }}
+            onClick={() => { setShowDeleteModal(true); setDeleteKeyInput(""); }}
           >
             🗑️ Delete Profile
           </button>
@@ -246,6 +255,150 @@ export function StudentViewPage({ user, onLoggedOut }: StudentViewPageProps) {
           </button>
         </div>
       )}
+
+      {/* ── Permanent Delete Student Confirmation Modal ── */}
+      {showDeleteModal && detail && (() => {
+        const isKeyValid = deleteKeyInput.trim().toUpperCase() === "DELETE" ||
+          deleteKeyInput.trim().toLowerCase() === detail.student.roll_no.toLowerCase();
+
+        return (
+          <div className="modal-overlay" onClick={() => !deletingStudent && setShowDeleteModal(false)}>
+            <div
+              className="modal-box modal3dPopIn"
+              style={{
+                maxWidth: 490,
+                width: "92%",
+                background: "var(--bg-card)",
+                border: "1.5px solid #fca5a5",
+                borderRadius: 18,
+                padding: 24,
+                boxShadow: "0 25px 50px -12px rgba(220, 38, 38, 0.28)"
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
+                <div style={{
+                  width: 46,
+                  height: 46,
+                  borderRadius: 12,
+                  background: "linear-gradient(135deg, #fee2e2 0%, #fecaca 100%)",
+                  border: "1px solid #fca5a5",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: 22,
+                  color: "#dc2626",
+                  flexShrink: 0
+                }}>
+                  ⚠️
+                </div>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: 18, color: "#991b1b", fontWeight: 800 }}>
+                    Permanent Delete Student Profile
+                  </h3>
+                  <div style={{ fontSize: 12.5, color: "var(--muted)", fontWeight: 600, marginTop: 2 }}>
+                    This action will permanently erase this student from the system.
+                  </div>
+                </div>
+              </div>
+
+              <div style={{
+                background: "var(--row-alt)",
+                border: "1px solid var(--border)",
+                borderRadius: 12,
+                padding: 14,
+                marginBottom: 16
+              }}>
+                <div style={{ fontSize: 15, fontWeight: 800, color: "var(--text)" }}>
+                  👨‍🎓 {detail.student.name}
+                </div>
+                <div style={{ fontSize: 13, color: "var(--heading-accent)", fontWeight: 700, marginTop: 3 }}>
+                  Roll No: <strong>{detail.student.roll_no}</strong> · Batch: <strong>{detail.student.batch || "—"}</strong>
+                </div>
+                {detail.student.email && (
+                  <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600, marginTop: 3 }}>
+                    Email: {detail.student.email}
+                  </div>
+                )}
+              </div>
+
+              <div style={{ fontSize: 13.5, color: "var(--text)", lineHeight: 1.5, marginBottom: 16, fontWeight: 500 }}>
+                Are you sure you want to permanently delete this student record?
+                <ul style={{ margin: "8px 0 0", paddingLeft: 20, fontSize: 12.5, color: "#b91c1c", fontWeight: 600 }}>
+                  <li>Student account, login credentials, and attendance records will be removed.</li>
+                  <li>This student will no longer appear anywhere in the application.</li>
+                </ul>
+              </div>
+
+              {/* 🔑 Security Confirmation Key Input */}
+              <div style={{ marginBottom: 20, background: "rgba(239, 68, 68, 0.06)", padding: 14, borderRadius: 12, border: "1.5px dashed #fca5a5" }}>
+                <label htmlFor="confirm-student-delete-key" style={{ display: "block", fontSize: 12, fontWeight: 800, color: "#991b1b", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                  🔑 Enter Confirmation Key To Authorize:
+                </label>
+                <div style={{ fontSize: 12.5, color: "var(--text)", marginBottom: 8, fontWeight: 600 }}>
+                  Type <strong style={{ color: "#dc2626" }}>DELETE</strong> or <strong style={{ color: "#2563eb" }}>{detail.student.roll_no}</strong> below:
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <input
+                    id="confirm-student-delete-key"
+                    type="text"
+                    placeholder={`Type "DELETE" or "${detail.student.roll_no}"`}
+                    value={deleteKeyInput}
+                    onChange={(e) => setDeleteKeyInput(e.target.value)}
+                    autoFocus
+                    style={{
+                      flex: 1,
+                      height: 40,
+                      padding: "0 12px",
+                      borderRadius: 8,
+                      border: isKeyValid ? "2px solid #10b981" : "1.5px solid var(--border)",
+                      background: "#ffffff",
+                      color: "var(--text)",
+                      fontWeight: 700,
+                      fontSize: 14,
+                      outline: "none"
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-outline"
+                    onClick={() => setDeleteKeyInput(detail.student.roll_no)}
+                    title="Insert roll number key"
+                    style={{ fontSize: 12, whiteSpace: "nowrap", fontWeight: 700 }}
+                  >
+                    🔑 Fill Key
+                  </button>
+                </div>
+              </div>
+
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+                <button
+                  type="button"
+                  className="btn btn-outline"
+                  onClick={() => setShowDeleteModal(false)}
+                  disabled={deletingStudent}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-red"
+                  onClick={handleConfirmDeleteStudent}
+                  disabled={deletingStudent || !isKeyValid}
+                  style={{
+                    minWidth: 160,
+                    fontWeight: 800,
+                    opacity: isKeyValid ? 1 : 0.5,
+                    cursor: isKeyValid ? "pointer" : "not-allowed"
+                  }}
+                >
+                  {deletingStudent ? "Deleting…" : "🗑️ Delete Permanently"}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </AppShell>
   );
 }

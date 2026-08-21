@@ -154,14 +154,14 @@ export function ProblemReportsPage({ user, onLoggedOut }: ProblemReportsPageProp
                 key={report.id}
                 className="card"
                 style={{
-                  padding: 20,
-                  borderLeft: `4px solid ${
+                  padding: 22,
+                  borderLeft: `5px solid ${
                     report.status === "PENDING"
-                      ? "#fbbf24"
+                      ? "#f59e0b"
                       : report.status === "IN_PROGRESS"
-                      ? "#38bdf8"
+                      ? "#2563eb"
                       : report.status === "RESOLVED"
-                      ? "#22c55e"
+                      ? "#10b981"
                       : "#64748b"
                   }`,
                 }}
@@ -169,21 +169,21 @@ export function ProblemReportsPage({ user, onLoggedOut }: ProblemReportsPageProp
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, marginBottom: 12, flexWrap: "wrap" }}>
                   <div>
                     <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 6 }}>
-                      <span className="badge" style={{ background: "rgba(56, 189, 248, 0.15)", color: "#38bdf8" }}>
+                      <span className="badge" style={{ background: "rgba(37, 99, 235, 0.12)", color: "#1d4ed8", border: "1px solid #bfdbfe", fontWeight: 700, padding: "4px 10px", borderRadius: 8, fontSize: 12 }}>
                         {report.category}
                       </span>
-                      <span className="badge" style={{ background: "rgba(255, 255, 255, 0.1)", color: "#cbd5e1" }}>
+                      <span className="badge" style={{ background: "var(--chip-bg-muted)", color: "var(--text)", border: "1px solid var(--border)", fontWeight: 600, padding: "4px 10px", borderRadius: 8, fontSize: 12 }}>
                         Submitted by <strong>{report.username}</strong> ({report.role})
                       </span>
-                      <span style={{ fontSize: 12, color: "#94a3b8" }}>
-                        {new Date(report.created_at).toLocaleString()}
+                      <span style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600 }}>
+                        📅 {new Date(report.created_at).toLocaleString()}
                       </span>
                     </div>
-                    <h3 style={{ margin: "4px 0 0 0", color: "#f8fafc", fontSize: 18 }}>{report.subject}</h3>
+                    <h3 style={{ margin: "6px 0 0 0", color: "var(--text)", fontSize: 18, fontWeight: 800 }}>{report.subject}</h3>
                   </div>
 
                   <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <label htmlFor={`status-${report.id}`} style={{ fontSize: 13, color: "#94a3b8" }}>
+                    <label htmlFor={`status-${report.id}`} style={{ fontSize: 13, color: "var(--text)", fontWeight: 700 }}>
                       Status:
                     </label>
                     <select
@@ -192,19 +192,19 @@ export function ProblemReportsPage({ user, onLoggedOut }: ProblemReportsPageProp
                       disabled={updatingId === report.id}
                       onChange={(e) => handleStatusChange(report.id, e.target.value)}
                       style={{
-                        padding: "6px 12px",
-                        borderRadius: 6,
-                        background: "rgba(15, 23, 42, 0.8)",
+                        padding: "6px 14px",
+                        borderRadius: 8,
+                        background: "#ffffff",
                         color:
                           report.status === "PENDING"
-                            ? "#fbbf24"
+                            ? "#b45309"
                             : report.status === "IN_PROGRESS"
-                            ? "#38bdf8"
+                            ? "#1d4ed8"
                             : report.status === "RESOLVED"
-                            ? "#22c55e"
-                            : "#94a3b8",
-                        border: "1px solid rgba(255, 255, 255, 0.2)",
-                        fontWeight: 600,
+                            ? "#047857"
+                            : "#334155",
+                        border: "1.5px solid var(--border)",
+                        fontWeight: 800,
                         fontSize: 13,
                         cursor: "pointer",
                       }}
@@ -219,22 +219,24 @@ export function ProblemReportsPage({ user, onLoggedOut }: ProblemReportsPageProp
 
                 <div
                   style={{
-                    background: "rgba(15, 23, 42, 0.5)",
-                    padding: 14,
-                    borderRadius: 8,
-                    color: "#e2e8f0",
+                    background: "var(--row-alt)",
+                    padding: 16,
+                    borderRadius: 12,
+                    border: "1px solid var(--border-light)",
+                    color: "var(--text)",
                     fontSize: 14,
+                    fontWeight: 500,
                     whiteSpace: "pre-wrap",
                     marginBottom: 16,
-                    lineHeight: 1.5,
+                    lineHeight: 1.6,
                   }}
                 >
                   {report.description}
                 </div>
 
                 {/* Admin Notes Section */}
-                <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid rgba(255, 255, 255, 0.08)" }}>
-                  <label htmlFor={`notes-${report.id}`} style={{ fontSize: 13, color: "#cbd5e1", display: "block", marginBottom: 6 }}>
+                <div style={{ marginTop: 12, paddingTop: 14, borderTop: "1px solid var(--border-light)" }}>
+                  <label htmlFor={`notes-${report.id}`} style={{ fontSize: 12, fontWeight: 800, color: "var(--heading-accent)", textTransform: "uppercase", letterSpacing: "0.5px", display: "block", marginBottom: 8 }}>
                     Admin Resolution Notes (Internal):
                   </label>
                   <div style={{ display: "flex", gap: 10 }}>
@@ -246,12 +248,14 @@ export function ProblemReportsPage({ user, onLoggedOut }: ProblemReportsPageProp
                       onChange={(e) => setNotesState({ ...notesState, [report.id]: e.target.value })}
                       style={{
                         flex: 1,
-                        padding: "8px 12px",
-                        borderRadius: 6,
-                        border: "1px solid rgba(255, 255, 255, 0.15)",
-                        background: "rgba(15, 23, 42, 0.6)",
-                        color: "#fff",
-                        fontSize: 13,
+                        height: 40,
+                        padding: "0 14px",
+                        borderRadius: 10,
+                        border: "1.5px solid var(--input-border)",
+                        background: "#ffffff",
+                        color: "var(--text)",
+                        fontWeight: 600,
+                        fontSize: 13.5,
                       }}
                     />
                     <button

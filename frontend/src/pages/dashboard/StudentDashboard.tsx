@@ -119,10 +119,10 @@ function SubjectCard({ subj }: SubjectCardProps) {
               <span>{fmtDate(sess.attendance_date)} · {sess.session_type} ({sess.duration_hours}h)</span>
               <span
                 style={{
-                  color:      sess.status === "Present" ? "var(--green)"
-                            : sess.status === "Absent"  ? "var(--red)"
+                  color:      sess.status === "Present" ? "#047857"
+                            : sess.status === "Absent"  ? "#b91c1c"
                             : "var(--muted)",
-                  fontWeight: 700,
+                  fontWeight: 800,
                 }}
               >
                 {sess.status}
@@ -187,9 +187,9 @@ export function StudentDashboard({ user, onLoggedOut }: StudentDashboardProps) {
               className="stat-value"
               style={{
                 color: overallPct === null ? undefined
-                     : overallPct >= 75   ? "#10b981"
-                     : overallPct >= 50   ? "#f59e0b"
-                     : "#ef4444",
+                     : overallPct >= 75   ? "#059669"
+                     : overallPct >= 50   ? "#d97706"
+                     : "#dc2626",
               }}
             >
               {loading ? "…" : overallPct !== null ? `${overallPct}%` : "—"}

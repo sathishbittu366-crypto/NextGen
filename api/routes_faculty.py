@@ -117,7 +117,7 @@ async def create_account(body: CreateAccountBody, user: CurrentUser = Depends(ge
             user.username,
         )
         with connect() as c:
-            new_row = c.execute("SELECT id FROM users WHERE username=? COLLATE NOCASE", (body.username.strip(),)).fetchone()
+            new_row = c.execute("SELECT id FROM users WHERE username=?", (body.username.strip(),)).fetchone()
         return ok({"id": new_row["id"] if new_row else None, "username": body.username.strip()})
     except (ValueError, IntegrityError) as e:
         raise ApiError(str(e), 400, "VALIDATION_ERROR")
@@ -159,8 +159,30 @@ async def delete_account(account_id: int, user: CurrentUser = Depends(get_curren
         row = c.execute("SELECT * FROM users WHERE id=?", (account_id,)).fetchone()
         if not row:
             raise ApiError("Account not found", 404, "NOT_FOUND")
-        if row["username"] == user.username or row["username"] == "admin":
+        username = row["username"]
+        if username == user.username or username == "admin":
             raise ApiError("Logged-in account or primary admin cannot be deleted", 400, "CANNOT_DELETE_ADMIN")
+
+        # 1. Clean individual user permissions
+        c.execute("DELETE FROM user_permissions WHERE username=?", (username,))
+        # 2. Clean subject-faculty mappings
+        c.execute("DELETE FROM subject_faculty WHERE faculty_username=?", (username,))
+        # 3. Clean problem reports submitted by this user
+        c.execute("DELETE FROM problem_reports WHERE username=?", (username,))
+        # 4. Clean SMS gateways assigned to this user
+        c.execute("DELETE FROM sms_gateways WHERE hod_username=?", (username,))
+        # 5. Reassign attendance sessions created by this faculty to the current admin
+        c.execute("UPDATE attendance_sessions SET faculty_username=? WHERE faculty_username=?", (user.username, username))
+        c.execute("UPDATE attendance_sessions SET hod_username=? WHERE hod_username=?", (user.username, username))
+        # 6. Reassign institutional references (holidays, bonafide, etc.)
+        c.execute("UPDATE academic_holidays SET created_by=? WHERE created_by=?", (user.username, username))
+        c.execute("UPDATE bonafide_issues SET generated_by=? WHERE generated_by=?", (user.username, username))
+        c.execute("UPDATE institution_profile SET updated_by=? WHERE updated_by=?", (user.username, username))
+        c.execute("UPDATE student_semester_history SET changed_by=? WHERE changed_by=?", (user.username, username))
+        c.execute("UPDATE students SET hod_username=? WHERE hod_username=?", (user.username, username))
+        c.execute("UPDATE users SET hod_username=? WHERE hod_username=?", (user.username, username))
+
+        # 7. Permanently delete the user record
         c.execute("DELETE FROM users WHERE id=?", (account_id,))
-        audit(c, user.username, "DELETE", "user", row["username"])
-    return ok({"deleted": True, "id": account_id})
+        audit(c, user.username, "DELETE", "user", username)
+    return ok({"deleted": True, "id": account_id, "username": username})

@@ -166,7 +166,7 @@ function SessionInfoModal({ session, onClose, onShowPresent, onShowAbsent }: Ses
             </div>
             <div style={{ background: "var(--chip-bg-muted)", padding: 14, borderRadius: 12, border: "1px solid var(--border)" }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase" }}>Turnout Rate</div>
-              <div style={{ fontSize: 22, fontWeight: 800, color: pct >= 75 ? "#10b981" : pct >= 50 ? "#f59e0b" : "#ef4444", marginTop: 2 }}>
+              <div style={{ fontSize: 24, fontWeight: 800, color: pct >= 75 ? "#059669" : pct >= 50 ? "#d97706" : "#dc2626", marginTop: 2 }}>
                 {pct}%
               </div>
               <div style={{ fontSize: 12, color: "var(--muted)" }}>{session.present_count} / {total} Attended</div>

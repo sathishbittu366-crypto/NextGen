@@ -39,6 +39,11 @@ export function FacultyPage({ user, onLoggedOut }: Props) {
   const [loadingUserPerms, setLoadingUserPerms] = useState(false);
   const [savingUserPerms, setSavingUserPerms] = useState(false);
 
+  // Permanent Delete Modal State
+  const [accountToDelete, setAccountToDelete] = useState<UserAccount | null>(null);
+  const [deletingAccount, setDeletingAccount] = useState(false);
+  const [deleteKeyInput, setDeleteKeyInput] = useState("");
+
   // Create form state
   const [formUsername, setFormUsername] = useState("");
   const [formFullName, setFormFullName] = useState("");
@@ -170,15 +175,21 @@ export function FacultyPage({ user, onLoggedOut }: Props) {
     }
   }
 
-  async function handleDeleteAccount(account: UserAccount) {
-    if (!window.confirm(`Are you sure you want to PERMANENTLY DELETE user account "${account.username}"? This action cannot be undone.`)) return;
+  async function handleConfirmDeleteAccount() {
+    if (!accountToDelete) return;
+    setDeletingAccount(true);
     setError(null);
     try {
-      await deleteAccount(account.id);
-      setNotice(`User account "${account.username}" deleted successfully`);
+      await deleteAccount(accountToDelete.id);
+      setNotice(`User account "${accountToDelete.username}" has been permanently deleted.`);
+      // Immediately remove from data.accounts in React state so UI updates instantly
+      setData((prev) => prev ? { ...prev, accounts: prev.accounts.filter(a => a.id !== accountToDelete.id) } : prev);
+      setAccountToDelete(null);
       await reload();
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : "Failed to delete account");
+    } finally {
+      setDeletingAccount(false);
     }
   }
 
@@ -427,9 +438,13 @@ export function FacultyPage({ user, onLoggedOut }: Props) {
                         onClick={() => handleToggle(acc)}>
                         {acc.active ? "Deactivate" : "Activate"}
                       </button>
-                      <button className="btn btn-sm btn-warn" style={{ marginLeft: 6 }}
-                        onClick={() => handleDeleteAccount(acc)}>
-                        Delete
+                      <button
+                        className="btn btn-sm btn-red"
+                        style={{ marginLeft: 6, fontWeight: 700 }}
+                        onClick={() => setAccountToDelete(acc)}
+                        title="Permanently delete this user account"
+                      >
+                        🗑️ Delete
                       </button>
                     </>
                   ) : (
@@ -595,19 +610,45 @@ export function FacultyPage({ user, onLoggedOut }: Props) {
                   <span>📲 View Absentee SMS Logs & Phone Gateway</span>
                 </label>
 
-                <label className="checkbox-field" style={{ display: "flex", alignItems: "center", gap: 12, cursor: "pointer", background: userPerms.can_view_audit_logs ? "rgba(56, 189, 248, 0.12)" : "rgba(255,255,255,0.03)", padding: "12px 16px", borderRadius: 10, border: userPerms.can_view_audit_logs ? "1px solid rgba(56, 189, 248, 0.4)" : "1px solid var(--border)", color: "#ffffff", fontWeight: 600, fontSize: 14 }}>
+                <label className="checkbox-field" style={{ display: "flex", alignItems: "center", gap: 12, cursor: "pointer", background: userPerms.can_view_audit_logs ? "rgba(37, 99, 235, 0.12)" : "var(--chip-bg-muted)", padding: "12px 16px", borderRadius: 10, border: userPerms.can_view_audit_logs ? "1px solid rgba(37, 99, 235, 0.4)" : "1px solid var(--border)", color: "var(--text)", fontWeight: 600, fontSize: 14 }}>
                   <input
                     type="checkbox"
                     checked={Boolean(userPerms.can_view_audit_logs)}
                     onChange={() => handleToggleUserPermission("can_view_audit_logs")}
-                    style={{ width: 18, height: 18, accentColor: "#38bdf8", cursor: "pointer" }}
+                    style={{ width: 18, height: 18, accentColor: "#2563eb", cursor: "pointer" }}
                   />
                   <span>📜 View System Audit Trail & Logs</span>
                 </label>
               </div>
             ) : null}
 
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+            {selectedAccount.role !== "HOD" && selectedAccount.username !== user.username && (
+              <div style={{ marginTop: 20, paddingTop: 16, borderTop: "1.5px dashed var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: "#dc2626" }}>
+                    ⚠️ Danger Zone: Permanent Profile Removal
+                  </div>
+                  <div style={{ fontSize: 11.5, color: "var(--muted)", fontWeight: 600 }}>
+                    Permanently delete @{selectedAccount.username}'s account, mappings, and permissions.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-red"
+                  style={{ fontWeight: 800 }}
+                  onClick={() => {
+                    const target = selectedAccount;
+                    setSelectedAccount(null);
+                    setAccountToDelete(target);
+                    setDeleteKeyInput("");
+                  }}
+                >
+                  🗑️ Delete Account
+                </button>
+              </div>
+            )}
+
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 20 }}>
               <button className="btn btn-outline" onClick={() => setSelectedAccount(null)}>Cancel</button>
               <button className="btn btn-primary" style={{ background: "linear-gradient(135deg, #0284c7, #2563eb)", border: "none" }} onClick={handleSaveProfilePermissions} disabled={savingUserPerms || !userPerms}>
                 {savingUserPerms ? "Saving Access…" : "Save Access Permissions"}
@@ -637,6 +678,151 @@ export function FacultyPage({ user, onLoggedOut }: Props) {
           </div>
         </div>
       )}
+
+      {/* ── Permanent Delete Confirmation Modal ── */}
+      {accountToDelete && (() => {
+        const isKeyValid = deleteKeyInput.trim().toUpperCase() === "DELETE" ||
+          deleteKeyInput.trim().toLowerCase() === accountToDelete.username.toLowerCase();
+
+        return (
+          <div className="modal-overlay" onClick={() => !deletingAccount && setAccountToDelete(null)}>
+            <div
+              className="modal-box modal3dPopIn"
+              style={{
+                maxWidth: 490,
+                width: "92%",
+                background: "var(--bg-card)",
+                border: "1.5px solid #fca5a5",
+                borderRadius: 18,
+                padding: 24,
+                boxShadow: "0 25px 50px -12px rgba(220, 38, 38, 0.28)"
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
+                <div style={{
+                  width: 46,
+                  height: 46,
+                  borderRadius: 12,
+                  background: "linear-gradient(135deg, #fee2e2 0%, #fecaca 100%)",
+                  border: "1px solid #fca5a5",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: 22,
+                  color: "#dc2626",
+                  flexShrink: 0
+                }}>
+                  ⚠️
+                </div>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: 18, color: "#991b1b", fontWeight: 800 }}>
+                    Permanent Delete Confirmation
+                  </h3>
+                  <div style={{ fontSize: 12.5, color: "var(--muted)", fontWeight: 600, marginTop: 2 }}>
+                    This action will permanently erase this profile from the system.
+                  </div>
+                </div>
+              </div>
+
+              <div style={{
+                background: "var(--row-alt)",
+                border: "1px solid var(--border)",
+                borderRadius: 12,
+                padding: 14,
+                marginBottom: 16
+              }}>
+                <div style={{ fontSize: 15, fontWeight: 800, color: "var(--text)" }}>
+                  👤 {accountToDelete.full_name || accountToDelete.username}
+                </div>
+                <div style={{ fontSize: 13, color: "var(--heading-accent)", fontWeight: 700, marginTop: 3 }}>
+                  Username: <strong>@{accountToDelete.username}</strong> · Role: <strong>{accountToDelete.role}</strong>
+                </div>
+                {accountToDelete.department && (
+                  <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600, marginTop: 3 }}>
+                    Department: {accountToDelete.department}
+                  </div>
+                )}
+              </div>
+
+              <div style={{ fontSize: 13.5, color: "var(--text)", lineHeight: 1.5, marginBottom: 16, fontWeight: 500 }}>
+                Are you sure you want to permanently delete this user account?
+                <ul style={{ margin: "8px 0 0", paddingLeft: 20, fontSize: 12.5, color: "#b91c1c", fontWeight: 600 }}>
+                  <li>Account credentials and login will be permanently deleted.</li>
+                  <li>Subject-faculty mappings and user permissions will be cleared.</li>
+                  <li>The user will be immediately removed and will never appear in the application again.</li>
+                </ul>
+              </div>
+
+              {/* 🔑 Security Confirmation Key Input */}
+              <div style={{ marginBottom: 20, background: "rgba(239, 68, 68, 0.06)", padding: 14, borderRadius: 12, border: "1.5px dashed #fca5a5" }}>
+                <label htmlFor="confirm-delete-key" style={{ display: "block", fontSize: 12, fontWeight: 800, color: "#991b1b", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                  🔑 Enter Confirmation Key To Authorize:
+                </label>
+                <div style={{ fontSize: 12.5, color: "var(--text)", marginBottom: 8, fontWeight: 600 }}>
+                  Type <strong style={{ color: "#dc2626" }}>DELETE</strong> or <strong style={{ color: "#2563eb" }}>{accountToDelete.username}</strong> below:
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <input
+                    id="confirm-delete-key"
+                    type="text"
+                    placeholder={`Type "DELETE" or "${accountToDelete.username}"`}
+                    value={deleteKeyInput}
+                    onChange={(e) => setDeleteKeyInput(e.target.value)}
+                    autoFocus
+                    style={{
+                      flex: 1,
+                      height: 40,
+                      padding: "0 12px",
+                      borderRadius: 8,
+                      border: isKeyValid ? "2px solid #10b981" : "1.5px solid var(--border)",
+                      background: "#ffffff",
+                      color: "var(--text)",
+                      fontWeight: 700,
+                      fontSize: 14,
+                      outline: "none"
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-outline"
+                    onClick={() => setDeleteKeyInput(accountToDelete.username)}
+                    title="Insert profile key"
+                    style={{ fontSize: 12, whiteSpace: "nowrap", fontWeight: 700 }}
+                  >
+                    🔑 Fill Key
+                  </button>
+                </div>
+              </div>
+
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+                <button
+                  type="button"
+                  className="btn btn-outline"
+                  onClick={() => setAccountToDelete(null)}
+                  disabled={deletingAccount}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-red"
+                  onClick={handleConfirmDeleteAccount}
+                  disabled={deletingAccount || !isKeyValid}
+                  style={{
+                    minWidth: 160,
+                    fontWeight: 800,
+                    opacity: isKeyValid ? 1 : 0.5,
+                    cursor: isKeyValid ? "pointer" : "not-allowed"
+                  }}
+                >
+                  {deletingAccount ? "Deleting…" : "🗑️ Delete Permanently"}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </AppShell>
   );
 }

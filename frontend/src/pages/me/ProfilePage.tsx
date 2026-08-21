@@ -277,9 +277,9 @@ export function ProfilePage({ user, onLoggedOut }: Props) {
                 if (key === "gender") {
                   const current = val.toUpperCase();
                   return (
-                    <div key={key} className="field" style={{ background: "rgba(255,255,255,0.02)", padding: 10, borderRadius: 10, border: "1px solid rgba(56,189,248,0.15)" }}>
-                      <label style={{ fontWeight: 800, fontSize: 12, color: "#38bdf8", textTransform: "uppercase" }}>{label}</label>
-                      <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                    <div key={key} className="field" style={{ background: "var(--row-alt)", padding: 12, borderRadius: 12, border: "1.5px solid var(--border)" }}>
+                      <label style={{ fontWeight: 800, fontSize: 12, color: "var(--heading-accent)", textTransform: "uppercase", letterSpacing: "0.5px" }}>{label}</label>
+                      <div style={{ display: "flex", gap: 10, marginTop: 6 }}>
                         {[{ label: "👨 Male", v: "MALE" }, { label: "👩 Female", v: "FEMALE" }].map(item => (
                           <button
                             key={item.v}
@@ -287,14 +287,16 @@ export function ProfilePage({ user, onLoggedOut }: Props) {
                             onClick={() => setEditData({ ...editData, [key]: item.v })}
                             style={{
                               flex: 1,
-                              padding: "8px 10px",
-                              borderRadius: 8,
+                              padding: "9px 12px",
+                              borderRadius: 10,
                               fontWeight: 700,
-                              fontSize: 12,
-                              border: current === item.v ? "2px solid #38bdf8" : "1px solid rgba(255,255,255,0.1)",
-                              background: current === item.v ? "linear-gradient(135deg, #0284c7, #2563eb)" : "rgba(15,23,42,0.6)",
-                              color: current === item.v ? "#fff" : "#94a3b8",
+                              fontSize: 13,
+                              border: current === item.v ? "2px solid #2563eb" : "1.5px solid var(--border)",
+                              background: current === item.v ? "linear-gradient(135deg, #2563eb, #1d4ed8)" : "#ffffff",
+                              color: current === item.v ? "#ffffff" : "var(--text)",
+                              boxShadow: current === item.v ? "0 4px 12px rgba(37, 99, 235, 0.3)" : "0 1px 3px rgba(0,0,0,0.04)",
                               cursor: "pointer",
+                              transition: "all 0.2s ease",
                             }}
                           >
                             {item.label}
@@ -306,13 +308,12 @@ export function ProfilePage({ user, onLoggedOut }: Props) {
                 }
                 if (key === "category") {
                   return (
-                    <div key={key} className="field" style={{ background: "rgba(255,255,255,0.02)", padding: 10, borderRadius: 10, border: "1px solid rgba(56,189,248,0.15)" }}>
-                      <label style={{ fontWeight: 800, fontSize: 12, color: "#38bdf8", textTransform: "uppercase" }}>{label}</label>
+                    <div key={key} className="field">
+                      <label style={{ fontWeight: 800, fontSize: 12, color: "var(--heading-accent)", textTransform: "uppercase", letterSpacing: "0.5px" }}>{label}</label>
                       <select
                         className="input-field"
                         value={val}
                         onChange={e => setEditData({ ...editData, [key]: e.target.value })}
-                        style={{ width: "100%", padding: "8px 12px", borderRadius: 8, background: "rgba(15,23,42,0.9)", border: "1px solid rgba(56,189,248,0.3)", color: "#f8fafc", fontWeight: 600 }}
                       >
                         <option value="">— Select Category —</option>
                         {["OC", "BC-A", "BC-B", "BC-C", "BC-D", "BC-E", "SC", "ST", "EWS"].map(cat => (
@@ -324,13 +325,12 @@ export function ProfilePage({ user, onLoggedOut }: Props) {
                 }
                 if (key === "seat_category") {
                   return (
-                    <div key={key} className="field" style={{ background: "rgba(255,255,255,0.02)", padding: 10, borderRadius: 10, border: "1px solid rgba(56,189,248,0.15)" }}>
-                      <label style={{ fontWeight: 800, fontSize: 12, color: "#38bdf8", textTransform: "uppercase" }}>{label}</label>
+                    <div key={key} className="field">
+                      <label style={{ fontWeight: 800, fontSize: 12, color: "var(--heading-accent)", textTransform: "uppercase", letterSpacing: "0.5px" }}>{label}</label>
                       <select
                         className="input-field"
                         value={val}
                         onChange={e => setEditData({ ...editData, [key]: e.target.value })}
-                        style={{ width: "100%", padding: "8px 12px", borderRadius: 8, background: "rgba(15,23,42,0.9)", border: "1px solid rgba(56,189,248,0.3)", color: "#f8fafc", fontWeight: 600 }}
                       >
                         <option value="">— Select Seat Category —</option>
                         {["Convenor (A-Category)", "Management (B-Category)", "NRI / Spot Admission"].map(s => (
@@ -342,27 +342,25 @@ export function ProfilePage({ user, onLoggedOut }: Props) {
                 }
                 if (key === "dob") {
                   return (
-                    <div key={key} className="field" style={{ background: "rgba(255,255,255,0.02)", padding: 10, borderRadius: 10, border: "1px solid rgba(56,189,248,0.15)" }}>
-                      <label style={{ fontWeight: 800, fontSize: 12, color: "#38bdf8", textTransform: "uppercase" }}>{label}</label>
+                    <div key={key} className="field">
+                      <label style={{ fontWeight: 800, fontSize: 12, color: "var(--heading-accent)", textTransform: "uppercase", letterSpacing: "0.5px" }}>{label}</label>
                       <input
                         type="date"
                         className="input-field"
                         value={val}
                         onChange={e => setEditData({ ...editData, [key]: e.target.value })}
-                        style={{ width: "100%", padding: "8px 12px", borderRadius: 8, background: "rgba(15,23,42,0.9)", border: "1px solid rgba(56,189,248,0.3)", color: "#f8fafc", fontWeight: 600 }}
                       />
                     </div>
                   );
                 }
                 return (
-                  <div key={key} className="field" style={{ background: "rgba(255,255,255,0.02)", padding: 10, borderRadius: 10, border: "1px solid rgba(56,189,248,0.15)" }}>
-                    <label style={{ fontWeight: 800, fontSize: 12, color: "#38bdf8", textTransform: "uppercase" }}>{label}</label>
+                  <div key={key} className="field">
+                    <label style={{ fontWeight: 800, fontSize: 12, color: "var(--heading-accent)", textTransform: "uppercase", letterSpacing: "0.5px" }}>{label}</label>
                     <input
                       type={inputType || "text"}
                       className="input-field"
                       value={val}
                       onChange={e => setEditData({ ...editData, [key]: e.target.value })}
-                      style={{ width: "100%", padding: "8px 12px", borderRadius: 8, background: "rgba(15,23,42,0.7)", border: "1px solid rgba(56,189,248,0.2)", color: "#f8fafc" }}
                     />
                   </div>
                 );

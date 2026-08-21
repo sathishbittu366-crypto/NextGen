@@ -11,7 +11,7 @@ import os
 
 from database import audit, connect, get_setting
 
-MESSAGE_TEMPLATE = "Dear Parent, {student} is absent for class today ({subject}, {date}). - VCET CSD Dept"
+MESSAGE_TEMPLATE = "Dear Parent, {student} has not attended college today ({date}). - VCET CSD Dept"
 MAX_ATTEMPTS = 3
 PROCESSING_LEASE_MINUTES = 15
 
@@ -112,7 +112,10 @@ def queue_absentees_for_session(session_id, absent_roll_nos, actor="system"):
                     elif mode not in ("cloud", "local", "modem"):
                         routing_error = f"Unsupported SMS gateway mode: {mode or 'empty'}."
 
-            message = MESSAGE_TEMPLATE.format(student=student["name"], subject=session["subject_name"], date=send_date)
+            try:
+                message = MESSAGE_TEMPLATE.format(student=student["name"], date=send_date, subject=session.get("subject_name", ""))
+            except Exception:
+                message = f"Dear Parent, {student['name']} has not attended college today ({send_date}). - VCET CSD Dept"
             cur = c.execute("""
                 INSERT INTO sms_queue(
                     roll_no,parent_phone,message,attendance_session_id,send_date,

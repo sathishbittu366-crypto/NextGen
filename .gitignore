@@ -31,3 +31,4 @@ cloudflared.exe
 *.exe
 custom_users.json
 mysql_data/
+test_results.log

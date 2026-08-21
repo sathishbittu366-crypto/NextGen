@@ -247,7 +247,7 @@ class SmsSettingsBody(BaseModel):
 
 class SmsTestBody(BaseModel):
     phone: str
-    message: str = "Dear Parent, Student is absent for class today (Database Systems, 2026-07-30). - VCET CSD Data Science Dept"
+    message: str = "Dear Parent, Student has not attended college today (2026-08-21). - VCET CSD Dept"
     gateway_id: int | None = None
 
 
@@ -548,7 +548,7 @@ async def test_sms_gateway(body: SmsTestBody, user: CurrentUser = Depends(get_cu
     if user.role == "HOD" and gateway["hod_username"] != user.username:
         raise ApiError("You cannot test another HOD's SMS gateway", 403, "FORBIDDEN")
     from webapp.sms_worker import send_single_sms
-    msg = body.message.strip() if body.message and body.message.strip() else "Dear Parent, Student is absent for class today (Database Systems, 2026-07-30). - VCET CSD Data Science Dept"
+    msg = body.message.strip() if body.message and body.message.strip() else "Dear Parent, Student has not attended college today (2026-08-21). - VCET CSD Dept"
     try:
         send_single_sms(body.phone, msg, gateway, message_id=None)
         return ok({"sent": True, "message": "Test SMS sent successfully."})
