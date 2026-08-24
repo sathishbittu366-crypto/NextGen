@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 from database import (
@@ -19,6 +20,7 @@ from database import (
 )
 from field_encryption import decrypt_field, encrypt_field
 from sms_app.services.attendance_service import list_semesters
+from sms_app.services.student_pdf import build_students_list_pdf
 from webapp.photo_upload import PhotoUploadError, save_profile_photo
 
 from api.deps import CurrentUser, get_current_user
@@ -204,6 +206,90 @@ async def students_list(
     with connect() as c:
         rows = c.execute(sql, args).fetchall()
     return ok([_serialize_list_row(r) for r in rows])
+
+
+@router.get("/pdf")
+async def students_pdf(
+    q: str = "",
+    status: str = "Active",
+    semester_id: int | None = None,
+    year: str | None = None,
+    user: CurrentUser = Depends(get_current_user),
+):
+    """Generates official ReportLab PDF for the student list / nominal roll.
+    Strictly restricted to HOD and ADMIN roles.
+    """
+    if user.role not in ("HOD", "ADMIN"):
+        raise ApiError("HOD or Admin access only", 403, "FORBIDDEN")
+
+    like = f"%{q.strip()}%"
+    sql = (
+        "SELECT * FROM students WHERE department='CSD' "
+        "AND (name LIKE ? OR roll_no LIKE ? OR email LIKE ? OR phone LIKE ? OR parent_phone LIKE ?)"
+    )
+    args: list[Any] = [like, like, like, like, like]
+    scope_sql, scope_args = _student_scope_sql(user)
+    sql += scope_sql
+    args.extend(scope_args)
+
+    if status != "All":
+        sql += " AND active=?"
+        args.append(1 if status == "Active" else 0)
+    if semester_id:
+        sql += " AND current_semester_id=?"
+        args.append(semester_id)
+
+    sql += " ORDER BY UPPER(roll_no) ASC, name ASC"
+
+    with connect() as c:
+        rows = c.execute(sql, args).fetchall()
+        sem_row = None
+        if semester_id:
+            sem_row = c.execute("SELECT code, name FROM academic_semesters WHERE id=?", (semester_id,)).fetchone()
+
+    serialized = [_serialize_list_row(r) for r in rows]
+
+    YEAR_LABELS = {"1": "1st Year", "2": "2nd Year", "3": "3rd Year", "4": "4th Year"}
+    if year and year in YEAR_LABELS:
+        serialized = [r for r in serialized if r.get("year_of_study") == YEAR_LABELS[year]]
+
+    if sem_row:
+        semester_name = f"{sem_row['name']} ({sem_row['code']})"
+    elif semester_id:
+        semester_name = f"Semester {semester_id}"
+    elif year and year in YEAR_LABELS:
+        semester_name = f"{YEAR_LABELS[year]} (All Semesters)"
+    else:
+        semester_name = "All Semesters"
+
+    batches = {r.get("batch") for r in serialized if r.get("batch")}
+    if len(batches) == 1:
+        batch_name = list(batches)[0]
+    elif len(batches) > 1:
+        batch_name = ", ".join(sorted(batches))
+    else:
+        batch_name = "All Batches"
+
+    now_str = datetime.now().strftime("%d-%m-%Y %I:%M %p")
+    meta = {
+        "semester_name": semester_name,
+        "batch": batch_name,
+        "total_students": len(serialized),
+        "generated_on": now_str,
+        "generated_by": "NextGen SMS",
+        "department": "CSE (DATA SCIENCE)",
+    }
+
+    pdf_bytes = build_students_list_pdf(serialized, meta)
+
+    clean_sem = (sem_row["code"] if sem_row else (f"Year_{year}" if year else "All_Semesters")).replace(" ", "_").replace("/", "-")
+    filename = f"Student_List_{clean_sem}.pdf"
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )
 
 
 @router.get("/new")

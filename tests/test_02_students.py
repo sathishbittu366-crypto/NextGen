@@ -219,4 +219,34 @@ class TestRollNoOrderingAndSemesters:
         assert r.status_code == 200
         sems = r.json()["data"]
         assert len(sems) > 0
-        assert "code" in sems[0]
+        assert "code" in sems[0]
+
+
+class TestStudentsPDF:
+    def test_pdf_requires_auth(self, client):
+        r = client.get("/api/students/pdf")
+        assert r.status_code == 401
+
+    def test_pdf_forbidden_for_faculty(self, client, faculty_headers):
+        r = client.get("/api/students/pdf", headers=faculty_headers)
+        assert r.status_code == 403
+        assert r.json()["error"]["code"] == "FORBIDDEN"
+
+    def test_pdf_allowed_for_hod(self, client, hod_headers):
+        r = client.get("/api/students/pdf", headers=hod_headers)
+        assert r.status_code == 200
+        assert r.headers["content-type"] == "application/pdf"
+        assert r.content.startswith(b"%PDF-")
+
+    def test_pdf_with_semester_filter(self, client, hod_headers):
+        r = client.get("/api/students/pdf?semester_id=5", headers=hod_headers)
+        assert r.status_code == 200
+        assert r.headers["content-type"] == "application/pdf"
+        assert r.content.startswith(b"%PDF-")
+
+    def test_pdf_with_year_filter(self, client, hod_headers):
+        r = client.get("/api/students/pdf?year=3", headers=hod_headers)
+        assert r.status_code == 200
+        assert r.headers["content-type"] == "application/pdf"
+        assert r.content.startswith(b"%PDF-")
+

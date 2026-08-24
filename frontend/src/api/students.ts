@@ -3,7 +3,7 @@
 // webapp/routes/students.py's FIELD_SPECS/EDUCATION_SPECS (label, key)
 // tuples 1:1 so the form page can render generically from the same order
 // HOD sees in the OG app, without hardcoding 19 separate <input> blocks.
-import { apiFetch, apiUpload } from "./client";
+import { apiFetch, apiUpload, getAuthUrl } from "./client";
 
 // ──────────────────────────────────────────────
 // Field specs — label/key pairs, same order as OG's students.py
@@ -171,3 +171,17 @@ export async function deleteStudentPhoto(id: number): Promise<{ photo_path: null
 export async function deleteStudent(id: number): Promise<{ deleted: boolean; id: number }> {
   return apiFetch<{ deleted: boolean; id: number }>(`/api/students/${id}`, { method: "DELETE" });
 }
+
+export function studentsPdfUrl(
+  semesterId?: number | string | null,
+  q?: string,
+  year?: string
+): string {
+  const params = new URLSearchParams();
+  if (semesterId) params.set("semester_id", String(semesterId));
+  if (q && q.trim()) params.set("q", q.trim());
+  if (year && year.trim()) params.set("year", year.trim());
+  const qs = params.toString() ? `?${params.toString()}` : "";
+  return getAuthUrl(`/api/students/pdf${qs}`);
+}
+

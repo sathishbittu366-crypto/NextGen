@@ -4,6 +4,7 @@ import {
   listStudents,
   listStudentSemesters,
   deleteStudent,
+  studentsPdfUrl,
   type StudentListRow,
   type SemesterOption,
 } from "../../api/students";
@@ -33,18 +34,8 @@ export function StudentsListPage({ user, onLoggedOut }: StudentsListPageProps) {
   const [deletingStudent, setDeletingStudent] = useState(false);
   const [deleteKeyInput, setDeleteKeyInput] = useState("");
 
-  // Print Modal State (HOD & ADMIN ONLY)
+  // Print Permission (HOD & ADMIN ONLY)
   const canPrint = ["HOD", "ADMIN"].includes(user.role);
-  const [showPrintModal, setShowPrintModal] = useState(false);
-  const [printTitle, setPrintTitle] = useState("STUDENT NOMINAL ROLL / ROSTER");
-  const [printSemesterId, setPrintSemesterId] = useState<string>("");
-  const [includeColumns, setIncludeColumns] = useState({
-    gender: true,
-    phone: true,
-    parentPhone: true,
-    email: true,
-    signature: true,
-  });
 
   // Load semesters
   useEffect(() => {
@@ -130,32 +121,7 @@ export function StudentsListPage({ user, onLoggedOut }: StudentsListPageProps) {
     );
   }, [rows, yearFilter, semesterFilter]);
 
-  // Rows for printable nominal roll
-  const printableRows = useMemo(() => {
-    let list = rows;
-    if (printSemesterId) {
-      const semId = Number(printSemesterId);
-      list = list.filter((r) => r.current_semester_id === semId);
-    } else if (semesterFilter) {
-      const semId = Number(semesterFilter);
-      list = list.filter((r) => r.current_semester_id === semId);
-    } else if (yearFilter) {
-      list = list.filter((r) => r.year_of_study === YEAR_LABELS[yearFilter]);
-    }
-    return [...list].sort((a, b) =>
-      a.roll_no.localeCompare(b.roll_no, undefined, { numeric: true, sensitivity: "base" })
-    );
-  }, [rows, printSemesterId, semesterFilter, yearFilter]);
-
-  const activePrintSemesterObj = semesters.find(
-    (s) => s.id === Number(printSemesterId || semesterFilter)
-  );
-
-  const formattedDate = new Date().toLocaleDateString("en-IN", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  });
+  const activeSemesterObj = semesters.find((s) => s.id === Number(semesterFilter));
 
   return (
     <AppShell user={user} activeNav="students" heading="Students" onLoggedOut={onLoggedOut}>
@@ -166,12 +132,13 @@ export function StudentsListPage({ user, onLoggedOut }: StudentsListPageProps) {
         className="no-print"
         style={{
           display: "flex",
-          gap: 10,
+          gap: 12,
           alignItems: "center",
+          justifyContent: "space-between",
           flexWrap: "wrap",
           marginBottom: 16,
           background: "var(--bg-card)",
-          padding: 12,
+          padding: 14,
           borderRadius: 12,
           border: "1px solid var(--border)",
           boxShadow: "0 2px 4px rgba(0,0,0,0.02)",
@@ -179,33 +146,43 @@ export function StudentsListPage({ user, onLoggedOut }: StudentsListPageProps) {
       >
         <form
           onSubmit={handleSearchSubmit}
-          style={{ display: "flex", gap: 8, flex: 1, flexWrap: "wrap", minWidth: 0 }}
+          style={{ display: "flex", gap: 10, flex: 1, flexWrap: "wrap", minWidth: 0, alignItems: "center" }}
         >
-          <input
-            type="text"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Search by roll no, name, phone, email…"
-            style={{
-              flex: 1,
-              minWidth: 200,
-              maxWidth: 320,
-              height: 40,
-              padding: "0 12px",
-              border: "1.5px solid var(--border)",
-              borderRadius: 8,
-              fontSize: 13.5,
-              fontWeight: 500,
-            }}
-          />
+          <div style={{ position: "relative", flex: 1, minWidth: 200, maxWidth: 340 }}>
+            <input
+              type="text"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Search by name, roll no, email or phone…"
+              style={{
+                width: "100%",
+                height: 40,
+                padding: "0 12px 0 34px",
+                border: "1.5px solid var(--border)",
+                borderRadius: 8,
+                fontSize: 13.5,
+                fontWeight: 500,
+              }}
+            />
+            <span
+              style={{
+                position: "absolute",
+                left: 10,
+                top: "50%",
+                transform: "translateY(-50%)",
+                color: "var(--muted)",
+                pointerEvents: "none",
+                fontSize: 13,
+              }}
+            >
+              🔍
+            </span>
+          </div>
 
           {/* Semester Filter */}
           <select
             value={semesterFilter}
-            onChange={(e) => {
-              setSemesterFilter(e.target.value);
-              setPrintSemesterId(e.target.value);
-            }}
+            onChange={(e) => setSemesterFilter(e.target.value)}
             style={{
               height: 40,
               padding: "0 12px",
@@ -213,12 +190,12 @@ export function StudentsListPage({ user, onLoggedOut }: StudentsListPageProps) {
               borderRadius: 8,
               fontSize: 13.5,
               fontWeight: 600,
-              minWidth: 170,
+              minWidth: 190,
               background: "var(--input-bg)",
               color: "var(--text)",
             }}
           >
-            <option value="">All Semesters</option>
+            <option value="">Select Semester / Year</option>
             {semesters.map((s) => (
               <option key={s.id} value={s.id}>
                 {s.code} ({s.name})
@@ -237,7 +214,7 @@ export function StudentsListPage({ user, onLoggedOut }: StudentsListPageProps) {
               borderRadius: 8,
               fontSize: 13.5,
               fontWeight: 600,
-              minWidth: 150,
+              minWidth: 140,
               background: "var(--input-bg)",
               color: "var(--text)",
             }}
@@ -249,49 +226,50 @@ export function StudentsListPage({ user, onLoggedOut }: StudentsListPageProps) {
             <option value="4">4th Year (2023-2027)</option>
           </select>
 
-          <button type="submit" className="btn btn-outline" style={{ height: 40, fontWeight: 700 }}>
-            🔍 Search
+          <button type="submit" className="btn btn-outline" style={{ height: 40, fontWeight: 700, padding: "0 18px" }}>
+            Search
           </button>
-        </form>
 
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          {/* Print Option — ONLY FOR HOD AND ADMIN */}
+          {/* Print Students Option — ONLY FOR HOD AND ADMIN */}
           {canPrint && (
             <button
               type="button"
-              className="btn btn-outline"
+              className="btn btn-primary"
               onClick={() => {
-                setPrintSemesterId(semesterFilter);
-                setShowPrintModal(true);
+                const url = studentsPdfUrl(semesterFilter, q, yearFilter);
+                window.open(url, "_blank");
               }}
               style={{
                 height: 40,
-                display: "flex",
+                display: "inline-flex",
                 alignItems: "center",
                 gap: 6,
-                borderColor: "var(--nav2)",
-                color: "var(--nav2)",
                 fontWeight: 700,
-                padding: "0 14px",
+                padding: "0 16px",
                 borderRadius: 8,
+                background: "var(--blue, #2563eb)",
+                color: "#ffffff",
+                border: "none",
+                boxShadow: "0 2px 6px rgba(37, 99, 235, 0.25)",
+                cursor: "pointer",
               }}
-              title="Print official student list / nominal roll for this semester"
+              title="Print official student list PDF for selected semester"
             >
-              🖨️ Print Student List
+              🖨️ Print Students
             </button>
           )}
+        </form>
 
-          {["HOD", "ADMIN"].includes(user.role) && (
-            <button
-              type="button"
-              className="btn"
-              onClick={() => navigate("/students/new")}
-              style={{ height: 40, fontWeight: 700, borderRadius: 8 }}
-            >
-              + Add Student
-            </button>
-          )}
-        </div>
+        {["HOD", "ADMIN"].includes(user.role) && (
+          <button
+            type="button"
+            className="btn"
+            onClick={() => navigate("/students/new")}
+            style={{ height: 40, fontWeight: 700, borderRadius: 8, padding: "0 16px", whiteSpace: "nowrap" }}
+          >
+            + Add Student
+          </button>
+        )}
       </div>
 
       {error && <div className="login-error no-print">{error}</div>}
@@ -312,12 +290,12 @@ export function StudentsListPage({ user, onLoggedOut }: StudentsListPageProps) {
           <span style={{ fontSize: 12, fontWeight: 600, color: "var(--subtext)" }}>
             (Sorted in Roll Number Order)
           </span>
-          {semesterFilter && activePrintSemesterObj && (
+          {semesterFilter && activeSemesterObj && (
             <span
               className="chip chip-blue"
               style={{ marginLeft: 8, fontSize: 11, padding: "2px 8px" }}
             >
-              Semester: {activePrintSemesterObj.code}
+              Semester: {activeSemesterObj.code} ({activeSemesterObj.name})
             </span>
           )}
         </div>
@@ -390,326 +368,6 @@ export function StudentsListPage({ user, onLoggedOut }: StudentsListPageProps) {
           <p className="empty-note">No students match this search or semester filter.</p>
         )}
       </div>
-
-      {/* ── Official Print Modal & Nominal Roll Sheet (HOD & ADMIN ONLY) ── */}
-      {showPrintModal && canPrint && (
-        <div className="modal-overlay print-active-modal" onClick={() => setShowPrintModal(false)}>
-          <div
-            className="modal-box modal3dPopIn"
-            style={{
-              maxWidth: 960,
-              width: "95%",
-              maxHeight: "90vh",
-              overflowY: "auto",
-              background: "var(--bg-card)",
-              borderRadius: 16,
-              padding: 24,
-              boxShadow: "0 25px 50px -12px rgba(0,0,0,0.35)",
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Modal Controls (Hidden in Print) */}
-            <div
-              className="print-controls no-print"
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                borderBottom: "1px solid var(--border)",
-                paddingBottom: 14,
-                marginBottom: 16,
-                flexWrap: "wrap",
-                gap: 10,
-              }}
-            >
-              <div>
-                <h3 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: "var(--heading-dark)" }}>
-                  🖨️ Official Semester Student List / Nominal Roll
-                </h3>
-                <div style={{ fontSize: 12.5, color: "var(--muted)", fontWeight: 600, marginTop: 2 }}>
-                  Configured exclusively for Head of Department and Administrators
-                </div>
-              </div>
-
-              <div style={{ display: "flex", gap: 10 }}>
-                <button
-                  type="button"
-                  className="btn btn-outline"
-                  onClick={() => setShowPrintModal(false)}
-                  style={{ fontWeight: 600 }}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className="btn"
-                  onClick={() => window.print()}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 6,
-                    fontWeight: 800,
-                    background: "var(--blue)",
-                    color: "#ffffff",
-                    padding: "0 18px",
-                  }}
-                >
-                  🖨️ Print Now / Save PDF
-                </button>
-              </div>
-            </div>
-
-            {/* Customization Bar (Hidden in Print) */}
-            <div
-              className="print-controls no-print"
-              style={{
-                background: "var(--row-alt)",
-                padding: 14,
-                borderRadius: 10,
-                border: "1px solid var(--border)",
-                marginBottom: 20,
-                display: "flex",
-                flexWrap: "wrap",
-                gap: 16,
-                alignItems: "center",
-              }}
-            >
-              <div style={{ flex: 1, minWidth: 200 }}>
-                <label style={{ display: "block", fontSize: 11.5, fontWeight: 700, color: "var(--muted)", marginBottom: 4 }}>
-                  DOCUMENT TITLE
-                </label>
-                <select
-                  value={printTitle}
-                  onChange={(e) => setPrintTitle(e.target.value)}
-                  style={{
-                    width: "100%",
-                    height: 36,
-                    padding: "0 8px",
-                    borderRadius: 6,
-                    border: "1px solid var(--border)",
-                    fontSize: 13,
-                    fontWeight: 600,
-                  }}
-                >
-                  <option value="STUDENT NOMINAL ROLL / ROSTER">STUDENT NOMINAL ROLL / ROSTER</option>
-                  <option value="SEMESTER ATTENDANCE REGISTER">SEMESTER ATTENDANCE REGISTER</option>
-                  <option value="INTERNAL ASSESSMENT / EXAM ATTENDANCE ROSTER">INTERNAL ASSESSMENT / EXAM ATTENDANCE ROSTER</option>
-                  <option value="LABORATORY PRACTICAL ATTENDANCE ROSTER">LABORATORY PRACTICAL ATTENDANCE ROSTER</option>
-                  <option value="STUDENT & PARENT CONTACT DIRECTORY">STUDENT & PARENT CONTACT DIRECTORY</option>
-                </select>
-              </div>
-
-              <div style={{ minWidth: 180 }}>
-                <label style={{ display: "block", fontSize: 11.5, fontWeight: 700, color: "var(--muted)", marginBottom: 4 }}>
-                  SELECT SEMESTER
-                </label>
-                <select
-                  value={printSemesterId}
-                  onChange={(e) => setPrintSemesterId(e.target.value)}
-                  style={{
-                    width: "100%",
-                    height: 36,
-                    padding: "0 8px",
-                    borderRadius: 6,
-                    border: "1px solid var(--border)",
-                    fontSize: 13,
-                    fontWeight: 600,
-                  }}
-                >
-                  <option value="">All Semesters</option>
-                  {semesters.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.code} ({s.name})
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label style={{ display: "block", fontSize: 11.5, fontWeight: 700, color: "var(--muted)", marginBottom: 4 }}>
-                  INCLUDE COLUMNS
-                </label>
-                <div style={{ display: "flex", gap: 12, flexWrap: "wrap", fontSize: 12.5, fontWeight: 600 }}>
-                  <label style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}>
-                    <input
-                      type="checkbox"
-                      checked={includeColumns.gender}
-                      onChange={(e) => setIncludeColumns((p) => ({ ...p, gender: e.target.checked }))}
-                    />
-                    Gender
-                  </label>
-                  <label style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}>
-                    <input
-                      type="checkbox"
-                      checked={includeColumns.phone}
-                      onChange={(e) => setIncludeColumns((p) => ({ ...p, phone: e.target.checked }))}
-                    />
-                    Phone
-                  </label>
-                  <label style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}>
-                    <input
-                      type="checkbox"
-                      checked={includeColumns.parentPhone}
-                      onChange={(e) => setIncludeColumns((p) => ({ ...p, parentPhone: e.target.checked }))}
-                    />
-                    Parent Phone
-                  </label>
-                  <label style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}>
-                    <input
-                      type="checkbox"
-                      checked={includeColumns.email}
-                      onChange={(e) => setIncludeColumns((p) => ({ ...p, email: e.target.checked }))}
-                    />
-                    Email
-                  </label>
-                  <label style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}>
-                    <input
-                      type="checkbox"
-                      checked={includeColumns.signature}
-                      onChange={(e) => setIncludeColumns((p) => ({ ...p, signature: e.target.checked }))}
-                    />
-                    Signature / Remarks
-                  </label>
-                </div>
-              </div>
-            </div>
-
-            {/* ══════════════════════════════════════════════════════════════════
-                PRINTABLE DOCUMENT SECTION (RENDERED BOTH ON SCREEN AND PRINTER)
-                ══════════════════════════════════════════════════════════════════ */}
-            <div
-              className="printable-document"
-              style={{
-                background: "#ffffff",
-                color: "#000000",
-                padding: "16px 20px",
-                border: "1px solid #cbd5e1",
-                borderRadius: 8,
-              }}
-            >
-              {/* Institution Header */}
-              <div style={{ textAlign: "center", borderBottom: "2px solid #000000", paddingBottom: 10, marginBottom: 12 }}>
-                <div style={{ fontSize: 18, fontWeight: 900, letterSpacing: "0.5px", textTransform: "uppercase", color: "#0f172a" }}>
-                  Vignana Bharathi Institute of Technology
-                </div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: "#1e293b", marginTop: 2 }}>
-                  Department of Computer Science and Design (CSD)
-                </div>
-                <div
-                  style={{
-                    fontSize: 15,
-                    fontWeight: 800,
-                    textDecoration: "underline",
-                    textTransform: "uppercase",
-                    marginTop: 8,
-                    color: "#000000",
-                  }}
-                >
-                  {printTitle}
-                </div>
-              </div>
-
-              {/* Document Metadata Table */}
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  fontSize: 12,
-                  fontWeight: 600,
-                  marginBottom: 10,
-                  flexWrap: "wrap",
-                  gap: 6,
-                  borderBottom: "1px solid #94a3b8",
-                  paddingBottom: 6,
-                }}
-              >
-                <div>
-                  <strong>Semester:</strong>{" "}
-                  {activePrintSemesterObj ? `${activePrintSemesterObj.code} (${activePrintSemesterObj.name})` : "All Semesters"}
-                </div>
-                <div>
-                  <strong>Academic Year:</strong> 2026 - 2027
-                </div>
-                <div>
-                  <strong>Date:</strong> {formattedDate}
-                </div>
-                <div>
-                  <strong>Total Strength:</strong>{" "}
-                  <span style={{ fontSize: 13, fontWeight: 800 }}>{printableRows.length} Students</span>
-                </div>
-              </div>
-
-              {/* Printable Table */}
-              <table className="printable-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
-                <thead>
-                  <tr style={{ background: "#f1f5f9", textAlign: "left" }}>
-                    <th style={{ width: 45, textAlign: "center" }}>S.No</th>
-                    <th style={{ width: 130 }}>Roll Number</th>
-                    <th>Student Name</th>
-                    {includeColumns.gender && <th style={{ width: 65, textAlign: "center" }}>Gender</th>}
-                    {includeColumns.phone && <th style={{ width: 105 }}>Phone</th>}
-                    {includeColumns.parentPhone && <th style={{ width: 105 }}>Parent Phone</th>}
-                    {includeColumns.email && <th>Email</th>}
-                    {includeColumns.signature && <th style={{ width: 130, textAlign: "center" }}>Signature / Remarks</th>}
-                  </tr>
-                </thead>
-                <tbody>
-                  {printableRows.map((r, index) => (
-                    <tr key={r.id}>
-                      <td style={{ textAlign: "center", fontWeight: 700 }}>{index + 1}</td>
-                      <td style={{ fontWeight: 800, letterSpacing: "0.5px", textTransform: "uppercase" }}>
-                        {r.roll_no.toUpperCase()}
-                      </td>
-                      <td style={{ fontWeight: 700 }}>{r.name}</td>
-                      {includeColumns.gender && (
-                        <td style={{ textAlign: "center", textTransform: "capitalize" }}>
-                          {r.gender ? r.gender.charAt(0).toUpperCase() : "—"}
-                        </td>
-                      )}
-                      {includeColumns.phone && <td>{r.phone || "—"}</td>}
-                      {includeColumns.parentPhone && <td>{r.parent_phone || "—"}</td>}
-                      {includeColumns.email && <td style={{ fontSize: 11 }}>{r.email || "—"}</td>}
-                      {includeColumns.signature && (
-                        <td style={{ height: 28, border: "1px solid #333333" }}></td>
-                      )}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-
-              {printableRows.length === 0 && (
-                <div style={{ textAlign: "center", padding: 24, fontStyle: "italic", color: "#64748b" }}>
-                  No student records found for the selected semester.
-                </div>
-              )}
-
-              {/* Official Signatures Grid */}
-              <div className="print-signatures" style={{ marginTop: 40, display: "flex", justifyContent: "space-between" }}>
-                <div className="print-sig-block" style={{ textAlign: "center", minWidth: 120 }}>
-                  <div style={{ borderTop: "1px dashed #475569", paddingTop: 4, fontWeight: 700, fontSize: 11 }}>
-                    Class Incharge
-                  </div>
-                </div>
-                <div className="print-sig-block" style={{ textAlign: "center", minWidth: 120 }}>
-                  <div style={{ borderTop: "1px dashed #475569", paddingTop: 4, fontWeight: 700, fontSize: 11 }}>
-                    Academic Coordinator
-                  </div>
-                </div>
-                <div className="print-sig-block" style={{ textAlign: "center", minWidth: 120 }}>
-                  <div style={{ borderTop: "1px dashed #475569", paddingTop: 4, fontWeight: 700, fontSize: 11 }}>
-                    Head of Department (CSD)
-                  </div>
-                </div>
-                <div className="print-sig-block" style={{ textAlign: "center", minWidth: 120 }}>
-                  <div style={{ borderTop: "1px dashed #475569", paddingTop: 4, fontWeight: 700, fontSize: 11 }}>
-                    Principal
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* ── Permanent Delete Student Confirmation Modal ── */}
       {studentToDelete && (() => {
