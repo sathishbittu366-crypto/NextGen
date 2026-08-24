@@ -401,9 +401,12 @@ def _restore_custom_users(c):
             users = json.load(f)
         for u in users:
             if not c.execute("SELECT 1 FROM users WHERE username=%s", (u["username"],)).fetchone():
+                student_roll = u.get("student_roll_no")
+                if student_roll and not c.execute("SELECT 1 FROM students WHERE roll_no=%s", (student_roll,)).fetchone():
+                    continue
                 c.execute(
                     "INSERT INTO users(username,password,role,student_roll_no,full_name) VALUES(%s,%s,%s,%s,%s)",
-                    (u["username"], u["password"], u["role"], u.get("student_roll_no"), u.get("full_name", "")),
+                    (u["username"], u["password"], u["role"], student_roll, u.get("full_name", "")),
                 )
     except Exception as e:
         print(f"[DATABASE RECOVERY] Warning restoring custom users: {e}")
@@ -566,6 +569,26 @@ def validate_staff_profile(data):
 
 def audit(conn, username, action, entity, details=""):
     conn.execute("INSERT INTO audit_logs(username,action,entity,details) VALUES(%s,%s,%s,%s)", (username or "system", action, entity, details))
+
+
+def resolve_hod_for_department(c, dept="CSD") -> str | None:
+    """Find the responsible active HOD for the given department.
+    If multiple active HODs exist, prefer a departmental HOD (e.g. named non-admin HOD) over the default 'admin' account.
+    If no departmental HOD is found, fallback to any active HOD, or None.
+    """
+    dept = (dept or "CSD").strip()
+    hods = c.execute(
+        "SELECT username FROM users WHERE role='HOD' AND active=1 AND department=%s ORDER BY (username != 'admin') DESC, id ASC",
+        (dept,)
+    ).fetchall()
+    if hods:
+        return hods[0]["username"]
+    fallback = c.execute(
+        "SELECT username FROM users WHERE role='HOD' AND active=1 ORDER BY (username != 'admin') DESC, id ASC"
+    ).fetchall()
+    if fallback:
+        return fallback[0]["username"]
+    return None
 
 
 def get_setting(key, default=None):
@@ -787,16 +810,13 @@ def init_db(db_name=None):
         if "hod_username" not in existing_session_cols:
             c.execute("ALTER TABLE attendance_sessions ADD COLUMN hod_username VARCHAR(64) NULL")
 
-        # Backfill ownership on users first. A sole active HOD in a department
-        # is unambiguous; multiple HODs intentionally leave assignments NULL.
-        active_hods = c.execute("SELECT username, department FROM users WHERE role='HOD' AND active=1").fetchall()
+        # Backfill ownership on users and students.
+        active_hods = c.execute("SELECT username, department FROM users WHERE role='HOD' AND active=1 ORDER BY (username != 'admin') DESC, id ASC").fetchall()
         dept_hod_map = {}
         for h in active_hods:
             dept = (h["department"] or "").strip()
-            if dept and dept not in dept_hod_map:
+            if dept and (dept not in dept_hod_map or dept_hod_map[dept] == "admin"):
                 dept_hod_map[dept] = h["username"]
-            elif dept:
-                dept_hod_map[dept] = None
         for dept, hod_username in dept_hod_map.items():
             if hod_username:
                 c.execute("UPDATE users SET hod_username=%s WHERE department=%s AND role<>'HOD' AND (hod_username IS NULL OR hod_username='')", (hod_username, dept))
@@ -899,6 +919,13 @@ def init_db(db_name=None):
         # have UNIQUE(roll_no,send_date), which silently suppresses the second
         # class. Replace that unique key with (roll_no,attendance_session_id).
         try:
+            all_idxs = {r.get("Key_name") for r in c.execute("SHOW INDEX FROM sms_queue").fetchall()}
+            if "idx_sms_queue_roll_no" not in all_idxs:
+                try:
+                    c.execute("ALTER TABLE sms_queue ADD INDEX idx_sms_queue_roll_no (roll_no)")
+                except Exception:
+                    pass
+
             idx_rows = c.execute("SHOW INDEX FROM sms_queue").fetchall()
             grouped = {}
             for r in idx_rows:
@@ -985,20 +1012,17 @@ def init_db(db_name=None):
             except Exception:
                 pass
 
-        # Backfill legacy CSD students only when ownership is unambiguous. If
-        # more than one HOD exists, rows stay NULL and are intentionally blocked
-        # from SMS dispatch until an owner is explicitly assigned.
-        hods = c.execute("SELECT username FROM users WHERE role='HOD' AND active=1 AND department='CSD'").fetchall()
-        if len(hods) == 1:
-            c.execute("UPDATE students SET hod_username=%s WHERE department='CSD' AND (hod_username IS NULL OR hod_username='')", (hods[0]["username"],))
+        # Backfill legacy CSD students.
+        hod_username = resolve_hod_for_department(c, "CSD")
+        if hod_username:
+            c.execute("UPDATE students SET hod_username=%s WHERE department='CSD' AND (hod_username IS NULL OR hod_username='')", (hod_username,))
 
-        # Create one cloud gateway placeholder for the sole HOD only if none
-        # exists. Credentials remain empty until configured from the HOD SMS UI.
-        if len(hods) == 1:
+        # Create one cloud gateway placeholder for the HOD if none exists.
+        if hod_username:
             c.execute("""
                 INSERT IGNORE INTO sms_gateways(hod_username,gateway_name,gateway_mode,active)
                 VALUES(%s,%s,'cloud',1)
-            """, (hods[0]["username"], f"{hods[0]['username']} SMSGate"))
+            """, (hod_username, f"{hod_username} SMSGate"))
 
         c.execute("""
         CREATE TABLE IF NOT EXISTS academic_calendar(
@@ -1194,11 +1218,9 @@ def init_db(db_name=None):
                 """, (iii_i_sem, rel_path))
             c.execute("INSERT IGNORE INTO settings(`key`,`value`) VALUES('migrated_iii_i_calendar_doc','1')")
 
-        # Final ownership backfill after all default users and student rows have
-        # been created. Only a single active HOD makes automatic assignment safe.
-        hods = c.execute("SELECT username FROM users WHERE role='HOD' AND active=1 AND department='CSD'").fetchall()
-        if len(hods) == 1:
-            hod_username = hods[0]["username"]
+        # Final ownership backfill after all default users and student rows have been created.
+        hod_username = resolve_hod_for_department(c, "CSD")
+        if hod_username:
             c.execute("UPDATE users SET hod_username=%s WHERE department='CSD' AND role='HOD' AND username=%s", (hod_username, hod_username))
             c.execute("UPDATE users SET hod_username=%s WHERE department='CSD' AND role='FACULTY' AND (hod_username IS NULL OR hod_username='')", (hod_username,))
             c.execute("UPDATE students SET hod_username=%s WHERE department='CSD' AND (hod_username IS NULL OR hod_username='')", (hod_username,))
@@ -1208,8 +1230,6 @@ def init_db(db_name=None):
                 VALUES(%s,%s,'cloud',1)
             """, (hod_username, f"{hod_username} SMSGate"))
 
-            # Resolve legacy queue rows only when the student owner and gateway
-            # are unambiguous. Never pick a different HOD as a fallback.
             c.execute("""
                 UPDATE sms_queue q
                 JOIN students st ON st.roll_no=q.roll_no
@@ -1290,19 +1310,22 @@ def create_user(username,password,role,full_name="",student_roll_no=None,actor="
             full_name=s["name"]
         pw_hash = _hash_password(password)
         hod_username = None
+        dept = None
         if role == "HOD":
             hod_username = username
+            dept = "CSD"
         elif role == "FACULTY":
+            dept = "CSD"
             actor_row = c.execute("SELECT role,hod_username,department FROM users WHERE username=%s", (actor,)).fetchone()
-            if actor_row and actor_row["role"] == "HOD":
+            if actor_row and actor_row["role"] == "HOD" and actor_row["username"] != "admin":
                 hod_username = actor
-            elif actor_row and actor_row.get("hod_username"):
+            elif actor_row and actor_row.get("hod_username") and actor_row.get("hod_username") != "admin":
                 hod_username = actor_row["hod_username"]
             elif actor_row and actor_row.get("department"):
-                hods = c.execute("SELECT username FROM users WHERE role='HOD' AND active=1 AND department=%s", (actor_row["department"],)).fetchall()
-                if len(hods) == 1:
-                    hod_username = hods[0]["username"]
-        c.execute("INSERT INTO users(username,password,role,student_roll_no,full_name,hod_username) VALUES(%s,%s,%s,%s,%s,%s)",(username,pw_hash,role,student_roll_no,full_name.strip(),hod_username))
+                hod_username = resolve_hod_for_department(c, actor_row["department"])
+            else:
+                hod_username = resolve_hod_for_department(c, "CSD")
+        c.execute("INSERT INTO users(username,password,role,student_roll_no,full_name,hod_username,department) VALUES(%s,%s,%s,%s,%s,%s,%s)",(username,pw_hash,role,student_roll_no,full_name.strip(),hod_username,dept))
         _save_custom_user_backup(username, pw_hash, role, full_name.strip(), student_roll_no)
         audit(c,actor,"CREATE","user",f"{username} ({role})")
 
@@ -1337,7 +1360,7 @@ def is_open_registration_enabled() -> bool:
     return get_setting(OPEN_REGISTRATION_SETTING_KEY, "1") == "1"
 
 
-def register_student(roll_no, username, password, full_name=None, email=None, phone=None, year_of_study=None):
+def register_student(roll_no, username, password, full_name=None, email=None, phone=None, year_of_study=None, department="CSD"):
     """Self-service registration with MANDATORY email & OTP verification.
 
     Email is required for creating a new user account, and must be OTP-verified
@@ -1347,6 +1370,7 @@ def register_student(roll_no, username, password, full_name=None, email=None, ph
     roll_no = str(roll_no).strip()
     email = (email or "").strip().lower()
     phone = (phone or "").strip()
+    dept = (department or "CSD").strip()
 
     if not email or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
         raise ValueError("A valid email address is required for registration")
@@ -1367,7 +1391,7 @@ def register_student(roll_no, username, password, full_name=None, email=None, ph
         if c.execute("SELECT 1 FROM users WHERE email=%s", (email,)).fetchone():
             raise ValueError("That email address is already registered")
 
-        s = c.execute("SELECT * FROM students WHERE roll_no=%s AND department='CSD'", (roll_no,)).fetchone()
+        s = c.execute("SELECT * FROM students WHERE roll_no=%s AND department=%s", (roll_no, dept)).fetchone()
 
         # Map year_of_study (e.g. '1', '2', '3', '4') to initial semester ID
         sem_id = None
@@ -1379,24 +1403,24 @@ def register_student(roll_no, username, password, full_name=None, email=None, ph
                 if sem_row:
                     sem_id = sem_row["id"]
 
+        assigned_hod = resolve_hod_for_department(c, dept)
+
         if not s:
             if not is_open_registration_enabled():
                 raise ValueError("Roll number was not found in CSD records")
             name = str(full_name or "").strip() or username or f"Student {roll_no}"
-            validate_student({"roll_no": roll_no, "name": name, "department": "CSD"})
+            validate_student({"roll_no": roll_no, "name": name, "department": dept})
             if c.execute("SELECT 1 FROM students WHERE roll_no=%s", (roll_no,)).fetchone():
                 raise ValueError("That roll number is already registered")
-            hod_rows = c.execute("SELECT username FROM users WHERE role='HOD' AND active=1 AND department='CSD'").fetchall()
-            if len(hod_rows) != 1:
-                raise ValueError("Student registration cannot be completed until one responsible HOD scope is configured")
-            assigned_hod = hod_rows[0]["username"]
             c.execute(
-                "INSERT INTO students(roll_no,name,department,email,phone,current_semester_id,hod_username) VALUES(%s,%s,'CSD',%s,%s,%s,%s)",
-                (roll_no, name, email, phone or None, sem_id, assigned_hod),
+                "INSERT INTO students(roll_no,name,department,email,phone,current_semester_id,hod_username) VALUES(%s,%s,%s,%s,%s,%s,%s)",
+                (roll_no, name, dept, email, phone or None, sem_id, assigned_hod),
             )
             audit(c, username, "SELF_REGISTER_NEW_STUDENT", "student", f"{roll_no} ({name}) — open registration, verified email")
-            s = c.execute("SELECT * FROM students WHERE roll_no=%s AND department='CSD'", (roll_no,)).fetchone()
+            s = c.execute("SELECT * FROM students WHERE roll_no=%s AND department=%s", (roll_no, dept)).fetchone()
         else:
+            if not s.get("hod_username") and assigned_hod:
+                c.execute("UPDATE students SET hod_username=%s WHERE roll_no=%s", (assigned_hod, roll_no))
             if phone or sem_id:
                 c.execute(
                     "UPDATE students SET phone=COALESCE(NULLIF(%s,''),phone), current_semester_id=COALESCE(%s,current_semester_id) WHERE roll_no=%s",
@@ -1410,8 +1434,8 @@ def register_student(roll_no, username, password, full_name=None, email=None, ph
 
         pw_hash = _hash_password(password)
         c.execute(
-            "INSERT INTO users(username,password,role,student_roll_no,full_name,email,email_verified) VALUES(%s,%s,'STUDENT',%s,%s,%s,1)",
-            (username, pw_hash, roll_no, s["name"], email),
+            "INSERT INTO users(username,password,role,student_roll_no,full_name,email,email_verified,department,hod_username) VALUES(%s,%s,'STUDENT',%s,%s,%s,1,%s,%s)",
+            (username, pw_hash, roll_no, s["name"], email, dept, assigned_hod),
         )
         c.execute("UPDATE students SET email=%s WHERE roll_no=%s AND (email IS NULL OR email = '' OR email != %s)", (email, roll_no, email))
         _save_custom_user_backup(username, pw_hash, "STUDENT", s["name"], roll_no)

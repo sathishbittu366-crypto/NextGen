@@ -26,7 +26,7 @@ class StudentsMixin:
             tree.delete(*tree.get_children()); q=f"%{search.get().strip()}%"; filt=status.get()
             sql="SELECT * FROM students WHERE department='CSD' AND (name LIKE ? OR roll_no LIKE ? OR email LIKE ? OR phone LIKE ?)"; args=[q,q,q,q]
             if filt!="All": sql+=" AND active=?"; args.append(1 if filt=="Active" else 0)
-            sql+=" ORDER BY id"
+            sql+=" ORDER BY UPPER(roll_no) ASC, name ASC"
             with connect() as c: rows=c.execute(sql,args).fetchall()
             for r in rows: tree.insert("","end",values=(r["id"],r["roll_no"],r["name"],r["department"],r["email"] or "",r["phone"] or "","Active" if r["active"] else "Inactive"))
         search.bind("<KeyRelease>",load); status.configure(command=lambda _v:load())

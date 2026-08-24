@@ -35,6 +35,11 @@ export interface StudentListRow {
   name: string;
   email: string | null;
   phone: string | null;
+  parent_phone?: string | null;
+  gender?: string | null;
+  category?: string | null;
+  seat_category?: string | null;
+  current_semester_id?: number | null;
   aadhaar_masked: string; // backend applies mask_aadhaar() — never send full number in list responses
   year_of_study?: string;
   batch?: string;
@@ -107,8 +112,15 @@ export interface SaveStudentResult {
 // Routes
 // ──────────────────────────────────────────────
 
-export async function listStudents(q: string, status: "Active" | "Inactive" | "All"): Promise<StudentListRow[]> {
+export async function listStudentSemesters(): Promise<SemesterOption[]> {
+  return apiFetch<SemesterOption[]>("/api/students/semesters", { method: "GET" });
+}
+
+export async function listStudents(q: string, status: "Active" | "Inactive" | "All", semesterId?: number | null): Promise<StudentListRow[]> {
   const params = new URLSearchParams({ q, status });
+  if (semesterId) {
+    params.set("semester_id", String(semesterId));
+  }
   return apiFetch<StudentListRow[]>(`/api/students?${params.toString()}`, { method: "GET" });
 }
 

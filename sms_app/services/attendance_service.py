@@ -340,8 +340,13 @@ def get_or_create_session(*, attendance_date, semester_id, subject_id, faculty_u
         if not faculty:
             raise ValueError("Faculty account is not active")
         hod_username = faculty["hod_username"]
-        if faculty["role"] == "HOD":
+        if faculty["role"] == "HOD" and faculty["username"] != "admin":
             hod_username = faculty_username
+        elif not hod_username or hod_username == "admin":
+            from database import resolve_hod_for_department
+            dept_hod = resolve_hod_for_department(c, faculty.get("department") or "CSD")
+            if dept_hod:
+                hod_username = dept_hod
         if not hod_username:
             raise ValueError("This faculty account is not assigned to a HOD scope")
         if faculty["role"] == "FACULTY":
@@ -360,7 +365,7 @@ def get_or_create_session(*, attendance_date, semester_id, subject_id, faculty_u
             # Legacy sessions without an owner are repaired only from the
             # authenticated faculty's current HOD scope. Never guess from
             # physical location or another gateway.
-            if not row.get("hod_username"):
+            if not row.get("hod_username") or (row.get("hod_username") == "admin" and hod_username != "admin"):
                 c.execute("UPDATE attendance_sessions SET hod_username=%s WHERE id=%s", (hod_username, row["id"]))
                 row = c.execute("SELECT * FROM attendance_sessions WHERE id=%s", (row["id"],)).fetchone()
             return row
@@ -424,7 +429,7 @@ def load_register(session_id):
             SELECT st.roll_no, st.name
             FROM students st
             WHERE st.department='CSD'
-              AND st.hod_username=%s
+              AND (st.hod_username=%s OR st.hod_username IS NULL)
               AND st.active=1
               AND st.current_semester_id=%s
             ORDER BY st.roll_no
@@ -434,6 +439,29 @@ def load_register(session_id):
                 session["semester_id"],
             ),
         ).fetchall()
+
+        if not students and session.get("hod_username") == "admin":
+            from database import resolve_hod_for_department
+            dept_hod = resolve_hod_for_department(c, "CSD")
+            if dept_hod and dept_hod != "admin":
+                dept_students = c.execute(
+                    """
+                    SELECT st.roll_no, st.name
+                    FROM students st
+                    WHERE st.department='CSD'
+                      AND (st.hod_username=%s OR st.hod_username IS NULL)
+                      AND st.active=1
+                      AND st.current_semester_id=%s
+                    ORDER BY st.roll_no
+                    """,
+                    (
+                        dept_hod,
+                        session["semester_id"],
+                    ),
+                ).fetchall()
+                if dept_students:
+                    students = dept_students
+                    c.execute("UPDATE attendance_sessions SET hod_username=%s WHERE id=%s", (dept_hod, session_id))
 
         existing = {
             r["roll_no"]: r["status"]
@@ -547,12 +575,19 @@ def month_register(*, faculty_username, semester_id, subject_id, year, month):
         for sunday_date, sunday_name in sunday_map.items():
             holiday_map.setdefault(sunday_date, sunday_name)
 
+        hod_scope = faculty.get("hod_username") or faculty_username
+        if hod_scope == "admin" or not hod_scope:
+            from database import resolve_hod_for_department
+            dept_hod = resolve_hod_for_department(c, faculty.get("department") or "CSD")
+            if dept_hod:
+                hod_scope = dept_hod
+
         students = c.execute(
             """
             SELECT DISTINCT st.roll_no, st.name, st.current_semester_id
             FROM students st
             WHERE st.department='CSD'
-              AND st.hod_username=%s
+              AND (st.hod_username=%s OR st.hod_username IS NULL)
               AND st.active=1
               AND st.current_semester_id=%s
               AND EXISTS (
@@ -566,7 +601,7 @@ def month_register(*, faculty_username, semester_id, subject_id, year, month):
             ORDER BY st.roll_no
             """,
             (
-                faculty.get("hod_username") or faculty_username,
+                hod_scope,
                 semester_id,
                 faculty_username,
                 semester_id,

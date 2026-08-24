@@ -204,3 +204,19 @@ class TestAadhaarMasking:
                 assert not aadhaar.replace(" ", "").isdigit(), (
                     f"List view leaked what looks like a raw Aadhaar number: {aadhaar!r}"
                 )
+
+
+class TestRollNoOrderingAndSemesters:
+    def test_list_is_sorted_by_roll_no(self, client, hod_headers):
+        r = client.get("/api/students", headers=hod_headers)
+        assert r.status_code == 200
+        rows = r.json()["data"]
+        roll_nos = [row["roll_no"].upper() for row in rows]
+        assert roll_nos == sorted(roll_nos), "Students are not sorted roll_no wise"
+
+    def test_semesters_endpoint(self, client, hod_headers):
+        r = client.get("/api/students/semesters", headers=hod_headers)
+        assert r.status_code == 200
+        sems = r.json()["data"]
+        assert len(sems) > 0
+        assert "code" in sems[0]

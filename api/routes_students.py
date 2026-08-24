@@ -105,6 +105,11 @@ def _serialize_list_row(row) -> dict:
         "name": d["name"],
         "email": d.get("email") or "",
         "phone": d.get("phone") or "",
+        "parent_phone": d.get("parent_phone") or "",
+        "gender": d.get("gender") or "",
+        "category": d.get("category") or "",
+        "seat_category": d.get("seat_category") or "",
+        "current_semester_id": d.get("current_semester_id"),
         "aadhaar_masked": mask_aadhaar(d.get("aadhaar_number")),
         "year_of_study": year,
         "batch": batch,
@@ -125,17 +130,21 @@ def _serialize_full(row) -> dict:
 
 def _get_user_hod_username(username: str) -> str | None:
     with connect() as c:
-        row = c.execute("SELECT role, hod_username FROM users WHERE username=%s", (username,)).fetchone()
-    if not row:
-        return None
-    return username if row["role"] == "HOD" else row.get("hod_username")
+        row = c.execute("SELECT role, hod_username, department FROM users WHERE username=%s", (username,)).fetchone()
+        if not row:
+            return None
+        if row["role"] == "HOD" and row["username"] != "admin":
+            return username
+        if row.get("hod_username") and row["hod_username"] != "admin":
+            return row["hod_username"]
+        from database import resolve_hod_for_department
+        dept_hod = resolve_hod_for_department(c, row.get("department") or "CSD")
+        return dept_hod or row.get("hod_username") or username
 
 
 def _resolve_hod_for_student(user: CurrentUser, requested: str | None = None) -> str:
-    if user.role == "HOD":
+    if user.role == "HOD" and user.username != "admin":
         return user.username
-    if user.role != "ADMIN":
-        raise ApiError("HOD or Admin access only", 403, "FORBIDDEN")
     candidate = (requested or "").strip()
     with connect() as c:
         if candidate:
@@ -143,25 +152,35 @@ def _resolve_hod_for_student(user: CurrentUser, requested: str | None = None) ->
             if not row:
                 raise ApiError("Selected HOD is not an active HOD account", 400, "VALIDATION_ERROR")
             return candidate
-        rows = c.execute("SELECT username FROM users WHERE role='HOD' AND active=1 AND department='CSD'").fetchall()
-    if len(rows) == 1:
-        return rows[0]["username"]
-    raise ApiError("Student ownership is ambiguous. Select the responsible HOD.", 400, "VALIDATION_ERROR")
+        from database import resolve_hod_for_department
+        dept_hod = resolve_hod_for_department(c, "CSD")
+        if dept_hod:
+            return dept_hod
+    return user.username
 
 
 def _student_scope_sql(user: CurrentUser) -> tuple[str, list[Any]]:
-    if user.role == "ADMIN":
+    if user.role == "ADMIN" or user.username == "admin":
         return "", []
     hod = user.username if user.role == "HOD" else _get_user_hod_username(user.username)
     if hod:
-        return " AND hod_username=?", [hod]
+        return " AND (hod_username=? OR hod_username IS NULL)", [hod]
     return " AND 1=0", []
+
+
+@router.get("/semesters")
+async def student_semesters(user: CurrentUser = Depends(get_current_user)):
+    if user.role == "STUDENT":
+        raise ApiError("Access denied", 403, "FORBIDDEN")
+    semesters = [dict(s) for s in list_semesters()]
+    return ok(semesters)
 
 
 @router.get("")
 async def students_list(
     q: str = "",
     status: str = "Active",
+    semester_id: int | None = None,
     user: CurrentUser = Depends(get_current_user),
 ):
     if user.role == "STUDENT":
@@ -178,7 +197,10 @@ async def students_list(
     if status != "All":
         sql += " AND active=?"
         args.append(1 if status == "Active" else 0)
-    sql += " ORDER BY id"
+    if semester_id:
+        sql += " AND current_semester_id=?"
+        args.append(semester_id)
+    sql += " ORDER BY UPPER(roll_no) ASC, name ASC"
     with connect() as c:
         rows = c.execute(sql, args).fetchall()
     return ok([_serialize_list_row(r) for r in rows])
@@ -186,7 +208,7 @@ async def students_list(
 
 @router.get("/new")
 async def student_new(user: CurrentUser = Depends(get_current_user)):
-    if user.role != "HOD":
+    if user.role not in ("HOD", "ADMIN"):
         raise ApiError("HOD access only", 403, "FORBIDDEN")
     semesters = [dict(s) for s in list_semesters()]
     return ok({"student": None, "semesters": semesters})
@@ -194,14 +216,16 @@ async def student_new(user: CurrentUser = Depends(get_current_user)):
 
 @router.get("/{student_id}/edit")
 async def student_edit_data(student_id: int, user: CurrentUser = Depends(get_current_user)):
-    if user.role != "HOD":
+    if user.role not in ("HOD", "ADMIN"):
         raise ApiError("HOD access only", 403, "FORBIDDEN")
     with connect() as c:
-        if user.role == "HOD":
-            row = c.execute("SELECT * FROM students WHERE id=? AND department='CSD' AND hod_username=?", (student_id, user.username)).fetchone()
+        if user.role == "ADMIN" or user.username == "admin":
+            row = c.execute("SELECT * FROM students WHERE id=? AND department='CSD'", (student_id,)).fetchone()
+        elif user.role == "HOD":
+            row = c.execute("SELECT * FROM students WHERE id=? AND department='CSD' AND (hod_username=? OR hod_username IS NULL)", (student_id, user.username)).fetchone()
         else:
             hod = _get_user_hod_username(user.username)
-            row = c.execute("SELECT * FROM students WHERE id=? AND department='CSD' AND hod_username=?", (student_id, hod)).fetchone() if hod else None
+            row = c.execute("SELECT * FROM students WHERE id=? AND department='CSD' AND (hod_username=? OR hod_username IS NULL)", (student_id, hod)).fetchone() if hod else None
     if not row:
         raise ApiError("Student not found", 404, "NOT_FOUND")
     # CORRUPTION TRAP: must decrypt before returning — see §4.4 and webapp/routes/students.py
@@ -215,13 +239,13 @@ async def student_view(student_id: int, user: CurrentUser = Depends(get_current_
     if user.role == "STUDENT":
         raise ApiError("Access denied", 403, "FORBIDDEN")
     with connect() as c:
-        if user.role == "ADMIN":
+        if user.role == "ADMIN" or user.username == "admin":
             row = c.execute("SELECT * FROM students WHERE id=? AND department='CSD'", (student_id,)).fetchone()
         elif user.role == "HOD":
-            row = c.execute("SELECT * FROM students WHERE id=? AND department='CSD' AND hod_username=?", (student_id, user.username)).fetchone()
+            row = c.execute("SELECT * FROM students WHERE id=? AND department='CSD' AND (hod_username=? OR hod_username IS NULL)", (student_id, user.username)).fetchone()
         else:
             hod = _get_user_hod_username(user.username)
-            row = c.execute("SELECT * FROM students WHERE id=? AND department='CSD' AND hod_username=?", (student_id, hod)).fetchone() if hod else None
+            row = c.execute("SELECT * FROM students WHERE id=? AND department='CSD' AND (hod_username=? OR hod_username IS NULL)", (student_id, hod)).fetchone() if hod else None
         semester = None
         if row and row["current_semester_id"]:
             sem_row = c.execute(
@@ -356,13 +380,15 @@ async def student_update(student_id: int, body: StudentBody, user: CurrentUser =
     if user.role not in ("HOD", "ADMIN"):
         raise ApiError("HOD or Admin access only", 403, "FORBIDDEN")
     with connect() as c:
-        if user.role == "HOD":
-            existing = c.execute("SELECT id,hod_username FROM students WHERE id=? AND department='CSD' AND hod_username=?", (student_id, user.username)).fetchone()
+        if user.role == "ADMIN" or user.username == "admin":
+            existing = c.execute("SELECT id,hod_username FROM students WHERE id=? AND department='CSD'", (student_id,)).fetchone()
+        elif user.role == "HOD":
+            existing = c.execute("SELECT id,hod_username FROM students WHERE id=? AND department='CSD' AND (hod_username=? OR hod_username IS NULL)", (student_id, user.username)).fetchone()
         else:
             existing = c.execute("SELECT id,hod_username FROM students WHERE id=? AND department='CSD'", (student_id,)).fetchone()
     if not existing:
         raise ApiError("Student not found", 404, "NOT_FOUND")
-    assigned_hod = existing.get("hod_username") if user.role == "HOD" else _resolve_hod_for_student(user, body.hod_username or existing.get("hod_username"))
+    assigned_hod = existing.get("hod_username") if user.role == "HOD" and user.username != "admin" else _resolve_hod_for_student(user, body.hod_username or existing.get("hod_username"))
     data = _body_to_data(body)
     try:
         validate_student(data)
@@ -394,8 +420,10 @@ async def toggle_status(student_id: int, user: CurrentUser = Depends(get_current
     if user.role not in ("HOD", "ADMIN"):
         raise ApiError("HOD or Admin access only", 403, "FORBIDDEN")
     with connect() as c:
-        if user.role == "HOD":
-            row = c.execute("SELECT * FROM students WHERE id=? AND hod_username=?", (student_id, user.username)).fetchone()
+        if user.role == "ADMIN" or user.username == "admin":
+            row = c.execute("SELECT * FROM students WHERE id=?", (student_id,)).fetchone()
+        elif user.role == "HOD":
+            row = c.execute("SELECT * FROM students WHERE id=? AND (hod_username=? OR hod_username IS NULL)", (student_id, user.username)).fetchone()
         else:
             row = c.execute("SELECT * FROM students WHERE id=?", (student_id,)).fetchone()
         if not row:
@@ -415,8 +443,10 @@ async def student_photo(
     if user.role not in ("HOD", "ADMIN"):
         raise ApiError("HOD or Admin access only", 403, "FORBIDDEN")
     with connect() as c:
-        if user.role == "HOD":
-            row = c.execute("SELECT * FROM students WHERE id=? AND hod_username=?", (student_id, user.username)).fetchone()
+        if user.role == "ADMIN" or user.username == "admin":
+            row = c.execute("SELECT * FROM students WHERE id=?", (student_id,)).fetchone()
+        elif user.role == "HOD":
+            row = c.execute("SELECT * FROM students WHERE id=? AND (hod_username=? OR hod_username IS NULL)", (student_id, user.username)).fetchone()
         else:
             row = c.execute("SELECT * FROM students WHERE id=?", (student_id,)).fetchone()
     if not row:
@@ -439,8 +469,10 @@ async def student_photo_delete(
     if user.role not in ("HOD", "ADMIN"):
         raise ApiError("HOD or Admin access only", 403, "FORBIDDEN")
     with connect() as c:
-        if user.role == "HOD":
-            row = c.execute("SELECT * FROM students WHERE id=? AND hod_username=?", (student_id, user.username)).fetchone()
+        if user.role == "ADMIN" or user.username == "admin":
+            row = c.execute("SELECT * FROM students WHERE id=?", (student_id,)).fetchone()
+        elif user.role == "HOD":
+            row = c.execute("SELECT * FROM students WHERE id=? AND (hod_username=? OR hod_username IS NULL)", (student_id, user.username)).fetchone()
         else:
             row = c.execute("SELECT * FROM students WHERE id=?", (student_id,)).fetchone()
         if not row:
@@ -455,8 +487,10 @@ async def student_delete(student_id: int, user: CurrentUser = Depends(get_curren
     if user.role not in ("HOD", "ADMIN"):
         raise ApiError("HOD or Admin access only", 403, "FORBIDDEN")
     with connect() as c:
-        if user.role == "HOD":
-            row = c.execute("SELECT * FROM students WHERE id=? AND hod_username=?", (student_id, user.username)).fetchone()
+        if user.role == "ADMIN" or user.username == "admin":
+            row = c.execute("SELECT * FROM students WHERE id=?", (student_id,)).fetchone()
+        elif user.role == "HOD":
+            row = c.execute("SELECT * FROM students WHERE id=? AND (hod_username=? OR hod_username IS NULL)", (student_id, user.username)).fetchone()
         else:
             row = c.execute("SELECT * FROM students WHERE id=?", (student_id,)).fetchone()
         if not row:

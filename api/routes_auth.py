@@ -68,6 +68,7 @@ class RegisterBody(BaseModel):
     email: str
     phone: str | None = None
     year_of_study: str | None = None
+    department: str | None = None
 
 
 
@@ -293,6 +294,7 @@ async def register(body: RegisterBody, request: Request):
             email=body.email,
             phone=body.phone,
             year_of_study=body.year_of_study,
+            department=body.department or "CSD",
         )
     except ValueError as exc:
         record_failure(limiter_key)
