@@ -236,7 +236,16 @@ async def sms_log_endpoint(user: CurrentUser = Depends(get_current_user)):
 from datetime import datetime
 from pydantic import BaseModel, Field
 
-from database import get_setting, set_setting
+from database import (
+    get_setting,
+    is_student_self_edit_enabled,
+    set_setting,
+    set_student_self_edit_enabled,
+)
+
+
+class StudentSelfEditSettingBody(BaseModel):
+    student_self_edit_enabled: bool | str | int
 
 
 class SmsSettingsBody(BaseModel):
@@ -530,6 +539,30 @@ async def save_sms_settings(body: SmsSettingsBody, user: CurrentUser = Depends(g
     set_setting("sms_daily_cap", str(cap), actor=user.username)
     set_setting("sms_repeat_every_attendance", body.sms_repeat_every_attendance, actor=user.username)
     return ok({"ok": True})
+
+
+@router.get("/settings/student-self-edit")
+@router.get("/student-self-edit")
+async def get_student_self_edit_setting(user: CurrentUser = Depends(get_current_user)):
+    if user.role not in ("HOD", "ADMIN"):
+        raise ApiError("HOD or Admin access only", status_code=403, code="FORBIDDEN")
+    return ok({
+        "student_self_edit_enabled": is_student_self_edit_enabled(),
+    })
+
+
+@router.patch("/settings/student-self-edit")
+@router.patch("/student-self-edit")
+@router.post("/settings/student-self-edit")
+@router.post("/student-self-edit")
+async def save_student_self_edit_setting(body: StudentSelfEditSettingBody, user: CurrentUser = Depends(get_current_user)):
+    if user.role != "ADMIN" and user.username != "admin":
+        raise ApiError("Administrator access required to change student self-editing settings", status_code=403, code="FORBIDDEN")
+    is_enabled = set_student_self_edit_enabled(body.student_self_edit_enabled, actor=user.username)
+    return ok({
+        "student_self_edit_enabled": is_enabled,
+        "ok": True,
+    })
 
 
 @router.post("/sms-test")

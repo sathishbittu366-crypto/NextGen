@@ -86,6 +86,7 @@ export interface StudentSelf {
 
 export interface MyProfileData {
   student: StudentSelf;
+  student_self_edit_enabled?: boolean;
 }
 
 export async function getMyProfile(): Promise<MyProfileData> {

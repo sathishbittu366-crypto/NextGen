@@ -43,6 +43,7 @@ export function ProfilePage({ user, onLoggedOut }: Props) {
   const [editData, setEditData] = useState<Partial<StudentSelf>>({});
   const [editError, setEditError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [selfEditEnabled, setSelfEditEnabled] = useState(false);
   const [showPwForm, setShowPwForm] = useState(false);
   const [oldPw, setOldPw] = useState("");
   const [newPw, setNewPw] = useState("");
@@ -57,6 +58,7 @@ export function ProfilePage({ user, onLoggedOut }: Props) {
       const res = await getMyProfile();
       setStudent(res.student);
       setEditData(res.student);
+      setSelfEditEnabled(Boolean(res.student_self_edit_enabled));
     } catch (_err) {
       // Clean fallback so Profile Information table always renders cleanly
     } finally { setLoading(false); }
@@ -66,6 +68,10 @@ export function ProfilePage({ user, onLoggedOut }: Props) {
 
   async function handleSaveProfile(e: React.FormEvent) {
     e.preventDefault();
+    if (user.role === "STUDENT" && !selfEditEnabled) {
+      setEditError("Student self-editing is disabled by administrator.");
+      return;
+    }
     setSubmitting(true); setEditError(null);
     try {
       const res = await updateMyProfile(editData as Parameters<typeof updateMyProfile>[0]);
@@ -223,7 +229,25 @@ export function ProfilePage({ user, onLoggedOut }: Props) {
       <div className="detail-box">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
           <h3 style={{ margin: 0 }}>Personal Information</h3>
-          {!editing && (
+          {!selfEditEnabled ? (
+            <span
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 5,
+                padding: "4px 10px",
+                borderRadius: 8,
+                fontSize: 12,
+                fontWeight: 700,
+                background: "rgba(239, 68, 68, 0.1)",
+                color: "#ef4444",
+                border: "1px solid rgba(239, 68, 68, 0.2)",
+              }}
+              title="Student self-editing is currently disabled by administrator"
+            >
+              🔒 Locked
+            </span>
+          ) : !editing ? (
             <button
               type="button"
               className="btn btn-sm btn-outline"
@@ -244,9 +268,32 @@ export function ProfilePage({ user, onLoggedOut }: Props) {
             >
               ✏️
             </button>
-          )}
+          ) : null}
         </div>
-        {!editing ? (
+
+        {!selfEditEnabled && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+              padding: "12px 16px",
+              marginBottom: 16,
+              borderRadius: 12,
+              background: "rgba(245, 158, 11, 0.08)",
+              border: "1px solid rgba(245, 158, 11, 0.25)",
+              color: "var(--text)",
+            }}
+          >
+            <span style={{ fontSize: 20 }}>ℹ️</span>
+            <div style={{ fontSize: 13, lineHeight: 1.5 }}>
+              <strong style={{ color: "#d97706", display: "block" }}>Profile Self-Editing Disabled</strong>
+              Student profile self-editing is currently turned off by the college administrator. If you need to update your name, contact numbers, or other details, please contact your department HOD or administrator.
+            </div>
+          </div>
+        )}
+
+        {!editing || !selfEditEnabled ? (
           <div className="detail-grid">
             {READONLY_FIELDS.map(({ label, key }) => (
               <div key={key} className="detail-field">

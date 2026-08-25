@@ -603,6 +603,21 @@ def set_setting(key, value, actor="system"):
         audit(c, actor, "UPDATE", "settings", f"{key}={value}")
 
 
+STUDENT_SELF_EDIT_SETTING_KEY = "student_self_edit_enabled"
+
+
+def is_student_self_edit_enabled() -> bool:
+    val = get_setting(STUDENT_SELF_EDIT_SETTING_KEY, "0")
+    return str(val).strip().lower() in ("1", "true", "yes")
+
+
+def set_student_self_edit_enabled(enabled: bool | str | int, actor: str = "system") -> bool:
+    is_on = str(enabled).strip().lower() in ("1", "true", "yes") if not isinstance(enabled, bool) else enabled
+    val = "1" if is_on else "0"
+    set_setting(STUDENT_SELF_EDIT_SETTING_KEY, val, actor=actor)
+    return is_on
+
+
 def _seed_checklist(c, roll):
     for item, status in [("Personal details","Complete"),("Documents","Pending"),("ID card","Pending"),("Fees","Pending"),("Attendance records","Available"),("Marks records","Available")]:
         c.execute("INSERT IGNORE INTO checklist(roll_no,item,status) VALUES(%s,%s,%s)", (roll,item,status))

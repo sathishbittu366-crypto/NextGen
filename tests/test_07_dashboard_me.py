@@ -219,22 +219,73 @@ class TestMeProfileUpdate:
         r = client.patch("/api/me/profile", headers=hod_headers, json={"name": "ZZQA Probe"})
         assert r.status_code == 403
 
-    def test_student_cannot_inject_roll_no_change(self, client, student_headers):
-        """roll_no/department are documented as server-injected, not
-        student-editable (ENDPOINTS.md §2.8). ProfileUpdateBody doesn't
-        even accept these fields, so sending them should simply be
-        ignored by pydantic, not error and not change the roll number."""
+    def test_student_self_edit_disabled_by_default(self, client, student_headers, hod_headers):
+        """Student self-editing must be disabled by default (or when setting is off)"""
+        # Ensure setting is off
+        client.patch("/api/dashboard/settings/student-self-edit", headers=hod_headers, json={"student_self_edit_enabled": False})
+        
         before = client.get("/api/me/profile", headers=student_headers)
         if before.status_code != 200:
             pytest.skip("Test student account has no linked student row")
-        original_roll = before.json()["data"]["student"]["roll_no"]
+        assert before.json()["data"]["student_self_edit_enabled"] is False
 
-        r = client.patch("/api/me/profile", headers=student_headers, json={
-            "name": before.json()["data"]["student"].get("name") or "Test Student",
-            "roll_no": "ZZQA_HIJACKED_ROLL",  # not a real field on ProfileUpdateBody — must be ignored
-        })
+        r = client.patch("/api/me/profile", headers=student_headers, json={"name": "Attempted Self-Edit"})
+        assert r.status_code == 403
+        assert r.json()["error"]["code"] == "STUDENT_SELF_EDIT_DISABLED"
+
+    def test_student_can_edit_when_enabled_and_cannot_hijack_roll_no(self, client, student_headers, hod_headers):
+        """When enabled by admin, student can update profile and roll_no hijacking is ignored"""
+        # Enable setting
+        client.patch("/api/dashboard/settings/student-self-edit", headers=hod_headers, json={"student_self_edit_enabled": True})
+        try:
+            before = client.get("/api/me/profile", headers=student_headers)
+            if before.status_code != 200:
+                pytest.skip("Test student account has no linked student row")
+            assert before.json()["data"]["student_self_edit_enabled"] is True
+            original_roll = before.json()["data"]["student"]["roll_no"]
+            original_name = before.json()["data"]["student"].get("name") or "Test Student"
+
+            r = client.patch("/api/me/profile", headers=student_headers, json={
+                "name": original_name,
+                "roll_no": "ZZQA_HIJACKED_ROLL",  # not a real field on ProfileUpdateBody — must be ignored
+            })
+            assert r.status_code == 200
+            assert r.json()["data"]["student"]["roll_no"] == original_roll
+        finally:
+            # Revert setting back to False (default)
+            client.patch("/api/dashboard/settings/student-self-edit", headers=hod_headers, json={"student_self_edit_enabled": False})
+
+
+class TestStudentSelfEditSettingControl:
+    def test_setting_requires_auth(self, client):
+        r = client.get("/api/dashboard/settings/student-self-edit")
+        assert r.status_code == 401
+
+    def test_setting_forbidden_for_student(self, client, student_headers):
+        r = client.get("/api/dashboard/settings/student-self-edit", headers=student_headers)
+        assert r.status_code == 403
+        r_patch = client.patch("/api/dashboard/settings/student-self-edit", headers=student_headers, json={"student_self_edit_enabled": True})
+        assert r_patch.status_code == 403
+
+    def test_setting_patch_forbidden_for_faculty(self, client, faculty_headers):
+        r = client.patch("/api/dashboard/settings/student-self-edit", headers=faculty_headers, json={"student_self_edit_enabled": True})
+        assert r.status_code == 403
+
+    def test_admin_can_get_and_patch_setting(self, client, hod_headers):
+        # GET setting
+        r = client.get("/api/dashboard/settings/student-self-edit", headers=hod_headers)
         assert r.status_code == 200
-        assert r.json()["data"]["student"]["roll_no"] == original_roll
+        assert "student_self_edit_enabled" in r.json()["data"]
+
+        # PATCH to True
+        r2 = client.patch("/api/dashboard/settings/student-self-edit", headers=hod_headers, json={"student_self_edit_enabled": True})
+        assert r2.status_code == 200
+        assert r2.json()["data"]["student_self_edit_enabled"] is True
+
+        # PATCH back to False
+        r3 = client.patch("/api/dashboard/settings/student-self-edit", headers=hod_headers, json={"student_self_edit_enabled": False})
+        assert r3.status_code == 200
+        assert r3.json()["data"]["student_self_edit_enabled"] is False
 
 
 class TestMeChangePasswordRoute:

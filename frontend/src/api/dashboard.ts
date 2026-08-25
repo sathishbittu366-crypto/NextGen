@@ -122,3 +122,19 @@ export async function getSessionAbsent(sessionId: number): Promise<SessionRoster
 export async function getSubjectHistory(subjectId: number): Promise<SubjectHistoryData> {
   return apiFetch<SubjectHistoryData>(`/api/dashboard/student/subject/${subjectId}/history`);
 }
+
+export interface StudentSelfEditSetting {
+  student_self_edit_enabled: boolean;
+  ok?: boolean;
+}
+
+export async function getStudentSelfEditSetting(): Promise<StudentSelfEditSetting> {
+  return apiFetch<StudentSelfEditSetting>("/api/dashboard/settings/student-self-edit", { method: "GET" });
+}
+
+export async function updateStudentSelfEditSetting(enabled: boolean): Promise<StudentSelfEditSetting> {
+  return apiFetch<StudentSelfEditSetting>("/api/dashboard/settings/student-self-edit", {
+    method: "PATCH",
+    body: { student_self_edit_enabled: enabled },
+  });
+}

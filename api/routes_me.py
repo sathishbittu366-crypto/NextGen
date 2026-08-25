@@ -13,7 +13,15 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, File, UploadFile
 from pydantic import BaseModel
 
-from database import audit, change_password, connect, validate_staff_profile, validate_student, IntegrityError
+from database import (
+    audit,
+    change_password,
+    connect,
+    is_student_self_edit_enabled,
+    validate_staff_profile,
+    validate_student,
+    IntegrityError,
+)
 from sms_app.services.attendance_service import (
     attendance_pct_band, student_subject_session_history, subject_details,
 )
@@ -177,7 +185,10 @@ async def my_profile(user: CurrentUser = Depends(get_current_user)):
     row = _student_row(user)
     if not row:
         raise ApiError("Student record not found. Contact your HOD.", 404, "STUDENT_NOT_FOUND")
-    return ok({"student": dict(row)})
+    return ok({
+        "student": dict(row),
+        "student_self_edit_enabled": is_student_self_edit_enabled(),
+    })
 
 
 class ProfileUpdateBody(BaseModel):
@@ -195,7 +206,10 @@ class ProfileUpdateBody(BaseModel):
 
 @router.patch("/profile")
 async def update_profile(body: ProfileUpdateBody, user: CurrentUser = Depends(get_current_user)):
-    if user.role != "STUDENT":
+    if user.role == "STUDENT":
+        if not is_student_self_edit_enabled():
+            raise ApiError("Student self-editing is currently disabled by administrator", 403, "STUDENT_SELF_EDIT_DISABLED")
+    else:
         raise ApiError("STUDENT access only", 403, "FORBIDDEN")
     row = _student_row(user)
     if not row:

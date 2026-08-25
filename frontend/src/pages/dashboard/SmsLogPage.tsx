@@ -20,6 +20,7 @@ import {
 } from "../../api/logs";
 import { ApiClientError } from "../../api/client";
 import { getFacultyPage, type UserAccount } from "../../api/faculty";
+import { AdminStudentSelfEditCard } from "../../components/AdminStudentSelfEditCard";
 
 interface Props {
   user: { username: string; role: string };
@@ -344,6 +345,15 @@ export function SmsLogPage({ user, onLoggedOut }: Props) {
             </div>
           </>}
         </section>
+
+        {(isAdmin || user.username === "admin") && (
+          <AdminStudentSelfEditCard
+            onNotification={(msg, type) => {
+              if (type === "success") setSuccess(msg);
+              else setError(msg);
+            }}
+          />
+        )}
 
         <section style={cardStyle}>
           <div style={headerStyle}><div><div style={eyebrow}>OPERATIONS</div><h2 style={titleStyle}>Sending controls</h2></div></div>
