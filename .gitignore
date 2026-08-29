@@ -11,6 +11,8 @@ sms.db
 *.sqlite
 *.sqlite3
 
+.pytest_cache
+
 .venv/
 # Build outputs
 frontend/dist/

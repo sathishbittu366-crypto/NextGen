@@ -88,9 +88,30 @@ export interface StudentRecord {
   photo_path: string | null;
 }
 
+export interface StudentSubjectAttendance {
+  subject_id: number;
+  subject_code: string;
+  subject_name: string;
+  present_sessions: number;
+  total_sessions: number;
+  absent_sessions: number;
+  pct: number | null;
+  band: "green" | "yellow" | "red" | "muted";
+}
+
+export interface StudentAttendanceSummary {
+  subjects: StudentSubjectAttendance[];
+  total_classes: number;
+  total_present: number;
+  total_absent: number;
+  overall_pct: number | null;
+  overall_band: "green" | "yellow" | "red" | "muted";
+}
+
 export interface StudentDetail {
   student: StudentRecord;
   semester: { code: string; name: string } | null;
+  attendance?: StudentAttendanceSummary;
 }
 
 export interface StudentFormData {

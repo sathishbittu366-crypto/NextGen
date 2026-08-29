@@ -11,7 +11,7 @@ export interface UserAccount {
   id: number;
   username: string;
   full_name: string;
-  role: "HOD" | "FACULTY" | "STUDENT";
+  role: "ADMIN" | "HOD" | "FACULTY" | "STUDENT";
   department: string | null;
   designation: string | null;
   email: string | null;
@@ -22,7 +22,7 @@ export interface UserAccount {
 }
 
 export interface RolePermission {
-  role: "HOD" | "FACULTY";
+  role: "ADMIN" | "HOD" | "FACULTY";
   can_view_student_phone: number;
   can_edit_students: number;
   can_delete_students: number;
@@ -43,7 +43,7 @@ export interface CreateAccountBody {
   username: string;
   full_name: string;
   password: string;
-  role: "HOD" | "FACULTY" | "STUDENT";
+  role: "ADMIN" | "HOD" | "FACULTY" | "STUDENT";
   student_roll_no?: string;
 }
 

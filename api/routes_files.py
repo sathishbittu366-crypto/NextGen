@@ -34,7 +34,7 @@ def _authorize(user: CurrentUser, subdir: str, filename: str) -> None:
     silently 403 all staff on certificates, because staff accounts have
     student_roll_no = NULL and would fall through to the certificates check.
     """
-    if user.role in ("HOD", "FACULTY"):
+    if user.role in ("HOD", "FACULTY", "ADMIN"):
         return
 
     if subdir in ("students", "users", "academic_calendar"):

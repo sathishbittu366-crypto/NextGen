@@ -105,7 +105,21 @@ export function navItemsFor(role: Role): NavItem[] {
       { href: "/academic-calendar",   icon: ICONS.calendar,   label: "Academic Calendar",  key: "academic-calendar" },
     ];
   }
-  // HOD / ADMIN
+  if (role === "ADMIN") {
+    return [
+      { href: "/me/account",          icon: ICONS.profile,    label: "Profile",            key: "account" },
+      { href: "/attendance",          icon: ICONS.attendance, label: "Mark Attendance",    key: "attendance" },
+      { href: "/hod-dashboard",       icon: ICONS.trending,   label: "Admin Overview",     key: "hod-dashboard" },
+      { href: "/faculty",             icon: ICONS.faculty,    label: "Faculty",            key: "faculty" },
+      { href: "/subjects",            icon: ICONS.subjects,   label: "Subjects",           key: "subjects" },
+      { href: "/students",            icon: ICONS.students,   label: "Students",           key: "students" },
+      { href: "/academic-calendar",   icon: ICONS.calendar,   label: "Academic Calendar",  key: "academic-calendar" },
+      { href: "/audit-log",           icon: ICONS.audit,      label: "Audit Log",          key: "audit" },
+      { href: "/sms-log",             icon: ICONS.sms,        label: "SMS Log",            key: "sms-log" },
+      { href: "/problem-reports",     icon: ICONS.reports,    label: "Problem Reports",    key: "problem-reports" },
+    ];
+  }
+  // HOD
   return [
     { href: "/me/account",          icon: ICONS.profile,    label: "Profile",            key: "account" },
     { href: "/attendance",          icon: ICONS.attendance, label: "Mark Attendance",    key: "attendance" },

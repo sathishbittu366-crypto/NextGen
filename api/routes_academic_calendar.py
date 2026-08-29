@@ -21,7 +21,7 @@ router = APIRouter(prefix="/api/academic-calendar", tags=["academic-calendar"])
 
 @router.get("")
 async def academic_calendar(user: CurrentUser = Depends(get_current_user)):
-    if user.role == "HOD":
+    if user.role in ("HOD", "ADMIN"):
         rows = academic_calendar_for_semesters(None)
     elif user.role == "FACULTY":
         rows = academic_calendar_for_semesters(faculty_semester_ids(user.username))
@@ -42,7 +42,7 @@ async def academic_calendar(user: CurrentUser = Depends(get_current_user)):
 
     return ok({
         "semesters": semesters,
-        "can_edit": user.role == "HOD",
+        "can_edit": user.role in ("HOD", "ADMIN"),
     })
 
 
@@ -53,8 +53,8 @@ async def calendar_upload(
     file: UploadFile = File(...),
     user: CurrentUser = Depends(get_current_user),
 ):
-    if user.role != "HOD":
-        raise ApiError("HOD access only", 403, "FORBIDDEN")
+    if user.role not in ("HOD", "ADMIN"):
+        raise ApiError("HOD or Admin access only", 403, "FORBIDDEN")
     if kind not in ("timetable", "calendar"):
         raise ApiError(f"kind must be 'timetable' or 'calendar', got '{kind}'", 400, "VALIDATION_ERROR")
     with connect() as c:
@@ -75,8 +75,8 @@ async def calendar_delete(
     kind: str,
     user: CurrentUser = Depends(get_current_user),
 ):
-    if user.role != "HOD":
-        raise ApiError("HOD access only", 403, "FORBIDDEN")
+    if user.role not in ("HOD", "ADMIN"):
+        raise ApiError("HOD or Admin access only", 403, "FORBIDDEN")
     if kind not in ("timetable", "calendar"):
         raise ApiError(f"kind must be 'timetable' or 'calendar', got '{kind}'", 400, "VALIDATION_ERROR")
     with connect() as c:

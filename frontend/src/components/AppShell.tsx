@@ -74,7 +74,7 @@ export function AppShell({ user, activeNav, heading, whoami, onLoggedOut, childr
               NextGen SMS
             </div>
             <div style={{ fontSize: 11, color: "#7dd3fc", fontWeight: 800, letterSpacing: "0.8px", textTransform: "uppercase", marginTop: 3 }}>
-              {user.role === "HOD" || user.role === "ADMIN" ? "Developer / Admin" : `${user.role}`} Portal
+              {user.role === "ADMIN" ? "Admin" : user.role === "HOD" ? "HOD" : user.role} Portal
             </div>
           </div>
         </div>
@@ -97,7 +97,7 @@ export function AppShell({ user, activeNav, heading, whoami, onLoggedOut, childr
         </div>
         <div className="nav-footer">
           <div style={{ padding: "0 14px", color: "#e2e8f0", fontSize: 12, fontWeight: 700, marginBottom: 10 }}>
-            {user.username} &middot; {user.role === "HOD" || user.role === "ADMIN" ? "Developer (HOD/Admin)" : user.role}
+            {user.username} &middot; {user.role === "ADMIN" ? "Administrator" : user.role === "HOD" ? "Head of Department" : user.role}
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             <button

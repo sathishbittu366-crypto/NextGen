@@ -517,7 +517,7 @@ def set_student_semester(*, roll_no, semester_id, actor, effective_from=None):
 
 def month_register(*, faculty_username, semester_id, subject_id, year, month):
     """Build the month/register view strictly from: assigned subject, the
-    selected semester, actual sessions conducted by that faculty, and central
+    selected semester, actual sessions conducted by that faculty/department, and central
     holiday rows. Calendar days with no session are blank (not A)."""
     import calendar
 
@@ -525,18 +525,27 @@ def month_register(*, faculty_username, semester_id, subject_id, year, month):
     last_day = datetime(int(year), int(month), calendar.monthrange(int(year), int(month))[1]).date()
     with connect() as c:
         faculty = c.execute(
-            "SELECT username,role,hod_username,full_name FROM users WHERE username=%s AND active=1",
+            "SELECT username,role,hod_username,full_name,department FROM users WHERE username=%s AND active=1",
             (faculty_username,),
         ).fetchone()
         if not faculty:
             raise ValueError("Faculty account is not active")
+
+        is_hod_or_admin = faculty["role"] in ("HOD", "ADMIN")
+
         if faculty["role"] == "FACULTY":
             assigned = c.execute(
                 "SELECT 1 FROM subject_faculty WHERE subject_id=%s AND faculty_username=%s",
                 (subject_id, faculty_username),
             ).fetchone()
             if not assigned:
-                raise ValueError("This subject is not assigned to the faculty account")
+                has_sess = c.execute(
+                    "SELECT 1 FROM attendance_sessions WHERE subject_id=%s AND faculty_username=%s LIMIT 1",
+                    (subject_id, faculty_username),
+                ).fetchone()
+                if not has_sess:
+                    raise ValueError("This subject is not assigned to the faculty account")
+
         subject = c.execute(
             """SELECT s.id,s.code,s.name,s.semester_id,sem.code AS semester_code,sem.name AS semester_name
                FROM subjects s JOIN academic_semesters sem ON sem.id=s.semester_id
@@ -545,14 +554,35 @@ def month_register(*, faculty_username, semester_id, subject_id, year, month):
         if not subject or int(subject["semester_id"]) != int(semester_id):
             raise ValueError("Subject does not belong to the selected semester")
 
-        sessions = c.execute(
-            """SELECT id,attendance_date,session_type,duration_hours,topic,created_at
-               FROM attendance_sessions
-               WHERE faculty_username=%s AND semester_id=%s AND subject_id=%s
-                 AND attendance_date BETWEEN %s AND %s
-               ORDER BY attendance_date""",
-            (faculty_username, semester_id, subject_id, first_day.isoformat(), last_day.isoformat()),
-        ).fetchall()
+        hod_scope = faculty.get("hod_username") or faculty_username
+        if hod_scope == "admin" or not hod_scope:
+            from database import resolve_hod_for_department
+            dept_hod = resolve_hod_for_department(c, faculty.get("department") or "CSD")
+            if dept_hod:
+                hod_scope = dept_hod
+
+        if is_hod_or_admin:
+            sessions = c.execute(
+                """SELECT a.id, a.attendance_date, a.session_type, a.duration_hours, a.topic, a.created_at,
+                          a.faculty_username, u.full_name AS faculty_name
+                   FROM attendance_sessions a
+                   LEFT JOIN users u ON u.username = a.faculty_username
+                   WHERE a.semester_id=%s AND a.subject_id=%s
+                     AND a.attendance_date BETWEEN %s AND %s
+                     AND (a.faculty_username=%s OR u.hod_username=%s OR a.faculty_username='admin' OR %s='admin')
+                   ORDER BY a.attendance_date""",
+                (semester_id, subject_id, first_day.isoformat(), last_day.isoformat(), faculty_username, hod_scope, faculty_username),
+            ).fetchall()
+        else:
+            sessions = c.execute(
+                """SELECT id,attendance_date,session_type,duration_hours,topic,created_at,faculty_username
+                   FROM attendance_sessions
+                   WHERE faculty_username=%s AND semester_id=%s AND subject_id=%s
+                     AND attendance_date BETWEEN %s AND %s
+                   ORDER BY attendance_date""",
+                (faculty_username, semester_id, subject_id, first_day.isoformat(), last_day.isoformat()),
+            ).fetchall()
+
         sessions_by_date: dict[str, list[dict]] = {}
         for row in sessions:
             sessions_by_date.setdefault(str(row["attendance_date"]), []).append(dict(row))
@@ -564,9 +594,6 @@ def month_register(*, faculty_username, semester_id, subject_id, year, month):
             (first_day.isoformat(), last_day.isoformat(), semester_id),
         ).fetchall()
         holiday_map = {str(r["holiday_date"]): r["holiday_name"] for r in holidays}
-        # Sundays are statutory/default holidays for the register and do not
-        # need a DB row. HOD-entered holidays remain the source for festivals,
-        # second Saturdays, special closures, etc.
         sunday_map = {
             (first_day.replace(day=day)).isoformat(): "Sunday"
             for day in range(1, calendar.monthrange(int(year), int(month))[1] + 1)
@@ -575,40 +602,17 @@ def month_register(*, faculty_username, semester_id, subject_id, year, month):
         for sunday_date, sunday_name in sunday_map.items():
             holiday_map.setdefault(sunday_date, sunday_name)
 
-        hod_scope = faculty.get("hod_username") or faculty_username
-        if hod_scope == "admin" or not hod_scope:
-            from database import resolve_hod_for_department
-            dept_hod = resolve_hod_for_department(c, faculty.get("department") or "CSD")
-            if dept_hod:
-                hod_scope = dept_hod
-
         students = c.execute(
             """
             SELECT DISTINCT st.roll_no, st.name, st.current_semester_id
             FROM students st
             WHERE st.department='CSD'
-              AND (st.hod_username=%s OR st.hod_username IS NULL)
+              AND (st.hod_username=%s OR st.hod_username IS NULL OR %s='admin')
               AND st.active=1
               AND st.current_semester_id=%s
-              AND EXISTS (
-                  SELECT 1
-                  FROM attendance_sessions ss
-                  WHERE ss.faculty_username=%s
-                    AND ss.semester_id=%s
-                    AND ss.subject_id=%s
-                    AND ss.attendance_date BETWEEN %s AND %s
-              )
             ORDER BY st.roll_no
             """,
-            (
-                hod_scope,
-                semester_id,
-                faculty_username,
-                semester_id,
-                subject_id,
-                first_day.isoformat(),
-                last_day.isoformat(),
-            ),
+            (hod_scope, faculty_username, semester_id),
         ).fetchall()
 
         records = {}
@@ -627,10 +631,13 @@ def month_register(*, faculty_username, semester_id, subject_id, year, month):
                 records[(int(r["session_id"]), r["roll_no"])] = r["status"]
 
     days = []
+    total_teaching_sessions = 0
     for day in range(1, calendar.monthrange(int(year), int(month))[1] + 1):
         d = datetime(int(year), int(month), day).date().isoformat()
         day_sessions = sessions_by_date.get(d, [])
         representative = day_sessions[-1] if day_sessions else None
+        if day_sessions:
+            total_teaching_sessions += 1
         days.append({
             "day": day, "date": d, "weekday": first_day.replace(day=day).strftime("%a"),
             "holiday": d in holiday_map, "holiday_name": holiday_map.get(d),
@@ -645,6 +652,8 @@ def month_register(*, faculty_username, semester_id, subject_id, year, month):
     roster = []
     for st in students:
         cells = []
+        present_count = 0
+        marked_count = 0
         for day in days:
             status = None
             if day["holiday"]:
@@ -653,13 +662,44 @@ def month_register(*, faculty_username, semester_id, subject_id, year, month):
                 statuses = [records.get((sid, st["roll_no"])) for sid in day["session_ids"]]
                 if statuses and all(v == "Present" for v in statuses):
                     status = "P"
+                    present_count += 1
+                    marked_count += 1
                 elif any(v == "Absent" for v in statuses):
                     status = "A"
+                    marked_count += 1
+                elif statuses and any(v == "Present" for v in statuses):
+                    status = "P"
+                    present_count += 1
+                    marked_count += 1
             cells.append({
                 "day": day["day"], "status": status,
                 "session_id": day["session_id"], "session_ids": day["session_ids"],
             })
-        roster.append({"roll_no": st["roll_no"], "name": st["name"], "cells": cells})
+
+        pct = round(present_count * 100 / marked_count, 1) if marked_count > 0 else (100.0 if total_teaching_sessions == 0 else 0.0)
+        if marked_count == 0:
+            band = "muted"
+        elif pct >= 75.0:
+            band = "green"
+        elif pct >= 50.0:
+            band = "yellow"
+        else:
+            band = "red"
+
+        roster.append({
+            "roll_no": st["roll_no"],
+            "name": st["name"],
+            "cells": cells,
+            "present_count": present_count,
+            "absent_count": marked_count - present_count,
+            "total_count": marked_count,
+            "pct": pct,
+            "band": band,
+        })
+
+    class_avg = round(sum(r["pct"] for r in roster) / len(roster), 1) if roster else 0.0
+    eligible_count = sum(1 for r in roster if r["pct"] >= 75.0)
+    shortage_count = sum(1 for r in roster if r["pct"] < 75.0)
 
     return {
         "faculty_username": faculty_username,
@@ -669,6 +709,13 @@ def month_register(*, faculty_username, semester_id, subject_id, year, month):
         "year": int(year), "month": int(month),
         "month_label": first_day.strftime("%B %Y"),
         "days": days, "roster": roster,
+        "stats": {
+            "total_students": len(roster),
+            "total_sessions": total_teaching_sessions,
+            "class_avg_pct": class_avg,
+            "eligible_count": eligible_count,
+            "shortage_count": shortage_count,
+        }
     }
 
 

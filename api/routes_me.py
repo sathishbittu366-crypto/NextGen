@@ -45,13 +45,13 @@ SELF_FIELD_SPECS_KEYS = [
 
 
 # ============================================================
-# HOD / FACULTY account routes
+# Staff / Admin / HOD account routes
 # ============================================================
 
 @router.get("/account")
 async def my_account(user: CurrentUser = Depends(get_current_user)):
-    if user.role not in ("HOD", "FACULTY"):
-        raise ApiError("This route is for HOD and FACULTY only", 403, "FORBIDDEN")
+    if user.role not in ("ADMIN", "HOD", "FACULTY"):
+        raise ApiError("This route is for Staff and Administrators only", 403, "FORBIDDEN")
     with connect() as c:
         row = c.execute("SELECT * FROM users WHERE username=?", (user.username,)).fetchone()
     if not row:
@@ -79,8 +79,8 @@ class AccountUpdateBody(BaseModel):
 
 @router.patch("/account")
 async def update_account(body: AccountUpdateBody, user: CurrentUser = Depends(get_current_user)):
-    if user.role not in ("HOD", "FACULTY"):
-        raise ApiError("This route is for HOD and FACULTY only", 403, "FORBIDDEN")
+    if user.role not in ("ADMIN", "HOD", "FACULTY"):
+        raise ApiError("This route is for Staff and Administrators only", 403, "FORBIDDEN")
     data = {
         "full_name": _clean_str(body.full_name),
         "department": _clean_str(body.department),
@@ -117,8 +117,8 @@ async def account_photo(
     photo: UploadFile = File(...),
     user: CurrentUser = Depends(get_current_user),
 ):
-    if user.role not in ("HOD", "FACULTY"):
-        raise ApiError("This route is for HOD and FACULTY only", 403, "FORBIDDEN")
+    if user.role not in ("ADMIN", "HOD", "FACULTY"):
+        raise ApiError("This route is for Staff and Administrators only", 403, "FORBIDDEN")
     try:
         path = await save_profile_photo(photo, subdir="users", stem=user.username)
         with connect() as c:
@@ -131,8 +131,8 @@ async def account_photo(
 
 @router.post("/account/photo/delete")
 async def account_photo_delete(user: CurrentUser = Depends(get_current_user)):
-    if user.role not in ("HOD", "FACULTY"):
-        raise ApiError("This route is for HOD and FACULTY only", 403, "FORBIDDEN")
+    if user.role not in ("ADMIN", "HOD", "FACULTY"):
+        raise ApiError("This route is for Staff and Administrators only", 403, "FORBIDDEN")
     with connect() as c:
         c.execute("UPDATE users SET photo_path=NULL WHERE username=?", (user.username,))
         audit(c, user.username, "PHOTO_DELETE", "user", f"{user.username} (photo removed)")
@@ -147,11 +147,11 @@ class ChangePasswordBody(BaseModel):
 
 @router.post("/account/change-password")
 async def account_change_password(body: ChangePasswordBody, user: CurrentUser = Depends(get_current_user)):
-    """HOD/FACULTY own-account password change — separate route from /api/auth/change-password
+    """Staff/HOD/Admin own-account password change — separate route from /api/auth/change-password
     per §7.6: reached from the My Account screen, not the forced-reset gate.
     """
-    if user.role not in ("HOD", "FACULTY"):
-        raise ApiError("This route is for HOD and FACULTY only", 403, "FORBIDDEN")
+    if user.role not in ("ADMIN", "HOD", "FACULTY"):
+        raise ApiError("This route is for Staff and Administrators only", 403, "FORBIDDEN")
     if body.new_password != body.confirm_password:
         raise ApiError("New passwords do not match", 400, "PASSWORD_MISMATCH")
     try:

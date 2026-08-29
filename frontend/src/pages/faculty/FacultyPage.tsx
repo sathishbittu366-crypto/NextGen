@@ -48,7 +48,7 @@ export function FacultyPage({ user, onLoggedOut }: Props) {
   const [formUsername, setFormUsername] = useState("");
   const [formFullName, setFormFullName] = useState("");
   const [formPassword, setFormPassword] = useState("");
-  const [formRole, setFormRole] = useState<"HOD" | "FACULTY">("FACULTY");
+  const [formRole, setFormRole] = useState<"ADMIN" | "HOD" | "FACULTY">("FACULTY");
 
   // Permissions state
   const [facultyPerms, setFacultyPerms] = useState<RolePermission>({
@@ -373,9 +373,10 @@ export function FacultyPage({ user, onLoggedOut }: Props) {
               </div>
               <div className="field">
                 <label style={{ fontWeight: 700, fontSize: 12, color: "var(--heading-accent)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 6, display: "block" }}>Role *</label>
-                <select className="input-field" value={formRole} onChange={e => setFormRole(e.target.value as "HOD" | "FACULTY")} style={{ width: "100%", padding: "10px 14px", borderRadius: 10, background: "var(--input-bg)", border: "1px solid var(--input-border)", color: "var(--text)", fontWeight: 600 }}>
+                <select className="input-field" value={formRole} onChange={e => setFormRole(e.target.value as "ADMIN" | "HOD" | "FACULTY")} style={{ width: "100%", padding: "10px 14px", borderRadius: 10, background: "var(--input-bg)", border: "1px solid var(--input-border)", color: "var(--text)", fontWeight: 600 }}>
                   <option value="FACULTY">FACULTY</option>
                   <option value="HOD">HOD</option>
+                  <option value="ADMIN">ADMIN</option>
                 </select>
               </div>
             </div>
@@ -401,7 +402,7 @@ export function FacultyPage({ user, onLoggedOut }: Props) {
                 <td>{acc.username}</td>
                 <td>{acc.full_name || <span style={{ color: "var(--muted)" }}>—</span>}</td>
                 <td>
-                  <span className={`chip ${acc.role === "HOD" ? "chip-yellow" : "chip-muted"}`}>
+                  <span className={`chip ${acc.role === "ADMIN" ? "chip-purple" : acc.role === "HOD" ? "chip-yellow" : "chip-muted"}`}>
                     {acc.role}
                   </span>
                 </td>
@@ -432,7 +433,7 @@ export function FacultyPage({ user, onLoggedOut }: Props) {
                   </button>
                 </td>
                 <td className="center" style={{ whiteSpace: "nowrap" }}>
-                  {acc.role !== "HOD" && acc.username !== user.username ? (
+                  {acc.role !== "HOD" && acc.role !== "ADMIN" && acc.username !== user.username && acc.username !== "admin" ? (
                     <>
                       <button className={`btn btn-sm ${acc.active ? "btn-outline" : "btn-green"}`}
                         onClick={() => handleToggle(acc)}>

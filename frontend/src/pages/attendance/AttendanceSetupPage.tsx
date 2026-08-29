@@ -15,10 +15,13 @@ import {
   type SubjectOption,
   type SessionType,
   type MonthlyAttendanceRegister,
+  type SemesterAttendanceSummaryResponse,
+  type StudentSemesterSummary,
   getSetup,
   getSubjectsForSemester,
   getMonthlyRegister,
   monthlyRegisterPdfUrl,
+  getSemesterAttendanceSummary,
   openSession,
 } from "../../api/attendance";
 import { getDashboard, type SessionRow } from "../../api/dashboard";
@@ -121,7 +124,8 @@ export function AttendanceSetupPage({ user, onLoggedOut }: AttendanceSetupPagePr
     }
   }, [sessionType]);
 
-  // — Monthly Attendance Register state
+  // — Monthly Attendance Register & Semester Summary state
+  const [viewMode, setViewMode] = useState<"register" | "summary">("register");
   const [month, setMonth] = useState(() => {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
@@ -132,6 +136,12 @@ export function AttendanceSetupPage({ user, onLoggedOut }: AttendanceSetupPagePr
   const [registerError, setRegisterError] = useState<string | null>(null);
   const [selectedGridDate, setSelectedGridDate] = useState<string | null>(null);
   const [hoveredRow, setHoveredRow] = useState<number | null>(null);
+
+  // Semester All-Subjects Matrix state
+  const [semesterSummary, setSemesterSummary] = useState<SemesterAttendanceSummaryResponse | null>(null);
+  const [loadingSummary, setLoadingSummary] = useState(false);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
+  const [selectedStudentDrilldown, setSelectedStudentDrilldown] = useState<StudentSemesterSummary | null>(null);
 
   const [regYear, regMonthNum] = useMemo(() => {
     const parts = month.split("-").map(Number);
@@ -154,6 +164,7 @@ export function AttendanceSetupPage({ user, onLoggedOut }: AttendanceSetupPagePr
     setMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
   };
 
+  // Fetch monthly register for selected semester and subject
   useEffect(() => {
     if (!semesterId || !subjectId || !regYear || !regMonthNum) {
       setRegister(null);
@@ -185,6 +196,37 @@ export function AttendanceSetupPage({ user, onLoggedOut }: AttendanceSetupPagePr
     };
   }, [semesterId, subjectId, regYear, regMonthNum]);
 
+  // Fetch semester-wide attendance summary across all subjects
+  useEffect(() => {
+    if (!semesterId) {
+      setSemesterSummary(null);
+      return;
+    }
+    let cancelled = false;
+    setLoadingSummary(true);
+    setSummaryError(null);
+    getSemesterAttendanceSummary({
+      semesterId,
+      year: regYear,
+      month: regMonthNum,
+    })
+      .then((data) => {
+        if (!cancelled) setSemesterSummary(data);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setSemesterSummary(null);
+          setSummaryError(err instanceof ApiClientError ? err.message : "Failed to load semester attendance summary");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingSummary(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [semesterId, regYear, regMonthNum]);
+
   const printPdfUrl = (register && semesterId && subjectId)
     ? monthlyRegisterPdfUrl({ semesterId, subjectId, year: regYear, month: regMonthNum })
     : "";
@@ -200,6 +242,28 @@ export function AttendanceSetupPage({ user, onLoggedOut }: AttendanceSetupPagePr
       (r) => r.roll_no.toLowerCase().includes(q) || r.name.toLowerCase().includes(q)
     );
   }, [register, studentSearch]);
+
+  // Filter semester summary students by studentSearch
+  const filteredSemesterStudents = useMemo(() => {
+    if (!semesterSummary) return [];
+    if (!studentSearch.trim()) return semesterSummary.students;
+    const q = studentSearch.trim().toLowerCase();
+    return semesterSummary.students.filter(
+      (s) => s.roll_no.toLowerCase().includes(q) || s.name.toLowerCase().includes(q)
+    );
+  }, [semesterSummary, studentSearch]);
+
+  const semesterSummaryStats = useMemo(() => {
+    if (!semesterSummary || semesterSummary.students.length === 0) {
+      return { totalStudents: 0, eligibleCount: 0, shortageCount: 0, avgPct: 0 };
+    }
+    const totalStudents = semesterSummary.students.length;
+    const eligibleCount = semesterSummary.students.filter((s) => (s.overall_pct ?? 0) >= 75).length;
+    const shortageCount = totalStudents - eligibleCount;
+    const sumPct = semesterSummary.students.reduce((acc, s) => acc + (s.overall_pct ?? 0), 0);
+    const avgPct = totalStudents > 0 ? Math.round(sumPct / totalStudents) : 0;
+    return { totalStudents, eligibleCount, shortageCount, avgPct };
+  }, [semesterSummary]);
 
   // Derived statistics for the register
   const registerStats = useMemo(() => {
@@ -591,17 +655,71 @@ export function AttendanceSetupPage({ user, onLoggedOut }: AttendanceSetupPagePr
                   </div>
                   <div>
                     <h3 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: "var(--text)" }}>
-                      Monthly Attendance Register {selectedSubject ? `— ${selectedSubject.code}` : ""}
+                      {viewMode === "register"
+                        ? `Monthly Attendance Register ${selectedSubject ? `— ${selectedSubject.code}` : ""}`
+                        : `Semester Subject-Wise Attendance Matrix ${selectedSemester ? `— ${selectedSemester.code}` : ""}`}
                     </h3>
                     <p style={{ margin: "2px 0 0 0", color: "var(--muted)", fontSize: 13 }}>
-                      {register?.month_label || "Select semester and subject to view the calendar register."} · Faculty: {register?.faculty_name || user.full_name || user.username}
+                      {viewMode === "register"
+                        ? `${register?.month_label || "Select semester and subject"} · ${user.role === "HOD" ? `Department Scope (HOD: ${user.full_name || user.username})` : `Faculty: ${register?.faculty_name || user.full_name || user.username}`}`
+                        : `${selectedSemester?.code ? `${selectedSemester.code} (${selectedSemester.name})` : "Selected Semester"} · All Subjects Attendance Matrix for Students`}
                     </p>
                   </div>
                 </div>
               </div>
 
-              {/* Month Stepper, Picker & Print PDF */}
+              {/* Controls: View Mode Switch + Month Stepper + Print */}
               <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                {/* View Mode Toggle Buttons */}
+                <div style={{
+                  display: "inline-flex",
+                  background: "#f1f5f9",
+                  padding: 3,
+                  borderRadius: 10,
+                  border: "1px solid var(--border)",
+                }}>
+                  <button
+                    type="button"
+                    onClick={() => setViewMode("register")}
+                    style={{
+                      padding: "5px 12px",
+                      borderRadius: 8,
+                      border: "none",
+                      fontWeight: 700,
+                      fontSize: 12,
+                      cursor: "pointer",
+                      background: viewMode === "register" ? "#ffffff" : "transparent",
+                      color: viewMode === "register" ? "#0f172a" : "var(--muted)",
+                      boxShadow: viewMode === "register" ? "0 2px 6px rgba(0,0,0,0.08)" : "none",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                    }}
+                  >
+                    📅 Subject Calendar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setViewMode("summary")}
+                    style={{
+                      padding: "5px 12px",
+                      borderRadius: 8,
+                      border: "none",
+                      fontWeight: 700,
+                      fontSize: 12,
+                      cursor: "pointer",
+                      background: viewMode === "summary" ? "#ffffff" : "transparent",
+                      color: viewMode === "summary" ? "#0f172a" : "var(--muted)",
+                      boxShadow: viewMode === "summary" ? "0 2px 6px rgba(0,0,0,0.08)" : "none",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                    }}
+                  >
+                    📊 All Subjects Matrix
+                  </button>
+                </div>
+
                 {/* Month stepper buttons */}
                 <div style={{
                   display: "inline-flex",
@@ -664,764 +782,1449 @@ export function AttendanceSetupPage({ user, onLoggedOut }: AttendanceSetupPagePr
                   </button>
                 </div>
 
-                {/* Print PDF Button */}
-                <button
-                  type="button"
-                  className="btn btn-outline"
-                  disabled={!printPdfUrl}
-                  onClick={() => {
-                    if (printPdfUrl) {
-                      window.open(printPdfUrl, "_blank", "noopener,noreferrer");
-                    }
-                  }}
-                  style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: 8,
-                    height: 38,
-                    padding: "0 14px",
-                    borderRadius: 10,
-                    fontWeight: 700,
-                    fontSize: 13,
-                    opacity: !printPdfUrl ? 0.5 : 1,
-                    cursor: !printPdfUrl ? "not-allowed" : "pointer",
-                    background: "#ffffff",
-                  }}
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
-                  Print Register (PDF)
-                </button>
+                {/* Print Button */}
+                {viewMode === "register" ? (
+                  <button
+                    type="button"
+                    className="btn btn-outline"
+                    disabled={!printPdfUrl}
+                    onClick={() => {
+                      if (printPdfUrl) {
+                        window.open(printPdfUrl, "_blank", "noopener,noreferrer");
+                      }
+                    }}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 8,
+                      height: 38,
+                      padding: "0 14px",
+                      borderRadius: 10,
+                      fontWeight: 700,
+                      fontSize: 13,
+                      opacity: !printPdfUrl ? 0.5 : 1,
+                      cursor: !printPdfUrl ? "not-allowed" : "pointer",
+                      background: "#ffffff",
+                    }}
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+                    Print Register (PDF)
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn btn-outline"
+                    onClick={() => window.print()}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 8,
+                      height: 38,
+                      padding: "0 14px",
+                      borderRadius: 10,
+                      fontWeight: 700,
+                      fontSize: 13,
+                      background: "#ffffff",
+                    }}
+                  >
+                    🖨️ Print Matrix
+                  </button>
+                )}
               </div>
             </div>
 
-            {/* KPI Stat Badges & Search Filter */}
-            {register && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                <div style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
-                  gap: 12,
-                }}>
-                  <div style={{
-                    padding: "12px 14px", borderRadius: 12, background: "#f8fafc",
-                    border: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 10,
-                  }}>
-                    <div style={{ fontSize: 20 }}>👥</div>
-                    <div>
-                      <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase" }}>Total Students</div>
-                      <div style={{ fontSize: 18, fontWeight: 800, color: "var(--text)" }}>{registerStats.totalStudents}</div>
-                    </div>
-                  </div>
-
-                  <div style={{
-                    padding: "12px 14px", borderRadius: 12, background: "#f8fafc",
-                    border: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 10,
-                  }}>
-                    <div style={{ fontSize: 20 }}>📅</div>
-                    <div>
-                      <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase" }}>Teaching Days</div>
-                      <div style={{ fontSize: 18, fontWeight: 800, color: "var(--text)" }}>{registerStats.totalSessions}</div>
-                    </div>
-                  </div>
-
-                  <div style={{
-                    padding: "12px 14px", borderRadius: 12, background: "#f8fafc",
-                    border: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 10,
-                  }}>
-                    <div style={{ fontSize: 20 }}>📊</div>
-                    <div>
-                      <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase" }}>Avg Attendance</div>
+            {/* ══════════════════════════════════════════════════════ */}
+            {/* VIEW MODE 1: SUBJECT MONTHLY REGISTER CALENDAR GRID   */}
+            {/* ══════════════════════════════════════════════════════ */}
+            {viewMode === "register" && (
+              <>
+                {/* KPI Stat Badges & Search Filter */}
+                {register && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                    <div style={{
+                      display: "grid",
+                      gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+                      gap: 12,
+                    }}>
                       <div style={{
-                        fontSize: 18, fontWeight: 800,
-                        color: registerStats.classAvgPct >= 75 ? "#15803d" : registerStats.classAvgPct >= 60 ? "#b45309" : "#b91c1c",
+                        padding: "12px 14px", borderRadius: 12, background: "#f8fafc",
+                        border: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 10,
                       }}>
-                        {registerStats.classAvgPct}%
+                        <div style={{ fontSize: 20 }}>👥</div>
+                        <div>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase" }}>Total Students</div>
+                          <div style={{ fontSize: 18, fontWeight: 800, color: "var(--text)" }}>{registerStats.totalStudents}</div>
+                        </div>
+                      </div>
+
+                      <div style={{
+                        padding: "12px 14px", borderRadius: 12, background: "#f8fafc",
+                        border: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 10,
+                      }}>
+                        <div style={{ fontSize: 20 }}>📅</div>
+                        <div>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase" }}>Teaching Days</div>
+                          <div style={{ fontSize: 18, fontWeight: 800, color: "var(--text)" }}>{registerStats.totalSessions}</div>
+                        </div>
+                      </div>
+
+                      <div style={{
+                        padding: "12px 14px", borderRadius: 12, background: "#f8fafc",
+                        border: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 10,
+                      }}>
+                        <div style={{ fontSize: 20 }}>📊</div>
+                        <div>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase" }}>Avg Attendance</div>
+                          <div style={{
+                            fontSize: 18, fontWeight: 800,
+                            color: registerStats.classAvgPct >= 75 ? "#15803d" : registerStats.classAvgPct >= 60 ? "#b45309" : "#b91c1c",
+                          }}>
+                            {registerStats.classAvgPct}%
+                          </div>
+                        </div>
+                      </div>
+
+                      <div style={{
+                        padding: "12px 14px", borderRadius: 12, background: "#f8fafc",
+                        border: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 10,
+                      }}>
+                        <div style={{ fontSize: 20 }}>🎯</div>
+                        <div>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase" }}>Eligible (≥75%)</div>
+                          <div style={{ fontSize: 18, fontWeight: 800, color: "#15803d" }}>
+                            {registerStats.eligibleCount} <span style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)" }}>students</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div style={{
+                        padding: "12px 14px", borderRadius: 12, background: "#f8fafc",
+                        border: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 10,
+                      }}>
+                        <div style={{ fontSize: 20 }}>⚠️</div>
+                        <div>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase" }}>Shortage (&lt;75%)</div>
+                          <div style={{ fontSize: 18, fontWeight: 800, color: registerStats.shortageCount > 0 ? "#b91c1c" : "#15803d" }}>
+                            {registerStats.shortageCount} <span style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)" }}>students</span>
+                          </div>
+                        </div>
                       </div>
                     </div>
-                  </div>
 
-                  <div style={{
-                    padding: "12px 14px", borderRadius: 12, background: "#f8fafc",
-                    border: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 10,
-                  }}>
-                    <div style={{ fontSize: 20 }}>🎯</div>
-                    <div>
-                      <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase" }}>Eligible (≥75%)</div>
-                      <div style={{ fontSize: 18, fontWeight: 800, color: "#15803d" }}>
-                        {registerStats.eligibleCount} <span style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)" }}>students</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div style={{
-                    padding: "12px 14px", borderRadius: 12, background: "#f8fafc",
-                    border: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 10,
-                  }}>
-                    <div style={{ fontSize: 20 }}>⚠️</div>
-                    <div>
-                      <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase" }}>Shortage (&lt;75%)</div>
-                      <div style={{ fontSize: 18, fontWeight: 800, color: registerStats.shortageCount > 0 ? "#b91c1c" : "#15803d" }}>
-                        {registerStats.shortageCount} <span style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)" }}>students</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Search / Filter bar + Legend */}
-                <div style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  flexWrap: "wrap",
-                  gap: 12,
-                  padding: "10px 14px",
-                  background: "#f8fafc",
-                  borderRadius: 12,
-                  border: "1px solid var(--border)",
-                }}>
-                  {/* Search box */}
-                  <div style={{ position: "relative", minWidth: 240, flex: "1 1 240px", maxWidth: 360 }}>
-                    <input
-                      type="text"
-                      className="input-field"
-                      placeholder="🔍 Search roll no or student name…"
-                      value={studentSearch}
-                      onChange={(e) => setStudentSearch(e.target.value)}
-                      style={{
-                        height: 34,
-                        padding: "0 28px 0 10px",
-                        fontSize: 12,
-                        borderRadius: 8,
-                        background: "#ffffff",
-                      }}
-                    />
-                    {studentSearch && (
-                      <button
-                        type="button"
-                        onClick={() => setStudentSearch("")}
-                        style={{
-                          position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)",
-                          background: "none", border: "none", color: "var(--muted)", cursor: "pointer",
-                          fontSize: 12, fontWeight: 700,
-                        }}
-                      >
-                        ✕
-                      </button>
-                    )}
-                  </div>
-
-                  {/* Status Legend */}
-                  <div style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 12,
-                    flexWrap: "wrap",
-                    fontSize: 12,
-                    fontWeight: 600,
-                    color: "var(--muted)",
-                  }}>
-                    <span style={{ fontWeight: 800, color: "var(--text)" }}>Legend:</span>
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-                      <span style={{ width: 20, height: 20, borderRadius: 5, background: "#dcfce7", color: "#15803d", border: "1px solid #bbf7d0", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 900 }}>P</span>
-                      Present
-                    </span>
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-                      <span style={{ width: 20, height: 20, borderRadius: 5, background: "#fee2e2", color: "#b91c1c", border: "1px solid #fecaca", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 900 }}>A</span>
-                      Absent
-                    </span>
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-                      <span style={{ width: 20, height: 20, borderRadius: 5, background: "#fef3c7", color: "#b45309", border: "1px solid #fde68a", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 900 }}>H</span>
-                      Holiday / Sunday
-                    </span>
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-                      <span style={{ width: 20, height: 20, borderRadius: 5, background: "#f1f5f9", color: "#94a3b8", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 900 }}>·</span>
-                      No Class
-                    </span>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Selected Date Inspector Banner */}
-            {selectedGridDate && selectedDayInfo && (
-              <div style={{
-                background: "linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%)",
-                border: "1.5px solid #38bdf8",
-                borderRadius: 12,
-                padding: "14px 18px",
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                flexWrap: "wrap",
-                gap: 12,
-                boxShadow: "0 4px 14px rgba(56, 189, 248, 0.15)",
-              }}>
-                <div>
-                  <div style={{ fontWeight: 800, fontSize: 14, color: "#0369a1", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                    <span>📅 {selectedDayInfo.date} ({selectedDayInfo.weekday})</span>
-                    {selectedDayInfo.holiday && (
-                      <span style={{ background: "#fef3c7", color: "#b45309", border: "1px solid #fde68a", padding: "2px 8px", borderRadius: 6, fontSize: 11, fontWeight: 800 }}>
-                        🎉 Holiday: {selectedDayInfo.holiday_name || "Holiday"}
-                      </span>
-                    )}
-                    {selectedDayInfo.session_id && (
-                      <span style={{ background: "#dcfce7", color: "#15803d", border: "1px solid #bbf7d0", padding: "2px 8px", borderRadius: 6, fontSize: 11, fontWeight: 800 }}>
-                        ✅ {selectedDayInfo.session_type || "CLASS"} ({selectedDayInfo.duration_hours}h)
-                      </span>
-                    )}
-                  </div>
-                  {selectedDayInfo.topic && (
-                    <div style={{ fontSize: 12, color: "#334155", marginTop: 4 }}>
-                      Topic: <strong>"{selectedDayInfo.topic}"</strong>
-                    </div>
-                  )}
-                  {!selectedDayInfo.holiday && !selectedDayInfo.session_id && (
-                    <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>
-                      No attendance session was recorded on this day.
-                    </div>
-                  )}
-                </div>
-
-                <div style={{ display: "flex", gap: 10 }}>
-                  {selectedDayInfo.session_id && (
-                    <button
-                      type="button"
-                      className="btn btn-sm"
-                      onClick={() => navigate(`/attendance/sessions/${selectedDayInfo.session_id}`)}
-                      style={{
-                        padding: "6px 14px", borderRadius: 8, fontWeight: 700, fontSize: 13,
-                        background: "#0284c7", color: "#fff", border: "none", cursor: "pointer",
-                      }}
-                    >
-                      👁️ Open Saved Session
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    className="btn btn-outline btn-sm"
-                    onClick={() => setSelectedGridDate(null)}
-                    style={{ padding: "6px 12px", borderRadius: 8, fontSize: 12, background: "#fff" }}
-                  >
-                    Close
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Error / Loading States */}
-            {registerError && <div className="login-error">{registerError}</div>}
-            {loadingRegister && <div className="empty-note">Loading monthly register data…</div>}
-
-            {/* Empty state if no subject/semester selected */}
-            {!loadingRegister && !register && !registerError && (
-              <div className="empty-note" style={{ padding: 32, background: "#f8fafc", borderRadius: 12, textAlign: "center" }}>
-                {!semesterId || !subjectId
-                  ? "Please select a semester and subject from the form above to view the monthly register."
-                  : "No attendance register data found for this selection."}
-              </div>
-            )}
-
-            {/* Register Grid Table */}
-            {!loadingRegister && register && (
-              <div
-                style={{
-                  position: "relative",
-                  width: "100%",
-                  overflowX: "auto",
-                  border: "1px solid var(--border)",
-                  borderRadius: 12,
-                  boxShadow: "0 2px 6px rgba(0,0,0,0.04)",
-                  background: "#ffffff",
-                }}
-              >
-                <table
-                  style={{
-                    width: "max-content",
-                    minWidth: "100%",
-                    borderCollapse: "separate",
-                    borderSpacing: 0,
-                    fontSize: 12,
-                  }}
-                >
-                  <thead>
-                    <tr style={{ background: "#f8fafc" }}>
-                      {/* Column 1: # */}
-                      <th style={{
-                        position: "sticky",
-                        left: 0,
-                        top: 0,
-                        zIndex: 30,
-                        background: "#f8fafc",
-                        width: 44,
-                        minWidth: 44,
-                        maxWidth: 44,
-                        padding: "10px 4px",
-                        textAlign: "center",
-                        borderRight: "1px solid var(--border)",
-                        borderBottom: "2px solid var(--border)",
-                        fontWeight: 800,
-                        color: "var(--muted)",
-                      }}>
-                        #
-                      </th>
-
-                      {/* Column 2: Hall Ticket */}
-                      <th style={{
-                        position: "sticky",
-                        left: 44,
-                        top: 0,
-                        zIndex: 30,
-                        background: "#f8fafc",
-                        width: 125,
-                        minWidth: 125,
-                        maxWidth: 125,
-                        padding: "10px 10px",
-                        textAlign: "left",
-                        borderRight: "1px solid var(--border)",
-                        borderBottom: "2px solid var(--border)",
-                        fontWeight: 800,
-                        color: "var(--text)",
-                        textTransform: "uppercase",
-                        letterSpacing: "0.03em",
-                      }}>
-                        Hall Ticket
-                      </th>
-
-                      {/* Column 3: Student Name */}
-                      <th style={{
-                        position: "sticky",
-                        left: 169,
-                        top: 0,
-                        zIndex: 30,
-                        background: "#f8fafc",
-                        width: 190,
-                        minWidth: 190,
-                        maxWidth: 190,
-                        padding: "10px 12px",
-                        textAlign: "left",
-                        borderRight: "2px solid #cbd5e1",
-                        borderBottom: "2px solid var(--border)",
-                        boxShadow: "4px 0 8px -2px rgba(15, 23, 42, 0.08)",
-                        fontWeight: 800,
-                        color: "var(--text)",
-                      }}>
-                        Student Name
-                      </th>
-
-                      {/* Date Columns 01..31 */}
-                      {register.days.map((d) => {
-                        const isSunday = d.weekday === "Sunday";
-                        const isHoliday = d.holiday;
-                        const hasSession = d.session_count > 0;
-                        const isSelected = selectedGridDate === d.date;
-                        return (
-                          <th
-                            key={d.date}
-                            onClick={() => setSelectedGridDate(d.date)}
-                            title={d.holiday_name || d.topic || (hasSession ? `${d.session_type} session (${d.duration_hours}h)` : "No session recorded")}
+                    {/* Search / Filter bar + Legend */}
+                    <div style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      flexWrap: "wrap",
+                      gap: 12,
+                      padding: "10px 14px",
+                      background: "#f8fafc",
+                      borderRadius: 12,
+                      border: "1px solid var(--border)",
+                    }}>
+                      {/* Search box */}
+                      <div style={{ position: "relative", minWidth: 240, flex: "1 1 240px", maxWidth: 360 }}>
+                        <input
+                          type="text"
+                          className="input-field"
+                          placeholder="🔍 Search roll no or student name…"
+                          value={studentSearch}
+                          onChange={(e) => setStudentSearch(e.target.value)}
+                          style={{
+                            height: 34,
+                            padding: "0 28px 0 10px",
+                            fontSize: 12,
+                            borderRadius: 8,
+                            background: "#ffffff",
+                          }}
+                        />
+                        {studentSearch && (
+                          <button
+                            type="button"
+                            onClick={() => setStudentSearch("")}
                             style={{
-                              width: 36,
-                              minWidth: 36,
-                              maxWidth: 36,
-                              padding: "6px 2px",
-                              textAlign: "center",
-                              cursor: "pointer",
-                              background: isSelected
-                                ? "#e0f2fe"
-                                : isHoliday
-                                ? "#fffbeb"
-                                : hasSession
-                                ? "#f0fdf4"
-                                : "#f8fafc",
-                              borderRight: "1px solid var(--border)",
-                              borderBottom: "2px solid var(--border)",
-                              transition: "all 0.15s ease",
+                              position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)",
+                              background: "none", border: "none", color: "var(--muted)", cursor: "pointer",
+                              fontSize: 12, fontWeight: 700,
                             }}
                           >
-                            <div style={{
-                              fontWeight: 800,
-                              fontSize: 12,
-                              color: isHoliday ? "#b45309" : hasSession ? "#15803d" : "var(--text)",
-                            }}>
-                              {String(d.day).padStart(2, "0")}
-                            </div>
-                            <div style={{
-                              fontSize: 9,
-                              fontWeight: 700,
-                              color: isSunday ? "#dc2626" : isHoliday ? "#b45309" : hasSession ? "#16a34a" : "var(--muted)",
-                              textTransform: "uppercase",
-                            }}>
-                              {d.weekday.slice(0, 2)}
-                            </div>
-                            {hasSession && (
-                              <div style={{
-                                width: 4, height: 4, borderRadius: "50%", background: "#16a34a",
-                                margin: "2px auto 0 auto",
-                              }} />
-                            )}
-                          </th>
-                        );
-                      })}
+                            ✕
+                          </button>
+                        )}
+                      </div>
 
-                      {/* Right Summary Columns */}
-                      <th style={{
-                        position: "sticky",
-                        right: 70,
-                        top: 0,
-                        zIndex: 28,
-                        background: "#f8fafc",
-                        width: 70,
-                        minWidth: 70,
-                        padding: "10px 6px",
-                        textAlign: "center",
-                        borderLeft: "2px solid #cbd5e1",
-                        borderRight: "1px solid var(--border)",
-                        borderBottom: "2px solid var(--border)",
-                        fontWeight: 800,
-                        color: "var(--text)",
+                      {/* Status Legend */}
+                      <div style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 12,
+                        flexWrap: "wrap",
+                        fontSize: 12,
+                        fontWeight: 600,
+                        color: "var(--muted)",
                       }}>
-                        Attd
-                      </th>
-                      <th style={{
-                        position: "sticky",
-                        right: 0,
-                        top: 0,
-                        zIndex: 28,
-                        background: "#f8fafc",
-                        width: 70,
-                        minWidth: 70,
-                        padding: "10px 6px",
-                        textAlign: "center",
-                        borderBottom: "2px solid var(--border)",
-                        fontWeight: 800,
-                        color: "var(--text)",
-                      }}>
-                        % Attd
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredRoster.map((row, rowIdx) => {
-                      const isHovered = hoveredRow === rowIdx;
-                      const isAlt = rowIdx % 2 === 1;
-                      const rowBg = isHovered ? "#f0f7ff" : isAlt ? "#f8fafc" : "#ffffff";
+                        <span style={{ fontWeight: 800, color: "var(--text)" }}>Legend:</span>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                          <span style={{ width: 20, height: 20, borderRadius: 5, background: "#dcfce7", color: "#15803d", border: "1px solid #bbf7d0", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 900 }}>P</span>
+                          Present
+                        </span>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                          <span style={{ width: 20, height: 20, borderRadius: 5, background: "#fee2e2", color: "#b91c1c", border: "1px solid #fecaca", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 900 }}>A</span>
+                          Absent
+                        </span>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                          <span style={{ width: 20, height: 20, borderRadius: 5, background: "#fef3c7", color: "#b45309", border: "1px solid #fde68a", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 900 }}>H</span>
+                          Holiday / Sunday
+                        </span>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                          <span style={{ width: 20, height: 20, borderRadius: 5, background: "#f1f5f9", color: "#94a3b8", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 900 }}>·</span>
+                          No Class
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
-                      // Calculate student metrics
-                      const teachingDays = register.days.filter((d) => d.session_count > 0);
-                      const totalSessions = teachingDays.length;
-                      let presentCount = 0;
-                      row.cells.forEach((cell, idx) => {
-                        const day = register.days[idx];
-                        if (day && day.session_count > 0 && cell.status === "P") {
-                          presentCount += 1;
-                        }
-                      });
-                      const studentPct = totalSessions > 0 ? Math.round((presentCount / totalSessions) * 100) : 100;
+                {/* Selected Date Inspector Banner */}
+                {selectedGridDate && selectedDayInfo && (
+                  <div style={{
+                    background: "linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%)",
+                    border: "1.5px solid #38bdf8",
+                    borderRadius: 12,
+                    padding: "14px 18px",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    flexWrap: "wrap",
+                    gap: 12,
+                    boxShadow: "0 4px 14px rgba(56, 189, 248, 0.15)",
+                  }}>
+                    <div>
+                      <div style={{ fontWeight: 800, fontSize: 14, color: "#0369a1", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <span>📅 {selectedDayInfo.date} ({selectedDayInfo.weekday})</span>
+                        {selectedDayInfo.holiday && (
+                          <span style={{ background: "#fef3c7", color: "#b45309", border: "1px solid #fde68a", padding: "2px 8px", borderRadius: 6, fontSize: 11, fontWeight: 800 }}>
+                            🎉 Holiday: {selectedDayInfo.holiday_name || "Holiday"}
+                          </span>
+                        )}
+                        {selectedDayInfo.session_id && (
+                          <span style={{ background: "#dcfce7", color: "#15803d", border: "1px solid #bbf7d0", padding: "2px 8px", borderRadius: 6, fontSize: 11, fontWeight: 800 }}>
+                            ✅ {selectedDayInfo.session_type || "CLASS"} ({selectedDayInfo.duration_hours}h)
+                          </span>
+                        )}
+                      </div>
+                      {selectedDayInfo.topic && (
+                        <div style={{ fontSize: 12, color: "#334155", marginTop: 4 }}>
+                          Topic: <strong>"{selectedDayInfo.topic}"</strong>
+                        </div>
+                      )}
+                      {!selectedDayInfo.holiday && !selectedDayInfo.session_id && (
+                        <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>
+                          No attendance session was recorded on this day.
+                        </div>
+                      )}
+                    </div>
 
-                      return (
-                        <tr
-                          key={row.roll_no}
-                          onMouseEnter={() => setHoveredRow(rowIdx)}
-                          onMouseLeave={() => setHoveredRow(null)}
+                    <div style={{ display: "flex", gap: 10 }}>
+                      {selectedDayInfo.session_id && (
+                        <button
+                          type="button"
+                          className="btn btn-sm"
+                          onClick={() => navigate(`/attendance/sessions/${selectedDayInfo.session_id}`)}
                           style={{
-                            background: rowBg,
-                            transition: "background 0.1s ease",
+                            padding: "6px 14px", borderRadius: 8, fontWeight: 700, fontSize: 13,
+                            background: "#0284c7", color: "#fff", border: "none", cursor: "pointer",
                           }}
                         >
+                          👁️ Open Saved Session
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="btn btn-outline btn-sm"
+                        onClick={() => setSelectedGridDate(null)}
+                        style={{ padding: "6px 12px", borderRadius: 8, fontSize: 12, background: "#fff" }}
+                      >
+                        Close
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Error / Loading States */}
+                {registerError && <div className="login-error">{registerError}</div>}
+                {loadingRegister && <div className="empty-note">Loading monthly register data…</div>}
+
+                {/* Empty state if no subject/semester selected */}
+                {!loadingRegister && !register && !registerError && (
+                  <div className="empty-note" style={{ padding: 32, background: "#f8fafc", borderRadius: 12, textAlign: "center" }}>
+                    {!semesterId || !subjectId
+                      ? "Please select a semester and subject from the form above to view the monthly register."
+                      : "No attendance register data found for this selection."}
+                  </div>
+                )}
+
+                {/* Register Grid Table */}
+                {!loadingRegister && register && (
+                  <div
+                    style={{
+                      position: "relative",
+                      width: "100%",
+                      overflowX: "auto",
+                      border: "1px solid var(--border)",
+                      borderRadius: 12,
+                      boxShadow: "0 2px 6px rgba(0,0,0,0.04)",
+                      background: "#ffffff",
+                    }}
+                  >
+                    <table
+                      style={{
+                        width: "max-content",
+                        minWidth: "100%",
+                        borderCollapse: "separate",
+                        borderSpacing: 0,
+                        fontSize: 12,
+                      }}
+                    >
+                      <thead>
+                        <tr style={{ background: "#f8fafc" }}>
                           {/* Column 1: # */}
-                          <td style={{
+                          <th style={{
                             position: "sticky",
                             left: 0,
-                            zIndex: 20,
-                            background: rowBg,
-                            textAlign: "center",
-                            fontSize: 11,
-                            fontWeight: 600,
-                            color: "var(--muted)",
-                            borderRight: "1px solid var(--border)",
-                            borderBottom: "1px solid var(--border)",
+                            top: 0,
+                            zIndex: 30,
+                            background: "#f8fafc",
                             width: 44,
                             minWidth: 44,
                             maxWidth: 44,
-                            padding: "6px 2px",
+                            padding: "10px 4px",
+                            textAlign: "center",
+                            borderRight: "1px solid var(--border)",
+                            borderBottom: "2px solid var(--border)",
+                            fontWeight: 800,
+                            color: "var(--muted)",
                           }}>
-                            {rowIdx + 1}
-                          </td>
+                            #
+                          </th>
 
                           {/* Column 2: Hall Ticket */}
-                          <td style={{
+                          <th style={{
                             position: "sticky",
                             left: 44,
-                            zIndex: 20,
-                            background: rowBg,
-                            fontWeight: 700,
-                            fontSize: 12,
-                            fontFamily: "monospace",
-                            color: "var(--text)",
-                            borderRight: "1px solid var(--border)",
-                            borderBottom: "1px solid var(--border)",
+                            top: 0,
+                            zIndex: 30,
+                            background: "#f8fafc",
                             width: 125,
                             minWidth: 125,
                             maxWidth: 125,
-                            padding: "6px 10px",
-                            whiteSpace: "nowrap",
+                            padding: "10px 10px",
+                            textAlign: "left",
+                            borderRight: "1px solid var(--border)",
+                            borderBottom: "2px solid var(--border)",
+                            fontWeight: 800,
+                            color: "var(--text)",
+                            textTransform: "uppercase",
+                            letterSpacing: "0.03em",
                           }}>
-                            {row.roll_no}
-                          </td>
+                            Hall Ticket
+                          </th>
 
                           {/* Column 3: Student Name */}
-                          <td style={{
+                          <th style={{
                             position: "sticky",
                             left: 169,
-                            zIndex: 20,
-                            background: rowBg,
-                            fontSize: 12,
-                            fontWeight: 600,
-                            color: "var(--text)",
-                            borderRight: "2px solid #cbd5e1",
-                            borderBottom: "1px solid var(--border)",
-                            boxShadow: "4px 0 8px -2px rgba(15, 23, 42, 0.08)",
+                            top: 0,
+                            zIndex: 30,
+                            background: "#f8fafc",
                             width: 190,
                             minWidth: 190,
                             maxWidth: 190,
-                            padding: "6px 12px",
-                            whiteSpace: "nowrap",
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
+                            padding: "10px 12px",
+                            textAlign: "left",
+                            borderRight: "2px solid #cbd5e1",
+                            borderBottom: "2px solid var(--border)",
+                            boxShadow: "4px 0 8px -2px rgba(15, 23, 42, 0.08)",
+                            fontWeight: 800,
+                            color: "var(--text)",
                           }}>
-                            {row.name}
-                          </td>
+                            Student Name
+                          </th>
 
-                          {/* Date Cells */}
-                          {row.cells.map((cell, cIdx) => {
-                            const dayObj = register.days[cIdx];
-                            const isHoliday = cell.status === "H" || dayObj?.holiday;
-                            const isSelected = selectedGridDate === dayObj?.date;
-                            const hasSession = (dayObj?.session_count ?? 0) > 0;
-
+                          {/* Date Columns 01..31 */}
+                          {register.days.map((d) => {
+                            const isSunday = d.weekday === "Sunday";
+                            const isHoliday = d.holiday;
+                            const hasSession = d.session_count > 0;
+                            const isSelected = selectedGridDate === d.date;
                             return (
-                              <td
-                                key={cIdx}
-                                onClick={() => dayObj && setSelectedGridDate(dayObj.date)}
-                                title={dayObj ? `${dayObj.date} (${dayObj.weekday}): ${cell.status === "P" ? "Present" : cell.status === "A" ? "Absent" : cell.status === "H" ? `Holiday (${dayObj.holiday_name || "Holiday"})` : "No class"}` : ""}
+                              <th
+                                key={d.date}
+                                onClick={() => setSelectedGridDate(d.date)}
+                                title={d.holiday_name || d.topic || (hasSession ? `${d.session_type} session (${d.duration_hours}h)` : "No session recorded")}
                                 style={{
-                                  textAlign: "center",
-                                  padding: "4px 2px",
-                                  cursor: "pointer",
                                   width: 36,
                                   minWidth: 36,
                                   maxWidth: 36,
-                                  borderRight: "1px solid var(--border)",
-                                  borderBottom: "1px solid var(--border)",
+                                  padding: "6px 2px",
+                                  textAlign: "center",
+                                  cursor: "pointer",
                                   background: isSelected
                                     ? "#e0f2fe"
                                     : isHoliday
-                                    ? "#fffdf5"
-                                    : undefined,
+                                    ? "#fffbeb"
+                                    : hasSession
+                                    ? "#f0fdf4"
+                                    : "#f8fafc",
+                                  borderRight: "1px solid var(--border)",
+                                  borderBottom: "2px solid var(--border)",
+                                  transition: "all 0.15s ease",
                                 }}
                               >
-                                {cell.status === "P" ? (
-                                  <span style={{
-                                    display: "inline-flex",
-                                    alignItems: "center",
-                                    justifyContent: "center",
-                                    width: 24,
-                                    height: 24,
-                                    borderRadius: 6,
-                                    background: "#dcfce7",
-                                    color: "#15803d",
-                                    border: "1px solid #bbf7d0",
-                                    fontWeight: 800,
-                                    fontSize: 11,
-                                  }}>
-                                    P
-                                  </span>
-                                ) : cell.status === "A" ? (
-                                  <span style={{
-                                    display: "inline-flex",
-                                    alignItems: "center",
-                                    justifyContent: "center",
-                                    width: 24,
-                                    height: 24,
-                                    borderRadius: 6,
-                                    background: "#fee2e2",
-                                    color: "#b91c1c",
-                                    border: "1px solid #fecaca",
-                                    fontWeight: 800,
-                                    fontSize: 11,
-                                  }}>
-                                    A
-                                  </span>
-                                ) : isHoliday ? (
-                                  <span style={{
-                                    display: "inline-flex",
-                                    alignItems: "center",
-                                    justifyContent: "center",
-                                    width: 24,
-                                    height: 24,
-                                    borderRadius: 6,
-                                    background: "#fef3c7",
-                                    color: "#b45309",
-                                    border: "1px solid #fde68a",
-                                    fontWeight: 800,
-                                    fontSize: 10,
-                                  }}>
-                                    H
-                                  </span>
-                                ) : (
-                                  <span style={{ color: "#cbd5e1", fontSize: 16, fontWeight: 700, lineHeight: 1 }}>
-                                    ·
-                                  </span>
+                                <div style={{
+                                  fontWeight: 800,
+                                  fontSize: 12,
+                                  color: isHoliday ? "#b45309" : hasSession ? "#15803d" : "var(--text)",
+                                }}>
+                                  {String(d.day).padStart(2, "0")}
+                                </div>
+                                <div style={{
+                                  fontSize: 9,
+                                  fontWeight: 700,
+                                  color: isSunday ? "#dc2626" : isHoliday ? "#b45309" : hasSession ? "#16a34a" : "var(--muted)",
+                                  textTransform: "uppercase",
+                                }}>
+                                  {d.weekday.slice(0, 2)}
+                                </div>
+                                {hasSession && (
+                                  <div style={{
+                                    width: 4, height: 4, borderRadius: "50%", background: "#16a34a",
+                                    margin: "2px auto 0 auto",
+                                  }} />
                                 )}
-                              </td>
+                              </th>
                             );
                           })}
 
                           {/* Right Summary Columns */}
-                          <td style={{
+                          <th style={{
                             position: "sticky",
                             right: 70,
-                            zIndex: 18,
-                            background: rowBg,
+                            top: 0,
+                            zIndex: 28,
+                            background: "#f8fafc",
+                            width: 70,
+                            minWidth: 70,
+                            padding: "10px 6px",
                             textAlign: "center",
-                            padding: "6px 4px",
-                            fontSize: 12,
-                            fontWeight: 700,
-                            color: "var(--text)",
                             borderLeft: "2px solid #cbd5e1",
                             borderRight: "1px solid var(--border)",
-                            borderBottom: "1px solid var(--border)",
-                            width: 70,
-                            minWidth: 70,
+                            borderBottom: "2px solid var(--border)",
+                            fontWeight: 800,
+                            color: "var(--text)",
                           }}>
-                            {presentCount} / {totalSessions}
-                          </td>
-
-                          <td style={{
+                            Attd
+                          </th>
+                          <th style={{
                             position: "sticky",
                             right: 0,
-                            zIndex: 18,
-                            background: rowBg,
-                            textAlign: "center",
-                            padding: "6px 4px",
-                            borderBottom: "1px solid var(--border)",
+                            top: 0,
+                            zIndex: 28,
+                            background: "#f8fafc",
                             width: 70,
                             minWidth: 70,
-                          }}>
-                            <span style={{
-                              display: "inline-block",
-                              padding: "2px 6px",
-                              borderRadius: 6,
-                              fontSize: 11,
-                              fontWeight: 800,
-                              background: studentPct >= 75 ? "#dcfce7" : studentPct >= 60 ? "#fef3c7" : "#fee2e2",
-                              color: studentPct >= 75 ? "#15803d" : studentPct >= 60 ? "#b45309" : "#b91c1c",
-                              border: studentPct >= 75 ? "1px solid #bbf7d0" : studentPct >= 60 ? "1px solid #fde68a" : "1px solid #fecaca",
-                            }}>
-                              {studentPct}%
-                            </span>
-                          </td>
-                        </tr>
-                      );
-                    })}
-
-                    {filteredRoster.length === 0 && (
-                      <tr>
-                        <td
-                          colSpan={register.days.length + 5}
-                          style={{ textAlign: "center", padding: 32, color: "var(--muted)", background: "#ffffff" }}
-                        >
-                          {studentSearch
-                            ? `No students matching "${studentSearch}".`
-                            : "No students are assigned to this semester / HOD scope."}
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-
-                  {/* Daily Total Summary Footer */}
-                  {filteredRoster.length > 0 && (
-                    <tfoot>
-                      <tr style={{ background: "#f1f5f9", fontWeight: 800 }}>
-                        <td
-                          colSpan={3}
-                          style={{
-                            position: "sticky",
-                            left: 0,
-                            zIndex: 25,
-                            background: "#f1f5f9",
-                            padding: "10px 14px",
-                            textAlign: "right",
-                            borderTop: "2px solid #cbd5e1",
-                            borderRight: "2px solid #cbd5e1",
-                            boxShadow: "4px 0 8px -2px rgba(15, 23, 42, 0.08)",
+                            padding: "10px 6px",
+                            textAlign: "center",
+                            borderBottom: "2px solid var(--border)",
+                            fontWeight: 800,
                             color: "var(--text)",
-                            fontSize: 12,
-                          }}
-                        >
-                          Daily Attendance (Present):
-                        </td>
+                          }}>
+                            % Attd
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredRoster.map((row, rowIdx) => {
+                          const isHovered = hoveredRow === rowIdx;
+                          const isAlt = rowIdx % 2 === 1;
+                          const rowBg = isHovered ? "#f0f7ff" : isAlt ? "#f8fafc" : "#ffffff";
 
-                        {dailyAttendanceSummary.map((sum, sIdx) => {
-                          const day = register.days[sIdx];
+                          // Calculate student metrics
+                          const teachingDays = register.days.filter((d) => d.session_count > 0);
+                          const totalSessions = teachingDays.length;
+                          let presentCount = 0;
+                          row.cells.forEach((cell, idx) => {
+                            const day = register.days[idx];
+                            if (day && day.session_count > 0 && cell.status === "P") {
+                              presentCount += 1;
+                            }
+                          });
+                          const studentPct = totalSessions > 0 ? Math.round((presentCount / totalSessions) * 100) : 100;
+
                           return (
-                            <td
-                              key={sIdx}
+                            <tr
+                              key={row.roll_no}
+                              onMouseEnter={() => setHoveredRow(rowIdx)}
+                              onMouseLeave={() => setHoveredRow(null)}
                               style={{
-                                textAlign: "center",
-                                padding: "6px 2px",
-                                borderTop: "2px solid #cbd5e1",
-                                borderRight: "1px solid var(--border)",
-                                fontSize: 10,
-                                fontWeight: 800,
-                                color: sum ? (sum.pct >= 75 ? "#15803d" : "#b45309") : "var(--muted)",
-                                background: sum ? "#f8fafc" : "#f1f5f9",
+                                background: rowBg,
+                                transition: "background 0.1s ease",
                               }}
                             >
-                              {sum ? `${sum.presentCount}` : "—"}
-                            </td>
+                              {/* Column 1: # */}
+                              <td style={{
+                                position: "sticky",
+                                left: 0,
+                                zIndex: 20,
+                                background: rowBg,
+                                textAlign: "center",
+                                fontSize: 11,
+                                fontWeight: 600,
+                                color: "var(--muted)",
+                                borderRight: "1px solid var(--border)",
+                                borderBottom: "1px solid var(--border)",
+                                width: 44,
+                                minWidth: 44,
+                                maxWidth: 44,
+                                padding: "6px 2px",
+                              }}>
+                                {rowIdx + 1}
+                              </td>
+
+                              {/* Column 2: Hall Ticket */}
+                              <td style={{
+                                position: "sticky",
+                                left: 44,
+                                zIndex: 20,
+                                background: rowBg,
+                                fontWeight: 700,
+                                fontSize: 12,
+                                fontFamily: "monospace",
+                                color: "var(--text)",
+                                borderRight: "1px solid var(--border)",
+                                borderBottom: "1px solid var(--border)",
+                                width: 125,
+                                minWidth: 125,
+                                maxWidth: 125,
+                                padding: "6px 10px",
+                                whiteSpace: "nowrap",
+                              }}>
+                                {row.roll_no}
+                              </td>
+
+                              {/* Column 3: Student Name */}
+                              <td style={{
+                                position: "sticky",
+                                left: 169,
+                                zIndex: 20,
+                                background: rowBg,
+                                fontSize: 12,
+                                fontWeight: 600,
+                                color: "var(--text)",
+                                borderRight: "2px solid #cbd5e1",
+                                borderBottom: "1px solid var(--border)",
+                                boxShadow: "4px 0 8px -2px rgba(15, 23, 42, 0.08)",
+                                width: 190,
+                                minWidth: 190,
+                                maxWidth: 190,
+                                padding: "6px 12px",
+                                whiteSpace: "nowrap",
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                              }}>
+                                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+                                  <span>{row.name}</span>
+                                  {semesterSummary && (() => {
+                                    const match = semesterSummary.students.find((s) => s.roll_no === row.roll_no);
+                                    return match ? (
+                                      <button
+                                        type="button"
+                                        title="View All Subjects Attendance"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setSelectedStudentDrilldown(match);
+                                        }}
+                                        style={{
+                                          background: "#e0f2fe", border: "1px solid #bae6fd",
+                                          color: "#0284c7", borderRadius: 6, padding: "2px 6px",
+                                          fontSize: 10, fontWeight: 700, cursor: "pointer",
+                                        }}
+                                      >
+                                        📊 All
+                                      </button>
+                                    ) : null;
+                                  })()}
+                                </div>
+                              </td>
+
+                              {/* Date Cells */}
+                              {row.cells.map((cell, cIdx) => {
+                                const dayObj = register.days[cIdx];
+                                const isHoliday = cell.status === "H" || dayObj?.holiday;
+                                const isSelected = selectedGridDate === dayObj?.date;
+
+                                return (
+                                  <td
+                                    key={cIdx}
+                                    onClick={() => dayObj && setSelectedGridDate(dayObj.date)}
+                                    title={dayObj ? `${dayObj.date} (${dayObj.weekday}): ${cell.status === "P" ? "Present" : cell.status === "A" ? "Absent" : cell.status === "H" ? `Holiday (${dayObj.holiday_name || "Holiday"})` : "No class"}` : ""}
+                                    style={{
+                                      textAlign: "center",
+                                      padding: "4px 2px",
+                                      cursor: "pointer",
+                                      width: 36,
+                                      minWidth: 36,
+                                      maxWidth: 36,
+                                      borderRight: "1px solid var(--border)",
+                                      borderBottom: "1px solid var(--border)",
+                                      background: isSelected
+                                        ? "#e0f2fe"
+                                        : isHoliday
+                                        ? "#fffdf5"
+                                        : undefined,
+                                    }}
+                                  >
+                                    {cell.status === "P" ? (
+                                      <span style={{
+                                        display: "inline-flex",
+                                        alignItems: "center",
+                                        justifyContent: "center",
+                                        width: 24,
+                                        height: 24,
+                                        borderRadius: 6,
+                                        background: "#dcfce7",
+                                        color: "#15803d",
+                                        border: "1px solid #bbf7d0",
+                                        fontWeight: 800,
+                                        fontSize: 11,
+                                      }}>
+                                        P
+                                      </span>
+                                    ) : cell.status === "A" ? (
+                                      <span style={{
+                                        display: "inline-flex",
+                                        alignItems: "center",
+                                        justifyContent: "center",
+                                        width: 24,
+                                        height: 24,
+                                        borderRadius: 6,
+                                        background: "#fee2e2",
+                                        color: "#b91c1c",
+                                        border: "1px solid #fecaca",
+                                        fontWeight: 800,
+                                        fontSize: 11,
+                                      }}>
+                                        A
+                                      </span>
+                                    ) : isHoliday ? (
+                                      <span style={{
+                                        display: "inline-flex",
+                                        alignItems: "center",
+                                        justifyContent: "center",
+                                        width: 24,
+                                        height: 24,
+                                        borderRadius: 6,
+                                        background: "#fef3c7",
+                                        color: "#b45309",
+                                        border: "1px solid #fde68a",
+                                        fontWeight: 800,
+                                        fontSize: 10,
+                                      }}>
+                                        H
+                                      </span>
+                                    ) : (
+                                      <span style={{ color: "#cbd5e1", fontSize: 16, fontWeight: 700, lineHeight: 1 }}>
+                                        ·
+                                      </span>
+                                    )}
+                                  </td>
+                                );
+                              })}
+
+                              {/* Right Summary Columns */}
+                              <td style={{
+                                position: "sticky",
+                                right: 70,
+                                zIndex: 18,
+                                background: rowBg,
+                                textAlign: "center",
+                                padding: "6px 4px",
+                                fontSize: 12,
+                                fontWeight: 700,
+                                color: "var(--text)",
+                                borderLeft: "2px solid #cbd5e1",
+                                borderRight: "1px solid var(--border)",
+                                borderBottom: "1px solid var(--border)",
+                                width: 70,
+                                minWidth: 70,
+                              }}>
+                                {presentCount} / {totalSessions}
+                              </td>
+
+                              <td style={{
+                                position: "sticky",
+                                right: 0,
+                                zIndex: 18,
+                                background: rowBg,
+                                textAlign: "center",
+                                padding: "6px 4px",
+                                borderBottom: "1px solid var(--border)",
+                                width: 70,
+                                minWidth: 70,
+                              }}>
+                                <span style={{
+                                  display: "inline-block",
+                                  padding: "2px 6px",
+                                  borderRadius: 6,
+                                  fontSize: 11,
+                                  fontWeight: 800,
+                                  background: studentPct >= 75 ? "#dcfce7" : studentPct >= 60 ? "#fef3c7" : "#fee2e2",
+                                  color: studentPct >= 75 ? "#15803d" : studentPct >= 60 ? "#b45309" : "#b91c1c",
+                                  border: studentPct >= 75 ? "1px solid #bbf7d0" : studentPct >= 60 ? "1px solid #fde68a" : "1px solid #fecaca",
+                                }}>
+                                  {studentPct}%
+                                </span>
+                              </td>
+                            </tr>
                           );
                         })}
 
-                        <td
+                        {filteredRoster.length === 0 && (
+                          <tr>
+                            <td
+                              colSpan={register.days.length + 5}
+                              style={{ textAlign: "center", padding: 32, color: "var(--muted)", background: "#ffffff" }}
+                            >
+                              {studentSearch
+                                ? `No students matching "${studentSearch}".`
+                                : "No students are assigned to this semester / HOD scope."}
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+
+                      {/* Daily Total Summary Footer */}
+                      {filteredRoster.length > 0 && (
+                        <tfoot>
+                          <tr style={{ background: "#f1f5f9", fontWeight: 800 }}>
+                            <td
+                              colSpan={3}
+                              style={{
+                                position: "sticky",
+                                left: 0,
+                                zIndex: 25,
+                                background: "#f1f5f9",
+                                padding: "10px 14px",
+                                textAlign: "right",
+                                borderTop: "2px solid #cbd5e1",
+                                borderRight: "2px solid #cbd5e1",
+                                boxShadow: "4px 0 8px -2px rgba(15, 23, 42, 0.08)",
+                                color: "var(--text)",
+                                fontSize: 12,
+                              }}
+                            >
+                              Daily Attendance (Present):
+                            </td>
+
+                            {dailyAttendanceSummary.map((sum, sIdx) => {
+                              return (
+                                <td
+                                  key={sIdx}
+                                  style={{
+                                    textAlign: "center",
+                                    padding: "6px 2px",
+                                    borderTop: "2px solid #cbd5e1",
+                                    borderRight: "1px solid var(--border)",
+                                    fontSize: 10,
+                                    fontWeight: 800,
+                                    color: sum ? (sum.pct >= 75 ? "#15803d" : "#b45309") : "var(--muted)",
+                                    background: sum ? "#f8fafc" : "#f1f5f9",
+                                  }}
+                                >
+                                  {sum ? `${sum.presentCount}` : "—"}
+                                </td>
+                              );
+                            })}
+
+                            <td
+                              style={{
+                                position: "sticky",
+                                right: 70,
+                                zIndex: 22,
+                                background: "#f1f5f9",
+                                textAlign: "center",
+                                padding: "8px 4px",
+                                fontSize: 11,
+                                fontWeight: 800,
+                                borderTop: "2px solid #cbd5e1",
+                                borderLeft: "2px solid #cbd5e1",
+                                borderRight: "1px solid var(--border)",
+                                color: "var(--text)",
+                              }}
+                            >
+                              Avg
+                            </td>
+
+                            <td
+                              style={{
+                                position: "sticky",
+                                right: 0,
+                                zIndex: 22,
+                                background: "#f1f5f9",
+                                textAlign: "center",
+                                padding: "8px 4px",
+                                fontSize: 11,
+                                fontWeight: 800,
+                                borderTop: "2px solid #cbd5e1",
+                                color: registerStats.classAvgPct >= 75 ? "#15803d" : "#b45309",
+                              }}
+                            >
+                              {registerStats.classAvgPct}%
+                            </td>
+                          </tr>
+                        </tfoot>
+                      )}
+                    </table>
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* ══════════════════════════════════════════════════════ */}
+            {/* VIEW MODE 2: SEMESTER ALL-SUBJECTS ATTENDANCE MATRIX */}
+            {/* ══════════════════════════════════════════════════════ */}
+            {viewMode === "summary" && (
+              <>
+                {/* Semester Summary KPI Cards */}
+                {semesterSummary && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                    <div style={{
+                      display: "grid",
+                      gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+                      gap: 12,
+                    }}>
+                      <div style={{
+                        padding: "12px 14px", borderRadius: 12, background: "#f8fafc",
+                        border: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 10,
+                      }}>
+                        <div style={{ fontSize: 20 }}>👥</div>
+                        <div>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase" }}>Total Students</div>
+                          <div style={{ fontSize: 18, fontWeight: 800, color: "var(--text)" }}>{semesterSummaryStats.totalStudents}</div>
+                        </div>
+                      </div>
+
+                      <div style={{
+                        padding: "12px 14px", borderRadius: 12, background: "#f8fafc",
+                        border: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 10,
+                      }}>
+                        <div style={{ fontSize: 20 }}>📚</div>
+                        <div>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase" }}>Subjects</div>
+                          <div style={{ fontSize: 18, fontWeight: 800, color: "var(--text)" }}>{semesterSummary.subjects.length}</div>
+                        </div>
+                      </div>
+
+                      <div style={{
+                        padding: "12px 14px", borderRadius: 12, background: "#f8fafc",
+                        border: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 10,
+                      }}>
+                        <div style={{ fontSize: 20 }}>📊</div>
+                        <div>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase" }}>Overall Avg %</div>
+                          <div style={{
+                            fontSize: 18, fontWeight: 800,
+                            color: semesterSummaryStats.avgPct >= 75 ? "#15803d" : semesterSummaryStats.avgPct >= 60 ? "#b45309" : "#b91c1c",
+                          }}>
+                            {semesterSummaryStats.avgPct}%
+                          </div>
+                        </div>
+                      </div>
+
+                      <div style={{
+                        padding: "12px 14px", borderRadius: 12, background: "#f8fafc",
+                        border: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 10,
+                      }}>
+                        <div style={{ fontSize: 20 }}>🎯</div>
+                        <div>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase" }}>Eligible (≥75%)</div>
+                          <div style={{ fontSize: 18, fontWeight: 800, color: "#15803d" }}>
+                            {semesterSummaryStats.eligibleCount} <span style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)" }}>students</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div style={{
+                        padding: "12px 14px", borderRadius: 12, background: "#f8fafc",
+                        border: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 10,
+                      }}>
+                        <div style={{ fontSize: 20 }}>⚠️</div>
+                        <div>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase" }}>Shortage (&lt;75%)</div>
+                          <div style={{ fontSize: 18, fontWeight: 800, color: semesterSummaryStats.shortageCount > 0 ? "#b91c1c" : "#15803d" }}>
+                            {semesterSummaryStats.shortageCount} <span style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)" }}>students</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Search box */}
+                    <div style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      flexWrap: "wrap",
+                      gap: 12,
+                      padding: "10px 14px",
+                      background: "#f8fafc",
+                      borderRadius: 12,
+                      border: "1px solid var(--border)",
+                    }}>
+                      <div style={{ position: "relative", minWidth: 260, flex: "1 1 260px", maxWidth: 400 }}>
+                        <input
+                          type="text"
+                          className="input-field"
+                          placeholder="🔍 Search roll no or student name…"
+                          value={studentSearch}
+                          onChange={(e) => setStudentSearch(e.target.value)}
                           style={{
+                            height: 34,
+                            padding: "0 28px 0 10px",
+                            fontSize: 12,
+                            borderRadius: 8,
+                            background: "#ffffff",
+                          }}
+                        />
+                        {studentSearch && (
+                          <button
+                            type="button"
+                            onClick={() => setStudentSearch("")}
+                            style={{
+                              position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)",
+                              background: "none", border: "none", color: "var(--muted)", cursor: "pointer",
+                              fontSize: 12, fontWeight: 700,
+                            }}
+                          >
+                            ✕
+                          </button>
+                        )}
+                      </div>
+                      <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600 }}>
+                        Showing {filteredSemesterStudents.length} of {semesterSummary.students.length} students under HOD
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Loading / Error states */}
+                {summaryError && <div className="login-error">{summaryError}</div>}
+                {loadingSummary && <div className="empty-note">Loading semester attendance matrix…</div>}
+
+                {!loadingSummary && !semesterSummary && !summaryError && (
+                  <div className="empty-note" style={{ padding: 32, background: "#f8fafc", borderRadius: 12, textAlign: "center" }}>
+                    Select a semester above to view the all-subjects attendance matrix.
+                  </div>
+                )}
+
+                {/* All-Subjects Matrix Table */}
+                {!loadingSummary && semesterSummary && (
+                  <div
+                    style={{
+                      position: "relative",
+                      width: "100%",
+                      overflowX: "auto",
+                      border: "1px solid var(--border)",
+                      borderRadius: 12,
+                      boxShadow: "0 2px 6px rgba(0,0,0,0.04)",
+                      background: "#ffffff",
+                    }}
+                  >
+                    <table
+                      style={{
+                        width: "max-content",
+                        minWidth: "100%",
+                        borderCollapse: "separate",
+                        borderSpacing: 0,
+                        fontSize: 12,
+                      }}
+                    >
+                      <thead>
+                        <tr style={{ background: "#f8fafc" }}>
+                          {/* Col 1: # */}
+                          <th style={{
                             position: "sticky",
-                            right: 70,
-                            zIndex: 22,
-                            background: "#f1f5f9",
+                            left: 0,
+                            top: 0,
+                            zIndex: 30,
+                            background: "#f8fafc",
+                            width: 44,
+                            minWidth: 44,
+                            padding: "10px 4px",
                             textAlign: "center",
-                            padding: "8px 4px",
-                            fontSize: 11,
+                            borderRight: "1px solid var(--border)",
+                            borderBottom: "2px solid var(--border)",
                             fontWeight: 800,
-                            borderTop: "2px solid #cbd5e1",
+                            color: "var(--muted)",
+                          }}>
+                            #
+                          </th>
+
+                          {/* Col 2: Hall Ticket */}
+                          <th style={{
+                            position: "sticky",
+                            left: 44,
+                            top: 0,
+                            zIndex: 30,
+                            background: "#f8fafc",
+                            width: 125,
+                            minWidth: 125,
+                            padding: "10px 10px",
+                            textAlign: "left",
+                            borderRight: "1px solid var(--border)",
+                            borderBottom: "2px solid var(--border)",
+                            fontWeight: 800,
+                            color: "var(--text)",
+                            textTransform: "uppercase",
+                          }}>
+                            Hall Ticket
+                          </th>
+
+                          {/* Col 3: Student Name */}
+                          <th style={{
+                            position: "sticky",
+                            left: 169,
+                            top: 0,
+                            zIndex: 30,
+                            background: "#f8fafc",
+                            width: 200,
+                            minWidth: 200,
+                            padding: "10px 12px",
+                            textAlign: "left",
+                            borderRight: "2px solid #cbd5e1",
+                            borderBottom: "2px solid var(--border)",
+                            boxShadow: "4px 0 8px -2px rgba(15, 23, 42, 0.08)",
+                            fontWeight: 800,
+                            color: "var(--text)",
+                          }}>
+                            Student Name
+                          </th>
+
+                          {/* Subject Columns */}
+                          {semesterSummary.subjects.map((sub) => (
+                            <th
+                              key={sub.id}
+                              title={`${sub.code} - ${sub.name}`}
+                              style={{
+                                width: 110,
+                                minWidth: 110,
+                                padding: "8px 6px",
+                                textAlign: "center",
+                                borderRight: "1px solid var(--border)",
+                                borderBottom: "2px solid var(--border)",
+                              }}
+                            >
+                              <div style={{ fontWeight: 800, fontSize: 12, color: "var(--text)" }}>{sub.code}</div>
+                              <div style={{
+                                fontSize: 10,
+                                color: "var(--muted)",
+                                fontWeight: 600,
+                                whiteSpace: "nowrap",
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                maxWidth: 100,
+                                margin: "0 auto",
+                              }}>
+                                {sub.name}
+                              </div>
+                            </th>
+                          ))}
+
+                          {/* Summary Columns */}
+                          <th style={{
+                            position: "sticky",
+                            right: 170,
+                            top: 0,
+                            zIndex: 28,
+                            background: "#f8fafc",
+                            width: 85,
+                            minWidth: 85,
+                            padding: "10px 6px",
+                            textAlign: "center",
                             borderLeft: "2px solid #cbd5e1",
                             borderRight: "1px solid var(--border)",
+                            borderBottom: "2px solid var(--border)",
+                            fontWeight: 800,
                             color: "var(--text)",
-                          }}
-                        >
-                          Avg
-                        </td>
+                          }}>
+                            Attd / Tot
+                          </th>
 
-                        <td
-                          style={{
+                          <th style={{
+                            position: "sticky",
+                            right: 85,
+                            top: 0,
+                            zIndex: 28,
+                            background: "#f8fafc",
+                            width: 85,
+                            minWidth: 85,
+                            padding: "10px 6px",
+                            textAlign: "center",
+                            borderRight: "1px solid var(--border)",
+                            borderBottom: "2px solid var(--border)",
+                            fontWeight: 800,
+                            color: "var(--text)",
+                          }}>
+                            Overall %
+                          </th>
+
+                          <th style={{
                             position: "sticky",
                             right: 0,
-                            zIndex: 22,
-                            background: "#f1f5f9",
+                            top: 0,
+                            zIndex: 28,
+                            background: "#f8fafc",
+                            width: 85,
+                            minWidth: 85,
+                            padding: "10px 6px",
                             textAlign: "center",
-                            padding: "8px 4px",
-                            fontSize: 11,
+                            borderBottom: "2px solid var(--border)",
                             fontWeight: 800,
-                            borderTop: "2px solid #cbd5e1",
-                            color: registerStats.classAvgPct >= 75 ? "#15803d" : "#b45309",
-                          }}
-                        >
-                          {registerStats.classAvgPct}%
-                        </td>
-                      </tr>
-                    </tfoot>
-                  )}
-                </table>
+                            color: "var(--text)",
+                          }}>
+                            Status
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredSemesterStudents.map((st, idx) => {
+                          const isHovered = hoveredRow === idx;
+                          const isAlt = idx % 2 === 1;
+                          const rowBg = isHovered ? "#f0f7ff" : isAlt ? "#f8fafc" : "#ffffff";
+                          const ovPct = st.overall_pct ?? 0;
+                          const isEligible = ovPct >= 75;
+
+                          return (
+                            <tr
+                              key={st.roll_no}
+                              onMouseEnter={() => setHoveredRow(idx)}
+                              onMouseLeave={() => setHoveredRow(null)}
+                              onClick={() => setSelectedStudentDrilldown(st)}
+                              style={{
+                                background: rowBg,
+                                cursor: "pointer",
+                                transition: "background 0.1s ease",
+                              }}
+                            >
+                              {/* # */}
+                              <td style={{
+                                position: "sticky",
+                                left: 0,
+                                zIndex: 20,
+                                background: rowBg,
+                                textAlign: "center",
+                                fontSize: 11,
+                                fontWeight: 600,
+                                color: "var(--muted)",
+                                borderRight: "1px solid var(--border)",
+                                borderBottom: "1px solid var(--border)",
+                                padding: "8px 2px",
+                              }}>
+                                {idx + 1}
+                              </td>
+
+                              {/* Hall Ticket */}
+                              <td style={{
+                                position: "sticky",
+                                left: 44,
+                                zIndex: 20,
+                                background: rowBg,
+                                fontWeight: 700,
+                                fontSize: 12,
+                                fontFamily: "monospace",
+                                color: "var(--text)",
+                                borderRight: "1px solid var(--border)",
+                                borderBottom: "1px solid var(--border)",
+                                padding: "8px 10px",
+                                whiteSpace: "nowrap",
+                              }}>
+                                {st.roll_no}
+                              </td>
+
+                              {/* Student Name */}
+                              <td style={{
+                                position: "sticky",
+                                left: 169,
+                                zIndex: 20,
+                                background: rowBg,
+                                fontSize: 12,
+                                fontWeight: 700,
+                                color: "#0f172a",
+                                borderRight: "2px solid #cbd5e1",
+                                borderBottom: "1px solid var(--border)",
+                                boxShadow: "4px 0 8px -2px rgba(15, 23, 42, 0.08)",
+                                padding: "8px 12px",
+                                whiteSpace: "nowrap",
+                              }}>
+                                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+                                  <span>{st.name}</span>
+                                  <span style={{ fontSize: 11, color: "#2563eb", fontWeight: 700 }}>🔍</span>
+                                </div>
+                              </td>
+
+                              {/* Subject cells */}
+                              {st.subjects.map((sub) => {
+                                const subPct = sub.pct;
+                                const cellBg = sub.total === 0
+                                  ? undefined
+                                  : sub.band === "green"
+                                  ? "rgba(16, 185, 129, 0.06)"
+                                  : sub.band === "yellow"
+                                  ? "rgba(245, 158, 11, 0.08)"
+                                  : "rgba(239, 68, 68, 0.08)";
+                                return (
+                                  <td
+                                    key={sub.subject_id}
+                                    style={{
+                                      textAlign: "center",
+                                      padding: "6px 4px",
+                                      borderRight: "1px solid var(--border)",
+                                      borderBottom: "1px solid var(--border)",
+                                      background: cellBg,
+                                    }}
+                                  >
+                                    {sub.total > 0 ? (
+                                      <div>
+                                        <div style={{
+                                          fontWeight: 800,
+                                          fontSize: 11.5,
+                                          color: sub.band === "green" ? "#15803d" : sub.band === "yellow" ? "#b45309" : "#b91c1c",
+                                        }}>
+                                          {subPct !== null ? `${subPct}%` : "—"}
+                                        </div>
+                                        <div style={{ fontSize: 10, color: "var(--muted)", fontWeight: 600 }}>
+                                          {sub.present}/{sub.total}
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      <span style={{ color: "#cbd5e1", fontSize: 14, fontWeight: 700 }}>—</span>
+                                    )}
+                                  </td>
+                                );
+                              })}
+
+                              {/* Attd / Tot */}
+                              <td style={{
+                                position: "sticky",
+                                right: 170,
+                                zIndex: 18,
+                                background: rowBg,
+                                textAlign: "center",
+                                padding: "8px 4px",
+                                fontSize: 12,
+                                fontWeight: 700,
+                                color: "var(--text)",
+                                borderLeft: "2px solid #cbd5e1",
+                                borderRight: "1px solid var(--border)",
+                                borderBottom: "1px solid var(--border)",
+                              }}>
+                                {st.present_classes} / {st.total_classes}
+                              </td>
+
+                              {/* Overall % */}
+                              <td style={{
+                                position: "sticky",
+                                right: 85,
+                                zIndex: 18,
+                                background: rowBg,
+                                textAlign: "center",
+                                padding: "8px 4px",
+                                borderRight: "1px solid var(--border)",
+                                borderBottom: "1px solid var(--border)",
+                              }}>
+                                <span style={{
+                                  display: "inline-block",
+                                  padding: "2px 8px",
+                                  borderRadius: 6,
+                                  fontSize: 11.5,
+                                  fontWeight: 800,
+                                  background: ovPct >= 75 ? "#dcfce7" : ovPct >= 60 ? "#fef3c7" : "#fee2e2",
+                                  color: ovPct >= 75 ? "#15803d" : ovPct >= 60 ? "#b45309" : "#b91c1c",
+                                  border: ovPct >= 75 ? "1px solid #bbf7d0" : ovPct >= 60 ? "1px solid #fde68a" : "1px solid #fecaca",
+                                }}>
+                                  {st.overall_pct !== null ? `${st.overall_pct}%` : "—"}
+                                </span>
+                              </td>
+
+                              {/* Status */}
+                              <td style={{
+                                position: "sticky",
+                                right: 0,
+                                zIndex: 18,
+                                background: rowBg,
+                                textAlign: "center",
+                                padding: "8px 4px",
+                                borderBottom: "1px solid var(--border)",
+                              }}>
+                                <span className={`chip ${isEligible ? "chip-green" : "chip-red"}`} style={{ fontSize: 10.5, fontWeight: 700, padding: "2px 6px" }}>
+                                  {isEligible ? "Eligible" : "Shortage"}
+                                </span>
+                              </td>
+                            </tr>
+                          );
+                        })}
+
+                        {filteredSemesterStudents.length === 0 && (
+                          <tr>
+                            <td
+                              colSpan={semesterSummary.subjects.length + 6}
+                              style={{ textAlign: "center", padding: 32, color: "var(--muted)", background: "#ffffff" }}
+                            >
+                              {studentSearch
+                                ? `No students matching "${studentSearch}".`
+                                : "No students found in this semester."}
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* ══════════════════════════════════════════════════════ */}
+            {/* QUICK STUDENT SUBJECT ATTENDANCE DRILLDOWN MODAL      */}
+            {/* ══════════════════════════════════════════════════════ */}
+            {selectedStudentDrilldown && (
+              <div
+                className="modal-overlay"
+                onClick={() => setSelectedStudentDrilldown(null)}
+                style={{
+                  position: "fixed",
+                  top: 0, left: 0, right: 0, bottom: 0,
+                  background: "rgba(15, 23, 42, 0.6)",
+                  backdropFilter: "blur(4px)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  zIndex: 9999,
+                  padding: 16,
+                }}
+              >
+                <div
+                  className="modal-box modal3dPopIn"
+                  onClick={(e) => e.stopPropagation()}
+                  style={{
+                    background: "#ffffff",
+                    borderRadius: 18,
+                    padding: 24,
+                    width: "100%",
+                    maxWidth: 640,
+                    maxHeight: "90vh",
+                    overflowY: "auto",
+                    boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.25)",
+                    border: "1px solid var(--border)",
+                  }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
+                    <div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <div style={{
+                          width: 40, height: 40, borderRadius: 10,
+                          background: "linear-gradient(135deg, #2563eb, #3b82f6)",
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                          color: "#fff", fontSize: 18,
+                        }}>
+                          👤
+                        </div>
+                        <div>
+                          <h3 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: "var(--text)" }}>
+                            {selectedStudentDrilldown.name}
+                          </h3>
+                          <div style={{ fontSize: 13, color: "var(--muted)", fontWeight: 600 }}>
+                            Roll No: <strong>{selectedStudentDrilldown.roll_no}</strong>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedStudentDrilldown(null)}
+                      style={{
+                        background: "none", border: "none", fontSize: 20,
+                        cursor: "pointer", color: "var(--muted)", fontWeight: 800,
+                      }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+
+                  {/* Summary Metric Cards */}
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 18 }}>
+                    <div style={{ background: "#f8fafc", padding: "10px 14px", borderRadius: 10, border: "1px solid var(--border)" }}>
+                      <div style={{ fontSize: 11, color: "var(--muted)", fontWeight: 700 }}>Total Classes</div>
+                      <div style={{ fontSize: 18, fontWeight: 800, marginTop: 2 }}>{selectedStudentDrilldown.total_classes}</div>
+                    </div>
+                    <div style={{ background: "rgba(16, 185, 129, 0.08)", padding: "10px 14px", borderRadius: 10, border: "1px solid rgba(16, 185, 129, 0.2)" }}>
+                      <div style={{ fontSize: 11, color: "#059669", fontWeight: 700 }}>Attended</div>
+                      <div style={{ fontSize: 18, fontWeight: 800, color: "#059669", marginTop: 2 }}>{selectedStudentDrilldown.present_classes}</div>
+                    </div>
+                    <div style={{ background: "rgba(37, 99, 235, 0.08)", padding: "10px 14px", borderRadius: 10, border: "1px solid rgba(37, 99, 235, 0.2)" }}>
+                      <div style={{ fontSize: 11, color: "#2563eb", fontWeight: 700 }}>Overall Attendance</div>
+                      <div style={{ fontSize: 18, fontWeight: 800, color: "#2563eb", marginTop: 2 }}>
+                        {selectedStudentDrilldown.overall_pct !== null ? `${selectedStudentDrilldown.overall_pct}%` : "—"}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Breakdown Table */}
+                  <h4 style={{ margin: "0 0 10px 0", fontSize: 14, fontWeight: 800 }}>Subject Breakdown:</h4>
+                  <div className="table-wrap" style={{ border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
+                    <table className="data-table" style={{ fontSize: 12 }}>
+                      <thead>
+                        <tr style={{ background: "#f8fafc" }}>
+                          <th>Subject</th>
+                          <th style={{ textAlign: "center", width: 70 }}>Present</th>
+                          <th style={{ textAlign: "center", width: 70 }}>Total</th>
+                          <th style={{ textAlign: "right", width: 80 }}>%</th>
+                          <th style={{ textAlign: "center", width: 90 }}>Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selectedStudentDrilldown.subjects.map((s) => (
+                          <tr key={s.subject_id}>
+                            <td>
+                              <span className="code-badge" style={{ marginRight: 6, fontWeight: 700 }}>{s.subject_code}</span>
+                              <strong>{s.subject_name}</strong>
+                            </td>
+                            <td style={{ textAlign: "center", color: "#059669", fontWeight: 700 }}>{s.present}</td>
+                            <td style={{ textAlign: "center", color: "var(--muted)", fontWeight: 600 }}>{s.total}</td>
+                            <td style={{ textAlign: "right", fontWeight: 800 }}>
+                              {s.pct !== null ? `${s.pct}%` : "—"}
+                            </td>
+                            <td style={{ textAlign: "center" }}>
+                              <span className={`chip ${s.band === "green" ? "chip-green" : s.band === "yellow" ? "chip-warn" : s.band === "red" ? "chip-red" : "chip-muted"}`} style={{ fontSize: 10.5, fontWeight: 700 }}>
+                                {s.band === "green" ? "Normal" : s.band === "yellow" ? "Shortage" : s.band === "red" ? "Critical" : "No Class"}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 18 }}>
+                    <button
+                      type="button"
+                      className="btn btn-outline"
+                      onClick={() => setSelectedStudentDrilldown(null)}
+                      style={{ padding: "6px 16px", borderRadius: 8 }}
+                    >
+                      Close
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
           </div>

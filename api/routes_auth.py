@@ -45,7 +45,7 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 # the Jinja route module and encodes URL paths (Jinja routes), whereas this
 # one encodes React route names. Same DATA, different SHAPE, so a shared
 # import would just be re-splitting them back apart at the call site.
-_DEST_BY_ROLE = {"FACULTY": "/account", "HOD": "/account", "STUDENT": "/profile"}
+_DEST_BY_ROLE = {"ADMIN": "/account", "FACULTY": "/account", "HOD": "/account", "STUDENT": "/profile"}
 
 
 class LoginBody(BaseModel):

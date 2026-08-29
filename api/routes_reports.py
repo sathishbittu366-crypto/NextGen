@@ -14,7 +14,7 @@ router = APIRouter(prefix="/api/reports", tags=["reports"])
 
 
 def _require_admin(user: CurrentUser):
-    if user.role != "HOD":
+    if user.role not in ("HOD", "ADMIN"):
         raise ApiError("Only Admin / HOD can view and manage problem reports", 403, "FORBIDDEN")
 
 

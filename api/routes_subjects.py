@@ -24,8 +24,8 @@ router = APIRouter(tags=["subjects"])
 
 
 def _require_hod(user: CurrentUser):
-    if user.role != "HOD":
-        raise ApiError("HOD access only", 403, "FORBIDDEN")
+    if user.role not in ("HOD", "ADMIN"):
+        raise ApiError("HOD or Admin access only", 403, "FORBIDDEN")
 
 
 @router.get("/api/subjects")

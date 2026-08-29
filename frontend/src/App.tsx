@@ -126,7 +126,7 @@ export function App() {
       <Route
         path="/students/new"
         element={
-          <Guard user={user} reload={reload} condition={user?.role === "HOD"} fallback="/students">
+          <Guard user={user} reload={reload} condition={user?.role === "HOD" || user?.role === "ADMIN"} fallback="/students">
             <StudentFormPage user={user!} onLoggedOut={handleLoggedOut} />
           </Guard>
         }
@@ -134,7 +134,7 @@ export function App() {
       <Route
         path="/students/:studentId/edit"
         element={
-          <Guard user={user} reload={reload} condition={user?.role === "HOD"} fallback="/students">
+          <Guard user={user} reload={reload} condition={user?.role === "HOD" || user?.role === "ADMIN"} fallback="/students">
             <StudentFormPage user={user!} onLoggedOut={handleLoggedOut} />
           </Guard>
         }
@@ -148,21 +148,21 @@ export function App() {
         }
       />
 
-      {/* ── Faculty (Group 5, HOD-only) ── */}
+      {/* ── Faculty (Group 5, HOD/Admin) ── */}
       <Route
         path="/faculty"
         element={
-          <Guard user={user} reload={reload} condition={user?.role === "HOD"} fallback="/">
+          <Guard user={user} reload={reload} condition={user?.role === "HOD" || user?.role === "ADMIN"} fallback="/">
             <FacultyPage user={user!} onLoggedOut={handleLoggedOut} />
           </Guard>
         }
       />
 
-      {/* ── Subjects (Group 5, HOD-only) ── */}
+      {/* ── Subjects (Group 5, HOD/Admin) ── */}
       <Route
         path="/subjects"
         element={
-          <Guard user={user} reload={reload} condition={user?.role === "HOD"} fallback="/">
+          <Guard user={user} reload={reload} condition={user?.role === "HOD" || user?.role === "ADMIN"} fallback="/">
             <SubjectsPage user={user!} onLoggedOut={handleLoggedOut} />
           </Guard>
         }
@@ -178,17 +178,17 @@ export function App() {
         }
       />
 
-      {/* ── Audit Log (HOD only) ── */}
+      {/* ── Audit Log (HOD/Admin) ── */}
       <Route
         path="/audit-log"
         element={
-          <Guard user={user} reload={reload} condition={user?.role === "HOD"} fallback="/">
+          <Guard user={user} reload={reload} condition={user?.role === "HOD" || user?.role === "ADMIN"} fallback="/">
             <AuditLogPage user={user!} onLoggedOut={handleLoggedOut} />
           </Guard>
         }
       />
 
-      {/* ── SMS Log (HOD only) ── */}
+      {/* ── SMS Log (HOD/Admin) ── */}
       <Route
         path="/sms-log"
         element={
@@ -201,13 +201,13 @@ export function App() {
       <Route
         path="/problem-reports"
         element={
-          <Guard user={user} reload={reload} condition={user?.role === "HOD"} fallback="/">
+          <Guard user={user} reload={reload} condition={user?.role === "HOD" || user?.role === "ADMIN"} fallback="/">
             <ProblemReportsPage user={user!} onLoggedOut={handleLoggedOut} />
           </Guard>
         }
       />
 
-      {/* ── My Account (HOD/FACULTY, Group 6) ── */}
+      {/* ── My Account (HOD/FACULTY/ADMIN, Group 6) ── */}
       <Route
         path="/me/account"
         element={
@@ -231,7 +231,7 @@ export function App() {
       <Route
         path="/hod-dashboard"
         element={
-          <Guard user={user} reload={reload} condition={user?.role === "HOD"} fallback="/attendance">
+          <Guard user={user} reload={reload} condition={user?.role === "HOD" || user?.role === "ADMIN"} fallback="/attendance">
             <HodDashboard user={user!} onLoggedOut={handleLoggedOut} />
           </Guard>
         }

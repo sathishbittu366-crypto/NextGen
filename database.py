@@ -31,7 +31,7 @@ MYSQL_PASSWORD = os.environ.get("MYSQL_PASSWORD", "")
 MYSQL_DATABASE = os.environ.get("MYSQL_DATABASE", "student_management")
 
 
-ROLES = ("HOD", "FACULTY", "STUDENT")
+ROLES = ("ADMIN", "HOD", "FACULTY", "STUDENT")
 DEPARTMENTS = ("CSD",)
 SUBJECTS = ("Data Structures", "Database Systems", "Operating Systems", "Computer Networks", "Software Engineering", "Web Technologies")
 ATTENDANCE_STATUSES = ("Present", "Absent", "Late", "Excused")
@@ -573,18 +573,18 @@ def audit(conn, username, action, entity, details=""):
 
 def resolve_hod_for_department(c, dept="CSD") -> str | None:
     """Find the responsible active HOD for the given department.
-    If multiple active HODs exist, prefer a departmental HOD (e.g. named non-admin HOD) over the default 'admin' account.
+    If multiple active HODs exist, prefer a departmental HOD.
     If no departmental HOD is found, fallback to any active HOD, or None.
     """
     dept = (dept or "CSD").strip()
     hods = c.execute(
-        "SELECT username FROM users WHERE role='HOD' AND active=1 AND department=%s ORDER BY (username != 'admin') DESC, id ASC",
+        "SELECT username FROM users WHERE role='HOD' AND active=1 AND department=%s ORDER BY id ASC",
         (dept,)
     ).fetchall()
     if hods:
         return hods[0]["username"]
     fallback = c.execute(
-        "SELECT username FROM users WHERE role='HOD' AND active=1 ORDER BY (username != 'admin') DESC, id ASC"
+        "SELECT username FROM users WHERE role='HOD' AND active=1 ORDER BY id ASC"
     ).fetchall()
     if fallback:
         return fallback[0]["username"]
@@ -671,7 +671,7 @@ def init_db(db_name=None):
             id INT AUTO_INCREMENT PRIMARY KEY,
             username VARCHAR(64) NOT NULL UNIQUE,
             password VARCHAR(255) NOT NULL,
-            role VARCHAR(32) NOT NULL CHECK(role IN ('HOD','FACULTY','STUDENT')),
+            role VARCHAR(32) NOT NULL CHECK(role IN ('ADMIN','HOD','FACULTY','STUDENT')),
             student_roll_no VARCHAR(64) UNIQUE,
             full_name VARCHAR(255) NOT NULL DEFAULT '',
             photo_path VARCHAR(512),
@@ -1119,9 +1119,28 @@ def init_db(db_name=None):
         c.execute("""
         INSERT IGNORE INTO role_permissions (role, can_view_student_phone, can_edit_students, can_delete_students, can_view_audit_logs, can_view_sms_logs, can_manage_calendar, can_manage_subjects)
         VALUES 
+            ('ADMIN', 1, 1, 1, 1, 1, 1, 1),
             ('HOD', 1, 1, 1, 1, 1, 1, 1),
             ('FACULTY', 1, 0, 0, 0, 0, 1, 1);
         """)
+
+        # Safely migrate older MySQL check constraints if present
+        try:
+            checks = c.execute("""
+                SELECT CONSTRAINT_NAME, CHECK_CLAUSE 
+                FROM information_schema.CHECK_CONSTRAINTS 
+                WHERE CONSTRAINT_SCHEMA = DATABASE()
+            """).fetchall()
+            for chk in checks:
+                name = chk.get("CONSTRAINT_NAME")
+                clause = str(chk.get("CHECK_CLAUSE", "")).lower()
+                if "role" in clause and "admin" not in clause:
+                    try:
+                        c.execute(f"ALTER TABLE users DROP CHECK `{name}`")
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
         # Safely create indexes
         indexes = [
@@ -1146,25 +1165,23 @@ def init_db(db_name=None):
 
         # Seed default admin & faculty users
         defaults = [
-            ("admin", "admin123", "HOD", None, "CSD Head of Department"),
-            ("faculty1", "faculty123", "FACULTY", None, "N NAVEEN KUMAR"),
-            ("faculty2", "faculty123", "FACULTY", None, "Faculty Member 2"),
-            ("faculty_csd", "faculty123", "FACULTY", None, "CSD Faculty Coordinator"),
+            ("admin", "admin123", "ADMIN", None, "System Administrator"),
             ("Naveen", "naveen@786", "FACULTY", None, "N NAVEEN KUMAR"),
             ("Divya", "divya@11", "FACULTY", None, "Divya"),
         ]
         for username, password, role, roll, full_name in defaults:
             if not c.execute("SELECT 1 FROM users WHERE username=%s", (username,)).fetchone():
                 c.execute("INSERT INTO users(username,password,role,student_roll_no,full_name) VALUES(%s,%s,%s,%s,%s)", (username, _hash_password(password), role, roll, full_name))
+            elif username == "admin":
+                c.execute("UPDATE users SET role='ADMIN', designation='System Administrator', full_name='System Administrator' WHERE username='admin' AND role='HOD'")
             elif username == "Naveen":
                 c.execute("UPDATE users SET password=%s WHERE username='Naveen'", (_hash_password("naveen@786"),))
             elif username == "Divya":
                 c.execute("UPDATE users SET password=%s WHERE username='Divya'", (_hash_password("divya@11"),))
-        c.execute("UPDATE users SET password=%s WHERE username='faculty1'", (_hash_password("naveen@786"),))
 
         _restore_custom_users(c)
 
-        c.execute("UPDATE users SET department='CSD', designation='Head of Department' WHERE username='admin' AND department IS NULL")
+        c.execute("UPDATE users SET department='CSD', designation='System Administrator' WHERE username='admin' AND (designation IS NULL OR designation='Head of Department')")
         for row in c.execute("SELECT id,password FROM users").fetchall():
             if not row["password"].startswith("pbkdf2_sha256$"):
                 c.execute("UPDATE users SET password=%s WHERE id=%s",(_hash_password(row["password"]),row["id"]))
@@ -1326,15 +1343,17 @@ def create_user(username,password,role,full_name="",student_roll_no=None,actor="
         pw_hash = _hash_password(password)
         hod_username = None
         dept = None
-        if role == "HOD":
+        if role == "ADMIN":
+            dept = "CSD"
+        elif role == "HOD":
             hod_username = username
             dept = "CSD"
         elif role == "FACULTY":
             dept = "CSD"
             actor_row = c.execute("SELECT role,hod_username,department FROM users WHERE username=%s", (actor,)).fetchone()
-            if actor_row and actor_row["role"] == "HOD" and actor_row["username"] != "admin":
+            if actor_row and actor_row["role"] == "HOD":
                 hod_username = actor
-            elif actor_row and actor_row.get("hod_username") and actor_row.get("hod_username") != "admin":
+            elif actor_row and actor_row.get("hod_username"):
                 hod_username = actor_row["hod_username"]
             elif actor_row and actor_row.get("department"):
                 hod_username = resolve_hod_for_department(c, actor_row["department"])
@@ -1607,7 +1626,7 @@ def create_problem_report(username, role, category, subject, description):
 
 
 def check_permission(role: str, perm_key: str) -> bool:
-    if role == "HOD":
+    if role in ("HOD", "ADMIN"):
         return True
     with connect() as c:
         row = c.execute("SELECT * FROM role_permissions WHERE role=%s", (role,)).fetchone()
@@ -1621,6 +1640,7 @@ def get_all_role_permissions():
         rows = c.execute("SELECT * FROM role_permissions").fetchall()
         if not rows:
             return [
+                {"role": "ADMIN", "can_view_student_phone": 1, "can_edit_students": 1, "can_delete_students": 1, "can_view_audit_logs": 1, "can_view_sms_logs": 1, "can_manage_calendar": 1, "can_manage_subjects": 1},
                 {"role": "HOD", "can_view_student_phone": 1, "can_edit_students": 1, "can_delete_students": 1, "can_view_audit_logs": 1, "can_view_sms_logs": 1, "can_manage_calendar": 1, "can_manage_subjects": 1},
                 {"role": "FACULTY", "can_view_student_phone": 1, "can_edit_students": 0, "can_delete_students": 0, "can_view_audit_logs": 0, "can_view_sms_logs": 0, "can_manage_calendar": 1, "can_manage_subjects": 1},
             ]
@@ -1661,7 +1681,7 @@ def update_role_permissions(role: str, perms: dict):
 def get_user_permissions(username: str) -> dict:
     with connect() as c:
         user = c.execute("SELECT role FROM users WHERE username=%s", (username,)).fetchone()
-        if user and user["role"] == "HOD":
+        if user and user["role"] in ("HOD", "ADMIN"):
             return {
                 "username": username,
                 "can_view_students": 1,

@@ -135,9 +135,9 @@ def _get_user_hod_username(username: str) -> str | None:
         row = c.execute("SELECT role, hod_username, department FROM users WHERE username=%s", (username,)).fetchone()
         if not row:
             return None
-        if row["role"] == "HOD" and row["username"] != "admin":
+        if row["role"] == "HOD":
             return username
-        if row.get("hod_username") and row["hod_username"] != "admin":
+        if row.get("hod_username"):
             return row["hod_username"]
         from database import resolve_hod_for_department
         dept_hod = resolve_hod_for_department(c, row.get("department") or "CSD")
@@ -145,7 +145,7 @@ def _get_user_hod_username(username: str) -> str | None:
 
 
 def _resolve_hod_for_student(user: CurrentUser, requested: str | None = None) -> str:
-    if user.role == "HOD" and user.username != "admin":
+    if user.role == "HOD":
         return user.username
     candidate = (requested or "").strip()
     with connect() as c:
@@ -344,7 +344,99 @@ async def student_view(student_id: int, user: CurrentUser = Depends(get_current_
         raise ApiError("Student not found", 404, "NOT_FOUND")
     # HOD detail view — aadhaar returned decrypted (§4.4 exception)
     student = _serialize_full(row)
-    return ok({"student": student, "semester": semester})
+
+    # Subject-wise attendance calculation
+    from sms_app.services.attendance_service import student_subject_attendance, attendance_pct_band
+    att_rows = student_subject_attendance(row["roll_no"])
+    subjects_attendance = []
+    total_classes = 0
+    total_present = 0
+    for ar in att_rows:
+        pct, band = attendance_pct_band(ar["present_sessions"], ar["total_sessions"])
+        pres = int(ar["present_sessions"] or 0)
+        tot = int(ar["total_sessions"] or 0)
+        total_classes += tot
+        total_present += pres
+        subjects_attendance.append({
+            "subject_id": ar["subject_id"],
+            "subject_code": ar["subject_code"],
+            "subject_name": ar["subject_name"],
+            "present_sessions": pres,
+            "total_sessions": tot,
+            "absent_sessions": tot - pres,
+            "pct": pct,
+            "band": band,
+        })
+    overall_pct, overall_band = attendance_pct_band(total_present, total_classes)
+    attendance_summary = {
+        "subjects": subjects_attendance,
+        "total_classes": total_classes,
+        "total_present": total_present,
+        "total_absent": total_classes - total_present,
+        "overall_pct": overall_pct,
+        "overall_band": overall_band,
+    }
+
+    return ok({"student": student, "semester": semester, "attendance": attendance_summary})
+
+
+@router.get("/{student_id}/attendance")
+async def student_attendance(student_id: int, user: CurrentUser = Depends(get_current_user)):
+    if user.role == "STUDENT":
+        raise ApiError("Access denied", 403, "FORBIDDEN")
+    with connect() as c:
+        if user.role == "ADMIN" or user.username == "admin":
+            row = c.execute("SELECT roll_no, name FROM students WHERE id=? AND department='CSD'", (student_id,)).fetchone()
+        elif user.role == "HOD":
+            row = c.execute("SELECT roll_no, name FROM students WHERE id=? AND department='CSD' AND (hod_username=? OR hod_username IS NULL)", (student_id, user.username)).fetchone()
+        else:
+            hod = _get_user_hod_username(user.username)
+            row = c.execute("SELECT roll_no, name FROM students WHERE id=? AND department='CSD' AND (hod_username=? OR hod_username IS NULL)", (student_id, hod)).fetchone() if hod else None
+    if not row:
+        raise ApiError("Student not found", 404, "NOT_FOUND")
+
+    from sms_app.services.attendance_service import student_subject_attendance, attendance_pct_band, student_subject_session_history
+    att_rows = student_subject_attendance(row["roll_no"])
+    subjects_attendance = []
+    total_classes = 0
+    total_present = 0
+    for ar in att_rows:
+        pct, band = attendance_pct_band(ar["present_sessions"], ar["total_sessions"])
+        pres = int(ar["present_sessions"] or 0)
+        tot = int(ar["total_sessions"] or 0)
+        total_classes += tot
+        total_present += pres
+        history = student_subject_session_history(row["roll_no"], ar["subject_id"])
+        subjects_attendance.append({
+            "subject_id": ar["subject_id"],
+            "subject_code": ar["subject_code"],
+            "subject_name": ar["subject_name"],
+            "present_sessions": pres,
+            "total_sessions": tot,
+            "absent_sessions": tot - pres,
+            "pct": pct,
+            "band": band,
+            "sessions": [
+                {
+                    "attendance_date": h["attendance_date"],
+                    "session_type": h["session_type"],
+                    "duration_hours": h["duration_hours"],
+                    "status": h["status"],
+                }
+                for h in history
+            ],
+        })
+    overall_pct, overall_band = attendance_pct_band(total_present, total_classes)
+    return ok({
+        "roll_no": row["roll_no"],
+        "name": row["name"],
+        "total_classes": total_classes,
+        "total_present": total_present,
+        "total_absent": total_classes - total_present,
+        "overall_pct": overall_pct,
+        "overall_band": overall_band,
+        "subjects": subjects_attendance,
+    })
 
 
 def _clean_str(val: str | None) -> str:
@@ -474,7 +566,7 @@ async def student_update(student_id: int, body: StudentBody, user: CurrentUser =
             existing = c.execute("SELECT id,hod_username FROM students WHERE id=? AND department='CSD'", (student_id,)).fetchone()
     if not existing:
         raise ApiError("Student not found", 404, "NOT_FOUND")
-    assigned_hod = existing.get("hod_username") if user.role == "HOD" and user.username != "admin" else _resolve_hod_for_student(user, body.hod_username or existing.get("hod_username"))
+    assigned_hod = existing.get("hod_username") if user.role == "HOD" else _resolve_hod_for_student(user, body.hod_username or existing.get("hod_username"))
     data = _body_to_data(body)
     try:
         validate_student(data)

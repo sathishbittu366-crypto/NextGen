@@ -212,11 +212,16 @@ async def monthly_register(
         from database import connect
         with connect() as c:
             target = c.execute(
-                "SELECT username, role, hod_username, active FROM users WHERE username=%s",
+                "SELECT username, role, hod_username, department, active FROM users WHERE username=%s",
                 (target_faculty,),
             ).fetchone()
-        if not target or not target["active"] or target["role"] != "FACULTY" or target.get("hod_username") != user.username:
-            raise ApiError("Faculty account is outside your HOD scope", 403, "FORBIDDEN")
+        if not target or not target["active"] or (
+            target["username"] != user.username
+            and target["role"] != "FACULTY"
+            and target.get("hod_username") != user.username
+        ):
+            if target and target.get("department") != getattr(user, "department", "CSD") and target.get("hod_username") != user.username and target["username"] != user.username:
+                raise ApiError("Faculty account is outside your HOD scope", 403, "FORBIDDEN")
     try:
         data = month_register(
             faculty_username=target_faculty,
@@ -242,11 +247,16 @@ async def monthly_register_pdf(
         from database import connect
         with connect() as c:
             target = c.execute(
-                "SELECT username, role, hod_username, active FROM users WHERE username=%s",
+                "SELECT username, role, hod_username, department, active FROM users WHERE username=%s",
                 (target_faculty,),
             ).fetchone()
-        if not target or not target["active"] or target["role"] != "FACULTY" or target.get("hod_username") != user.username:
-            raise ApiError("Faculty account is outside your HOD scope", 403, "FORBIDDEN")
+        if not target or not target["active"] or (
+            target["username"] != user.username
+            and target["role"] != "FACULTY"
+            and target.get("hod_username") != user.username
+        ):
+            if target and target.get("department") != getattr(user, "department", "CSD") and target.get("hod_username") != user.username and target["username"] != user.username:
+                raise ApiError("Faculty account is outside your HOD scope", 403, "FORBIDDEN")
     try:
         data = month_register(
             faculty_username=target_faculty,
@@ -260,6 +270,112 @@ async def monthly_register_pdf(
         content=pdf, media_type="application/pdf",
         headers={"Content-Disposition": f'inline; filename="attendance-{data["subject"]["code"]}-{year}-{month:02d}.pdf"'},
     )
+
+
+@router.get("/semester-summary")
+async def semester_attendance_summary(
+    semester_id: int = Query(...),
+    year: int | None = Query(default=None),
+    month: int | None = Query(default=None),
+    user: CurrentUser = Depends(get_current_user),
+):
+    _require_staff(user)
+    from database import connect
+    from sms_app.services.attendance_service import attendance_pct_band
+
+    with connect() as c:
+        sem = c.execute("SELECT id, code, name FROM academic_semesters WHERE id=%s", (semester_id,)).fetchone()
+        if not sem:
+            raise ApiError("Semester not found", 404, "NOT_FOUND")
+
+        subjects = c.execute(
+            "SELECT id, code, name, has_lab FROM subjects WHERE semester_id=%s AND active=1 ORDER BY name",
+            (semester_id,),
+        ).fetchall()
+
+        hod_scope = user.username if user.role == "HOD" else None
+        if not hod_scope and user.role != "ADMIN":
+            from api.routes_students import _get_user_hod_username
+            hod_scope = _get_user_hod_username(user.username)
+
+        students = c.execute(
+            """
+            SELECT roll_no, name FROM students
+            WHERE current_semester_id=%s AND department='CSD' AND active=1
+              AND (hod_username=%s OR %s IS NULL OR %s='admin')
+            ORDER BY roll_no
+            """,
+            (semester_id, hod_scope, hod_scope, user.username),
+        ).fetchall()
+
+        # Fetch attendance session records grouped by student and subject
+        where_extra = ""
+        params = [semester_id]
+        if year and month:
+            import calendar
+            from datetime import datetime
+            first_day = datetime(int(year), int(month), 1).date().isoformat()
+            last_day = datetime(int(year), int(month), calendar.monthrange(int(year), int(month))[1]).date().isoformat()
+            where_extra = " AND a.attendance_date BETWEEN %s AND %s"
+            params.extend([first_day, last_day])
+
+        rows = c.execute(
+            f"""
+            SELECT r.roll_no, a.subject_id,
+                   COUNT(r.id) AS total_sessions,
+                   SUM(CASE WHEN r.status='Present' THEN 1 ELSE 0 END) AS present_sessions
+            FROM attendance_records r
+            JOIN attendance_sessions a ON a.id=r.session_id
+            WHERE a.semester_id=%s {where_extra}
+            GROUP BY r.roll_no, a.subject_id
+            """,
+            params,
+        ).fetchall()
+
+        att_map = {
+            (r["roll_no"], r["subject_id"]): (int(r["present_sessions"] or 0), int(r["total_sessions"] or 0))
+            for r in rows
+        }
+
+    students_list = []
+    for st in students:
+        sub_list = []
+        tot_all = 0
+        pres_all = 0
+        for sub in subjects:
+            p, t = att_map.get((st["roll_no"], sub["id"]), (0, 0))
+            tot_all += t
+            pres_all += p
+            pct, band = attendance_pct_band(p, t)
+            sub_list.append({
+                "subject_id": sub["id"],
+                "subject_code": sub["code"],
+                "subject_name": sub["name"],
+                "present": p,
+                "total": t,
+                "absent": t - p,
+                "pct": pct,
+                "band": band,
+            })
+        overall_pct, overall_band = attendance_pct_band(pres_all, tot_all)
+        students_list.append({
+            "roll_no": st["roll_no"],
+            "name": st["name"],
+            "total_classes": tot_all,
+            "present_classes": pres_all,
+            "absent_classes": tot_all - pres_all,
+            "overall_pct": overall_pct,
+            "overall_band": overall_band,
+            "subjects": sub_list,
+        })
+
+    return ok({
+        "semester": dict(sem),
+        "subjects": [dict(s) for s in subjects],
+        "students": students_list,
+        "year": year,
+        "month": month,
+    })
 
 
 # ──────────────────────────────────────────────

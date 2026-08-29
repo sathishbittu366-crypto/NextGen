@@ -34,7 +34,7 @@ async def faculty_page(user: CurrentUser = Depends(get_current_user)):
     by_subject = subject_faculty_map()
     with connect() as c:
         accounts = c.execute(
-            "SELECT id, username, full_name, role, department, designation, email, phone, active, must_change_password, student_roll_no FROM users WHERE role != 'STUDENT' ORDER BY role, username"
+            "SELECT id, username, full_name, role, department, designation, email, phone, active, must_change_password, student_roll_no FROM users WHERE role != 'STUDENT' ORDER BY (role='ADMIN') DESC, (role='HOD') DESC, username ASC"
         ).fetchall()
     return ok({
         "hours": [dict(h) for h in hours],
@@ -64,7 +64,7 @@ class PermissionUpdateBody(BaseModel):
 @router.post("/permissions")
 async def save_permissions(body: PermissionUpdateBody, user: CurrentUser = Depends(get_current_user)):
     _require_hod(user)
-    if body.role not in ("HOD", "FACULTY"):
+    if body.role not in ("ADMIN", "HOD", "FACULTY"):
         raise ApiError("Invalid role specified", 400, "VALIDATION_ERROR")
     update_role_permissions(body.role, body.dict())
     with connect() as c:
@@ -130,8 +130,8 @@ async def toggle_account_status(account_id: int, user: CurrentUser = Depends(get
         row = c.execute("SELECT * FROM users WHERE id=?", (account_id,)).fetchone()
         if not row:
             raise ApiError("Account not found", 404, "NOT_FOUND")
-        if row["role"] == "HOD" or row["username"] == user.username:
-            raise ApiError("HOD / Logged-in accounts cannot be deactivated", 400, "SELF_DEACTIVATE")
+        if row["role"] in ("HOD", "ADMIN") or row["username"] == user.username or row["username"] == "admin":
+            raise ApiError("HOD / Admin / Logged-in accounts cannot be deactivated", 400, "SELF_DEACTIVATE")
         new_active = 0 if row["active"] else 1
         c.execute("UPDATE users SET active=? WHERE id=?", (new_active, account_id))
         audit(c, user.username, "STATUS", "user", f"{row['username']} -> {new_active}")
@@ -160,8 +160,8 @@ async def delete_account(account_id: int, user: CurrentUser = Depends(get_curren
         if not row:
             raise ApiError("Account not found", 404, "NOT_FOUND")
         username = row["username"]
-        if username == user.username or username == "admin":
-            raise ApiError("Logged-in account or primary admin cannot be deleted", 400, "CANNOT_DELETE_ADMIN")
+        if username == user.username or username == "admin" or row["role"] == "ADMIN":
+            raise ApiError("Logged-in account or primary administrator cannot be deleted", 400, "CANNOT_DELETE_ADMIN")
 
         # 1. Clean individual user permissions
         c.execute("DELETE FROM user_permissions WHERE username=?", (username,))

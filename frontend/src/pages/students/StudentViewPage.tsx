@@ -200,6 +200,131 @@ export function StudentViewPage({ user, onLoggedOut }: StudentViewPageProps) {
         </div>
       </div>
 
+      {/* ── Subject-Wise Attendance Breakdown Card ── */}
+      <div className="card card-pad" style={{ marginTop: 16 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12, marginBottom: 14 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{
+              width: 36, height: 36, borderRadius: 10,
+              background: "linear-gradient(135deg, #2563eb, #3b82f6)",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              color: "#fff", fontSize: 17,
+              boxShadow: "0 4px 12px rgba(37, 99, 235, 0.3)",
+            }}>
+              📊
+            </div>
+            <div>
+              <h3 style={{ margin: 0, fontSize: 16, fontWeight: 800, color: "var(--text)" }}>
+                Subject-Wise Attendance Breakdown
+              </h3>
+              <p style={{ margin: 0, color: "var(--muted)", fontSize: 12 }}>
+                Real-time session attendance record across enrolled subjects
+              </p>
+            </div>
+          </div>
+
+          {detail.attendance && detail.attendance.overall_pct !== null && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: "var(--muted)" }}>Overall:</span>
+              <span
+                className={`chip ${
+                  detail.attendance.overall_band === "green"
+                    ? "chip-green"
+                    : detail.attendance.overall_band === "yellow"
+                    ? "chip-warn"
+                    : "chip-red"
+                }`}
+                style={{ fontSize: 13, fontWeight: 800, padding: "4px 10px" }}
+              >
+                {detail.attendance.overall_pct}% {detail.attendance.overall_pct >= 75 ? "· Eligible (≥75%)" : "· Shortage (<75%)"}
+              </span>
+            </div>
+          )}
+        </div>
+
+        {/* KPI Mini Badges */}
+        {detail.attendance && (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 10, marginBottom: 16 }}>
+            <div style={{ background: "var(--chip-bg-muted)", padding: "10px 14px", borderRadius: 10, border: "1px solid var(--border)" }}>
+              <div style={{ fontSize: 11, color: "var(--muted)", fontWeight: 700 }}>Total Classes</div>
+              <div style={{ fontSize: 18, fontWeight: 800, marginTop: 2 }}>{detail.attendance.total_classes}</div>
+            </div>
+            <div style={{ background: "rgba(16, 185, 129, 0.08)", padding: "10px 14px", borderRadius: 10, border: "1px solid rgba(16, 185, 129, 0.25)" }}>
+              <div style={{ fontSize: 11, color: "#059669", fontWeight: 700 }}>Attended</div>
+              <div style={{ fontSize: 18, fontWeight: 800, color: "#059669", marginTop: 2 }}>{detail.attendance.total_present}</div>
+            </div>
+            <div style={{ background: "rgba(239, 68, 68, 0.08)", padding: "10px 14px", borderRadius: 10, border: "1px solid rgba(239, 68, 68, 0.25)" }}>
+              <div style={{ fontSize: 11, color: "#dc2626", fontWeight: 700 }}>Missed / Absent</div>
+              <div style={{ fontSize: 18, fontWeight: 800, color: "#dc2626", marginTop: 2 }}>{detail.attendance.total_absent}</div>
+            </div>
+            <div style={{ background: "rgba(37, 99, 235, 0.08)", padding: "10px 14px", borderRadius: 10, border: "1px solid rgba(37, 99, 235, 0.25)" }}>
+              <div style={{ fontSize: 11, color: "#2563eb", fontWeight: 700 }}>Attendance %</div>
+              <div style={{ fontSize: 18, fontWeight: 800, color: "#2563eb", marginTop: 2 }}>
+                {detail.attendance.overall_pct !== null ? `${detail.attendance.overall_pct}%` : "—"}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Subjects Attendance Table */}
+        {(!detail.attendance || detail.attendance.subjects.length === 0) ? (
+          <div className="empty-note" style={{ padding: "18px 0" }}>
+            No attendance session records found for this student yet.
+          </div>
+        ) : (
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th style={{ width: "120px" }}>Code</th>
+                  <th>Subject Name</th>
+                  <th style={{ width: "100px", textAlign: "center" }}>Present</th>
+                  <th style={{ width: "100px", textAlign: "center" }}>Total</th>
+                  <th style={{ width: "180px" }}>Progress</th>
+                  <th style={{ width: "85px", textAlign: "right" }}>%</th>
+                  <th style={{ width: "110px", textAlign: "center" }}>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {detail.attendance.subjects.map((sub) => {
+                  const pctVal = sub.pct ?? 0;
+                  const barColor = sub.band === "green" ? "#10b981" : sub.band === "yellow" ? "#f59e0b" : "#ef4444";
+                  return (
+                    <tr key={sub.subject_id}>
+                      <td><span className="code-badge" style={{ fontWeight: 700 }}>{sub.subject_code}</span></td>
+                      <td><strong>{sub.subject_name}</strong></td>
+                      <td style={{ textAlign: "center", color: "#059669", fontWeight: 700 }}>{sub.present_sessions}</td>
+                      <td style={{ textAlign: "center", color: "var(--muted)", fontWeight: 600 }}>{sub.total_sessions}</td>
+                      <td>
+                        <div style={{ width: "100%", height: 8, background: "#e5e7eb", borderRadius: 4, overflow: "hidden" }}>
+                          <div style={{
+                            width: `${Math.min(pctVal, 100)}%`,
+                            height: "100%",
+                            background: barColor,
+                            borderRadius: 4,
+                            transition: "width 0.3s ease",
+                          }} />
+                        </div>
+                      </td>
+                      <td style={{ textAlign: "right", fontWeight: 800 }}>
+                        {sub.pct !== null ? `${sub.pct}%` : "—"}
+                      </td>
+                      <td style={{ textAlign: "center" }}>
+                        <span className={`chip ${
+                          sub.band === "green" ? "chip-green" : sub.band === "yellow" ? "chip-warn" : sub.band === "red" ? "chip-red" : "chip-muted"
+                        }`} style={{ fontSize: 11, fontWeight: 700 }}>
+                          {sub.band === "green" ? "Normal" : sub.band === "yellow" ? "Shortage" : sub.band === "red" ? "Critical" : "No Data"}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
       <div className="card card-pad" style={{ marginTop: 16 }}>
         <h3 style={{ margin: "0 0 12px", fontSize: 15, fontWeight: 700 }}>Education Details</h3>
         <div className="table-wrap">
