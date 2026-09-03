@@ -11,6 +11,6 @@ mysql-connector-python
 pymysql
 python-dotenv  # loads .env (SMTP_HOST/SMTP_USERNAME/... for OTP email) in run_api.py
 requests  # HTTP client for database.py's proxy path (DB_PROXY_URL) — see db_proxy/
-httpx
+httpx2
 pytest
 pytest-html
