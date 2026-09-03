@@ -44,6 +44,7 @@ export interface StudentListRow {
   year_of_study?: string;
   batch?: string;
   active: boolean;
+  photo_path?: string | null;
 }
 
 export interface SemesterOption {
@@ -205,4 +206,3 @@ export function studentsPdfUrl(
   const qs = params.toString() ? `?${params.toString()}` : "";
   return getAuthUrl(`/api/students/pdf${qs}`);
 }
-

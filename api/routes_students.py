@@ -116,6 +116,7 @@ def _serialize_list_row(row) -> dict:
         "year_of_study": year,
         "batch": batch,
         "active": bool(d["active"]),
+        "photo_path": d.get("photo_path"),
     }
 
 

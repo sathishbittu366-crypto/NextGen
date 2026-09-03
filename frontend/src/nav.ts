@@ -92,44 +92,43 @@ const ICONS = {
 export function navItemsFor(role: Role): NavItem[] {
   if (role === "STUDENT") {
     return [
-      { href: "/me/profile",          icon: ICONS.profile,    label: "Profile",            key: "profile" },
-      { href: "/student-dashboard",   icon: ICONS.trending,   label: "Attendance Summary", key: "attendance-summary" },
-      { href: "/academic-calendar",   icon: ICONS.calendar,   label: "Academic Calendar",  key: "academic-calendar" },
+      { href: "/me/profile", icon: ICONS.profile, label: "Profile", key: "profile" },
+      { href: "/student-dashboard", icon: ICONS.trending, label: "Attendance Summary", key: "attendance-summary" },
+      { href: "/academic-calendar", icon: ICONS.calendar, label: "Academic Calendar", key: "academic-calendar" },
     ];
   }
   if (role === "FACULTY") {
     return [
-      { href: "/me/account",          icon: ICONS.profile,    label: "Profile",            key: "account" },
-      { href: "/attendance",          icon: ICONS.attendance, label: "Mark Attendance",    key: "attendance" },
-      { href: "/students",            icon: ICONS.students,   label: "Students",           key: "students" },
-      { href: "/academic-calendar",   icon: ICONS.calendar,   label: "Academic Calendar",  key: "academic-calendar" },
+      { href: "/me/account", icon: ICONS.profile, label: "Profile", key: "account" },
+      { href: "/attendance", icon: ICONS.attendance, label: "Mark Attendance", key: "attendance" },
+      { href: "/students", icon: ICONS.students, label: "Students", key: "students" },
+      { href: "/academic-calendar", icon: ICONS.calendar, label: "Academic Calendar", key: "academic-calendar" },
     ];
   }
   if (role === "ADMIN") {
     return [
-      { href: "/me/account",          icon: ICONS.profile,    label: "Profile",            key: "account" },
-      { href: "/attendance",          icon: ICONS.attendance, label: "Mark Attendance",    key: "attendance" },
-      { href: "/hod-dashboard",       icon: ICONS.trending,   label: "Admin Overview",     key: "hod-dashboard" },
-      { href: "/faculty",             icon: ICONS.faculty,    label: "Faculty",            key: "faculty" },
-      { href: "/subjects",            icon: ICONS.subjects,   label: "Subjects",           key: "subjects" },
-      { href: "/students",            icon: ICONS.students,   label: "Students",           key: "students" },
-      { href: "/academic-calendar",   icon: ICONS.calendar,   label: "Academic Calendar",  key: "academic-calendar" },
-      { href: "/audit-log",           icon: ICONS.audit,      label: "Audit Log",          key: "audit" },
-      { href: "/sms-log",             icon: ICONS.sms,        label: "SMS Log",            key: "sms-log" },
-      { href: "/problem-reports",     icon: ICONS.reports,    label: "Problem Reports",    key: "problem-reports" },
+      { href: "/me/account", icon: ICONS.profile, label: "Profile", key: "account" },
+      { href: "/attendance", icon: ICONS.attendance, label: "Mark Attendance", key: "attendance" },
+      { href: "/hod-dashboard", icon: ICONS.trending, label: "Admin Overview", key: "hod-dashboard" },
+      { href: "/faculty", icon: ICONS.faculty, label: "Faculty", key: "faculty" },
+      { href: "/subjects", icon: ICONS.subjects, label: "Subjects", key: "subjects" },
+      { href: "/students", icon: ICONS.students, label: "Students", key: "students" },
+      { href: "/academic-calendar", icon: ICONS.calendar, label: "Academic Calendar", key: "academic-calendar" },
+      { href: "/audit-log", icon: ICONS.audit, label: "Audit Log", key: "audit" },
+      { href: "/sms-log", icon: ICONS.sms, label: "SMS Log", key: "sms-log" },
+      { href: "/problem-reports", icon: ICONS.reports, label: "Problem Reports", key: "problem-reports" },
     ];
   }
   // HOD
   return [
-    { href: "/me/account",          icon: ICONS.profile,    label: "Profile",            key: "account" },
-    { href: "/attendance",          icon: ICONS.attendance, label: "Mark Attendance",    key: "attendance" },
-    { href: "/hod-dashboard",       icon: ICONS.trending,   label: "HOD Overview",       key: "hod-dashboard" },
-    { href: "/faculty",             icon: ICONS.faculty,    label: "Faculty",            key: "faculty" },
-    { href: "/subjects",            icon: ICONS.subjects,   label: "Subjects",           key: "subjects" },
-    { href: "/students",            icon: ICONS.students,   label: "Students",           key: "students" },
-    { href: "/academic-calendar",   icon: ICONS.calendar,   label: "Academic Calendar",  key: "academic-calendar" },
-    { href: "/audit-log",           icon: ICONS.audit,      label: "Audit Log",          key: "audit" },
-    { href: "/sms-log",             icon: ICONS.sms,        label: "SMS Log",            key: "sms-log" },
-    { href: "/problem-reports",     icon: ICONS.reports,    label: "Problem Reports",    key: "problem-reports" },
+    { href: "/me/account", icon: ICONS.profile, label: "Profile", key: "account" },
+    { href: "/hod-dashboard", icon: ICONS.trending, label: "HOD Overview", key: "hod-dashboard" },
+    { href: "/faculty", icon: ICONS.faculty, label: "Faculty", key: "faculty" },
+    { href: "/subjects", icon: ICONS.subjects, label: "Subjects", key: "subjects" },
+    { href: "/students", icon: ICONS.students, label: "Students", key: "students" },
+    { href: "/academic-calendar", icon: ICONS.calendar, label: "Academic Calendar", key: "academic-calendar" },
+    { href: "/audit-log", icon: ICONS.audit, label: "Audit Log", key: "audit" },
+    { href: "/sms-log", icon: ICONS.sms, label: "SMS Log", key: "sms-log" },
+    { href: "/problem-reports", icon: ICONS.reports, label: "Problem Reports", key: "problem-reports" },
   ];
 }

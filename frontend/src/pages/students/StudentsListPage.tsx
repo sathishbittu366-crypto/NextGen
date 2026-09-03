@@ -8,7 +8,7 @@ import {
   type StudentListRow,
   type SemesterOption,
 } from "../../api/students";
-import { ApiClientError } from "../../api/client";
+import { ApiClientError, formatPhotoUrl } from "../../api/client";
 import { type CurrentUser } from "../../api/auth";
 import { AppShell } from "../../components/AppShell";
 import { ToastPopup } from "../../components/ToastPopup";
@@ -306,7 +306,7 @@ export function StudentsListPage({ user, onLoggedOut }: StudentsListPageProps) {
         <table className="data-table">
           <thead>
             <tr>
-              <th style={{ width: 60, textAlign: "center" }}>S.No</th>
+              <th style={{ width: 60, textAlign: "center" }}>Photo</th>
               <th>Roll No</th>
               <th>Name</th>
               <th>Year & Batch</th>
@@ -317,10 +317,34 @@ export function StudentsListPage({ user, onLoggedOut }: StudentsListPageProps) {
             </tr>
           </thead>
           <tbody>
-            {displayedRows.map((r, index) => (
+            {displayedRows.map((r) => (
               <tr key={r.id}>
-                <td data-label="S.No" style={{ textAlign: "center", fontWeight: 700, color: "var(--muted)" }}>
-                  {index + 1}
+                <td data-label="Photo" style={{ textAlign: "center" }}>
+                  {formatPhotoUrl(r.photo_path ?? null) ? (
+                    <img
+                      src={formatPhotoUrl(r.photo_path ?? null)!}
+                      alt={r.name}
+                      style={{ width: 36, height: 36, borderRadius: "50%", objectFit: "cover" }}
+                    />
+                  ) : (
+                    <div
+                      style={{
+                        width: 36,
+                        height: 36,
+                        borderRadius: "50%",
+                        background: "var(--chip-bg-muted)",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        fontSize: 12,
+                        fontWeight: 700,
+                        color: "var(--muted)",
+                        margin: "0 auto",
+                      }}
+                    >
+                      {r.name?.[0]?.toUpperCase() || "?"}
+                    </div>
+                  )}
                 </td>
                 <td data-label="Roll No" style={{ fontWeight: 800, color: "var(--blue)", letterSpacing: "0.5px" }}>
                   {r.roll_no.toUpperCase()}
