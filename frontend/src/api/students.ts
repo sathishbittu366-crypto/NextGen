@@ -194,6 +194,46 @@ export async function deleteStudent(id: number): Promise<{ deleted: boolean; id:
   return apiFetch<{ deleted: boolean; id: number }>(`/api/students/${id}`, { method: "DELETE" });
 }
 
+// ──────────────────────────────────────────────
+// Bulk Import (Excel) — matches api/routes_students.py's student_bulk_import
+// ──────────────────────────────────────────────
+
+export interface BulkImportCreatedRow {
+  row: number;
+  roll_no: string;
+  name: string;
+  username: string;
+  password: string;
+}
+
+export interface BulkImportSkippedRow {
+  row: number;
+  roll_no: string;
+  reason: string;
+}
+
+export interface BulkImportFailedRow {
+  row: number;
+  roll_no: string;
+  reason: string;
+}
+
+export interface BulkImportResult {
+  total_rows: number;
+  created_count: number;
+  skipped_count: number;
+  failed_count: number;
+  created: BulkImportCreatedRow[];
+  skipped: BulkImportSkippedRow[];
+  failed: BulkImportFailedRow[];
+}
+
+// Multipart, same pattern as uploadStudentPhoto — apiUpload omits
+// Content-Type so the browser sets its own multipart boundary.
+export async function bulkImportStudents(file: File): Promise<BulkImportResult> {
+  return apiUpload<BulkImportResult>("/api/students/bulk-import", file, "file");
+}
+
 export function studentsPdfUrl(
   semesterId?: number | string | null,
   q?: string,

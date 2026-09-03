@@ -9,6 +9,7 @@ pyserial  # absentee SMS: AT-command send over the USB/serial GSM modem, see web
 cryptography  # Aadhaar/APAAR field encryption at rest, see field_encryption.py
 mysql-connector-python
 pymysql
+openpyxl  # parses .xlsx for bulk student import, see api/routes_students.py's student_bulk_import
 python-dotenv  # loads .env (SMTP_HOST/SMTP_USERNAME/... for OTP email) in run_api.py
 requests  # HTTP client for database.py's proxy path (DB_PROXY_URL) — see db_proxy/
 httpx2

@@ -8,11 +8,13 @@ in frontend/src/pages/students/ and call through frontend/src/api/students.ts.
 from __future__ import annotations
 
 from datetime import datetime
+from io import BytesIO
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel
+from openpyxl import load_workbook
 
 from database import (
     audit, connect, ensure_student_login, mask_aadhaar,
@@ -444,6 +446,19 @@ def _clean_str(val: str | None) -> str:
     return (val or "").strip()
 
 
+def _cell_to_str(val: Any) -> str:
+    """openpyxl hands back int/float for numeric-looking cells (very
+    common for Aadhaar/phone columns unless the column was explicitly
+    Text-formatted in Excel) — str(123456789012.0) is '123456789012.0',
+    which breaks validate_student's exact-digit-count checks. Strip a
+    trailing '.0' from whole-number floats; everything else -> plain str."""
+    if val is None:
+        return ""
+    if isinstance(val, float) and val.is_integer():
+        return str(int(val))
+    return str(val).strip()
+
+
 class StudentBody(BaseModel):
     roll_no: str | None = ""
     name: str | None = ""
@@ -552,6 +567,211 @@ async def student_create(body: StudentBody, user: CurrentUser = Depends(get_curr
         raise ApiError(str(e), 400, "VALIDATION_ERROR")
     except IntegrityError as e:
         raise ApiError("A student with that roll number or email already exists", 400, "VALIDATION_ERROR")
+
+
+# — Bulk Import (Excel) —
+# Column headers this endpoint understands, matched case-insensitively
+# and with surrounding whitespace stripped — mirrors the real sheet
+# handed over for 2nd-year seeding. Extra/unknown columns are ignored;
+# "Mother's Name" / "Mother's Phone Number" / "Profile photo of student"
+# have no matching DB field and are intentionally dropped (per decision:
+# no schema change for mother fields, photos skipped, Father's Phone ->
+# parent_phone since there's only one generic parent-phone column).
+BULK_IMPORT_COLUMN_MAP = {
+    "full name of the student": "name",
+    "full name of the student (as per ssc)": "name",
+    "hallticket": "roll_no",
+    "phone no": "phone",
+    "student email id": "email",
+    "address of the student": "address",
+    "aadhaar number": "aadhaar_number",
+    "father's name": "father_name",
+    "father's phone number": "parent_phone",
+}
+
+# All rows from this sheet are seeded into II-I (2nd Year, 1st Semester) —
+# matches the "which semester" decision for this specific import batch.
+# If a future sheet mixes years, this becomes a per-row lookup instead.
+BULK_IMPORT_SEMESTER_CODE = "II-I"
+
+
+def _normalize_header(h: Any) -> str:
+    # collapse internal whitespace too (not just strip ends) — the real
+    # sheet's "FULL NAME OF THE STUDENT       (as per ssc)" header has
+    # irregular internal spacing that varies by export/copy-paste, so a
+    # plain .strip() would silently fail to match on a slightly
+    # different run of spaces.
+    return " ".join(str(h or "").split()).lower()
+
+
+def _row_to_import_data(row_map: dict[str, Any]) -> dict:
+    """Same shape _body_to_data() produces, built from a spreadsheet row
+    instead of a StudentBody — every FIELD_SPECS key present so validate_student()
+    and the INSERT below (STUDENT_DB_KEYS) work unmodified. Uses _cell_to_str
+    (not _clean_str) since these are raw openpyxl cell values, which may be
+    int/float for numeric-looking columns like Aadhaar or phone."""
+    return {
+        "roll_no": _cell_to_str(row_map.get("roll_no")),
+        "name": _cell_to_str(row_map.get("name")),
+        "department": "CSD",
+        "email": _cell_to_str(row_map.get("email")),
+        "phone": _cell_to_str(row_map.get("phone")),
+        "parent_phone": _cell_to_str(row_map.get("parent_phone")),
+        "dob": "",
+        "address": _cell_to_str(row_map.get("address")),
+        "father_name": _cell_to_str(row_map.get("father_name")),
+        "category": "",
+        "gender": "",
+        "seat_category": "",
+        "apaar_id": "",
+        "aadhaar_number": _cell_to_str(row_map.get("aadhaar_number")),
+        "certificates_submitted": "",
+        "certificates_due": "",
+        "consultant_name": "",
+        "tenth_school": "",
+        "tenth_year": "",
+        "tenth_marks": "",
+        "twelfth_school": "",
+        "twelfth_year": "",
+        "twelfth_marks": "",
+        "diploma_college": "",
+        "diploma_year": "",
+        "diploma_marks": "",
+    }
+
+
+@router.post("/bulk-import")
+async def student_bulk_import(
+    file: UploadFile = File(...),
+    user: CurrentUser = Depends(get_current_user),
+):
+    """Upload an .xlsx sheet -> create a student + login for every row.
+    One DB transaction PER ROW (matches student_create's pattern) so a
+    single bad row doesn't roll back rows already committed before it —
+    the response reports success/skip/error per row instead of an
+    all-or-nothing batch result.
+    """
+    if user.role not in ("HOD", "ADMIN"):
+        raise ApiError("HOD or Admin access only", 403, "FORBIDDEN")
+
+    filename = file.filename or ""
+    if not filename.lower().endswith((".xlsx", ".xlsm")):
+        raise ApiError("Upload an .xlsx file exported from Excel", 400, "VALIDATION_ERROR")
+
+    raw = await file.read()
+    try:
+        wb = load_workbook(filename=BytesIO(raw), read_only=True, data_only=True)
+        ws = wb.active
+    except Exception:
+        raise ApiError("Could not read that file — is it a valid .xlsx?", 400, "VALIDATION_ERROR")
+
+    rows_iter = ws.iter_rows(values_only=True)
+    try:
+        header_row = next(rows_iter)
+    except StopIteration:
+        raise ApiError("The sheet is empty", 400, "VALIDATION_ERROR")
+
+    # Map each spreadsheet column index -> our internal field name, for
+    # every header we recognise (see BULK_IMPORT_COLUMN_MAP above).
+    col_index_to_field: dict[int, str] = {}
+    for idx, header in enumerate(header_row):
+        field = BULK_IMPORT_COLUMN_MAP.get(_normalize_header(header))
+        if field:
+            col_index_to_field[idx] = field
+
+    if "roll_no" not in col_index_to_field.values() or "name" not in col_index_to_field.values():
+        raise ApiError(
+            "Couldn't find the 'HallTicket' and/or 'FULL NAME OF THE STUDENT' columns — check the sheet's header row",
+            400, "VALIDATION_ERROR",
+        )
+
+    assigned_hod = _resolve_hod_for_student(user, None)
+
+    with connect() as c:
+        sem_row = c.execute(
+            "SELECT id FROM academic_semesters WHERE code=%s", (BULK_IMPORT_SEMESTER_CODE,)
+        ).fetchone()
+    semester_id = sem_row["id"] if sem_row else None
+
+    created: list[dict] = []
+    skipped: list[dict] = []
+    failed: list[dict] = []
+
+    for row_num, row in enumerate(rows_iter, start=2):  # start=2: row 1 is the header
+        if row is None or all(v is None or str(v).strip() == "" for v in row):
+            continue  # blank row — silently skip, not an error
+
+        row_map: dict[str, Any] = {}
+        for idx, field in col_index_to_field.items():
+            if idx < len(row):
+                row_map[field] = row[idx]
+
+        data = _row_to_import_data(row_map)
+        roll_no_display = data["roll_no"] or f"(row {row_num})"
+
+        if not data["roll_no"] or not data["name"]:
+            failed.append({"row": row_num, "roll_no": roll_no_display, "reason": "Missing roll number or name"})
+            continue
+
+        try:
+            validate_student(data)
+        except ValueError as e:
+            failed.append({"row": row_num, "roll_no": roll_no_display, "reason": str(e)})
+            continue
+
+        try:
+            with connect() as c:
+                existing = c.execute(
+                    "SELECT id FROM students WHERE roll_no=%s", (data["roll_no"],)
+                ).fetchone()
+                if existing:
+                    skipped.append({"row": row_num, "roll_no": data["roll_no"], "reason": "Roll number already exists"})
+                    continue
+
+                enc_data = dict(data)
+                enc_data["aadhaar_number"] = encrypt_field(data["aadhaar_number"])
+                enc_data["apaar_id"] = encrypt_field(data["apaar_id"])
+
+                c.execute(
+                    """INSERT INTO students(roll_no,name,department,email,phone,parent_phone,dob,address,father_name,
+                       category,gender,seat_category,apaar_id,aadhaar_number,
+                       certificates_submitted,certificates_due,consultant_name,
+                       tenth_school,tenth_year,tenth_marks,twelfth_school,twelfth_year,twelfth_marks,
+                       diploma_college,diploma_year,diploma_marks,current_semester_id,hod_username)
+                       VALUES(?,?,?,NULLIF(?,''),?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (*[enc_data[k] for k in STUDENT_DB_KEYS], semester_id, assigned_hod),
+                )
+                audit(c, user.username, "CREATE", "student", data["roll_no"])
+                for item, st in [("Personal details", "Complete"), ("Documents", "Pending"),
+                                  ("ID card", "Pending"), ("Fees", "Pending"),
+                                  ("Attendance records", "Available"), ("Marks records", "Available")]:
+                    c.execute("INSERT IGNORE INTO checklist(roll_no,item,status) VALUES(?,?,?)",
+                              (data["roll_no"], item, st))
+
+            username, password = ensure_student_login(data["roll_no"], user.username)
+            created.append({
+                "row": row_num,
+                "roll_no": data["roll_no"],
+                "name": data["name"],
+                "username": username,
+                "password": password,
+            })
+        except IntegrityError:
+            skipped.append({"row": row_num, "roll_no": data["roll_no"], "reason": "Duplicate roll number or email"})
+        except ValueError as e:
+            failed.append({"row": row_num, "roll_no": data["roll_no"], "reason": str(e)})
+        except Exception as e:
+            failed.append({"row": row_num, "roll_no": data["roll_no"], "reason": "Unexpected error — see server logs"})
+
+    return ok({
+        "total_rows": len(created) + len(skipped) + len(failed),
+        "created_count": len(created),
+        "skipped_count": len(skipped),
+        "failed_count": len(failed),
+        "created": created,
+        "skipped": skipped,
+        "failed": failed,
+    })
 
 
 @router.patch("/{student_id}")

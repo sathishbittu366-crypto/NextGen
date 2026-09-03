@@ -5,8 +5,10 @@ import {
   listStudentSemesters,
   deleteStudent,
   studentsPdfUrl,
+  bulkImportStudents,
   type StudentListRow,
   type SemesterOption,
+  type BulkImportResult,
 } from "../../api/students";
 import { ApiClientError, formatPhotoUrl } from "../../api/client";
 import { type CurrentUser } from "../../api/auth";
@@ -33,6 +35,13 @@ export function StudentsListPage({ user, onLoggedOut }: StudentsListPageProps) {
   const [studentToDelete, setStudentToDelete] = useState<StudentListRow | null>(null);
   const [deletingStudent, setDeletingStudent] = useState(false);
   const [deleteKeyInput, setDeleteKeyInput] = useState("");
+
+  // Bulk Import (Excel) Modal State
+  const [importModalOpen, setImportModalOpen] = useState(false);
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<BulkImportResult | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
 
   // Print Permission (HOD & ADMIN ONLY)
   const canPrint = ["HOD", "ADMIN"].includes(user.role);
@@ -93,6 +102,32 @@ export function StudentsListPage({ user, onLoggedOut }: StudentsListPageProps) {
     } finally {
       setDeletingStudent(false);
     }
+  }
+
+  async function handleImportSubmit() {
+    if (!importFile) return;
+    setImporting(true);
+    setImportError(null);
+    setImportResult(null);
+    try {
+      const result = await bulkImportStudents(importFile);
+      setImportResult(result);
+      if (result.created_count > 0) {
+        setNotice(`Imported ${result.created_count} student${result.created_count === 1 ? "" : "s"} successfully`);
+        load(q);
+      }
+    } catch (err) {
+      setImportError(err instanceof ApiClientError ? err.message : "Failed to import the sheet");
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  function closeImportModal() {
+    setImportModalOpen(false);
+    setImportFile(null);
+    setImportResult(null);
+    setImportError(null);
   }
 
   // Client-side year & semester filtering
@@ -261,14 +296,25 @@ export function StudentsListPage({ user, onLoggedOut }: StudentsListPageProps) {
         </form>
 
         {["HOD", "ADMIN"].includes(user.role) && (
-          <button
-            type="button"
-            className="btn"
-            onClick={() => navigate("/students/new")}
-            style={{ height: 40, fontWeight: 700, borderRadius: 8, padding: "0 16px", whiteSpace: "nowrap" }}
-          >
-            + Add Student
-          </button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              type="button"
+              className="btn btn-outline"
+              onClick={() => setImportModalOpen(true)}
+              style={{ height: 40, fontWeight: 700, borderRadius: 8, padding: "0 16px", whiteSpace: "nowrap" }}
+              title="Bulk-create student accounts from an Excel sheet"
+            >
+              📥 Import Students
+            </button>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => navigate("/students/new")}
+              style={{ height: 40, fontWeight: 700, borderRadius: 8, padding: "0 16px", whiteSpace: "nowrap" }}
+            >
+              + Add Student
+            </button>
+          </div>
         )}
       </div>
 
@@ -562,6 +608,201 @@ export function StudentsListPage({ user, onLoggedOut }: StudentsListPageProps) {
           </div>
         );
       })()}
+
+      {/* ── Bulk Import Students (Excel) Modal ── */}
+      {importModalOpen && (
+        <div className="modal-overlay no-print" onClick={() => !importing && closeImportModal()}>
+          <div
+            className="modal-box modal3dPopIn"
+            style={{
+              maxWidth: 620,
+              width: "94%",
+              maxHeight: "85vh",
+              overflowY: "auto",
+              background: "var(--bg-card)",
+              border: "1.5px solid var(--border)",
+              borderRadius: 18,
+              padding: 24,
+              boxShadow: "0 25px 50px -12px rgba(0,0,0,0.25)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+              <h3 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: "var(--text)" }}>
+                📥 Import Students from Excel
+              </h3>
+              <button
+                className="btn btn-sm btn-outline"
+                onClick={closeImportModal}
+                disabled={importing}
+                style={{ padding: "4px 10px" }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {!importResult && (
+              <>
+                <div style={{ fontSize: 13, color: "var(--muted)", fontWeight: 600, marginBottom: 16, lineHeight: 1.5 }}>
+                  Upload an .xlsx sheet with columns for HallTicket, Full Name, Phone, Email, Address,
+                  Aadhaar Number, Father's Name and Father's Phone Number. A login is created automatically
+                  for every new student (username = roll number, password = roll number + "@CSD").
+                  Rows with a roll number that already exists are skipped, not overwritten.
+                </div>
+
+                <div
+                  style={{
+                    border: "1.5px dashed var(--border)",
+                    borderRadius: 12,
+                    padding: 20,
+                    textAlign: "center",
+                    marginBottom: 16,
+                    background: "var(--row-alt)",
+                  }}
+                >
+                  <input
+                    type="file"
+                    accept=".xlsx,.xlsm"
+                    onChange={(e) => setImportFile(e.target.files?.[0] ?? null)}
+                    disabled={importing}
+                    style={{ fontSize: 13, fontWeight: 600 }}
+                  />
+                  {importFile && (
+                    <div style={{ marginTop: 10, fontSize: 12.5, fontWeight: 700, color: "var(--blue)" }}>
+                      {importFile.name}
+                    </div>
+                  )}
+                </div>
+
+                {importError && <div className="login-error" style={{ marginBottom: 16 }}>{importError}</div>}
+
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+                  <button type="button" className="btn btn-outline" onClick={closeImportModal} disabled={importing}>
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={handleImportSubmit}
+                    disabled={!importFile || importing}
+                    style={{ fontWeight: 800, opacity: !importFile || importing ? 0.6 : 1 }}
+                  >
+                    {importing ? "Importing…" : "Import"}
+                  </button>
+                </div>
+              </>
+            )}
+
+            {importResult && (
+              <>
+                <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
+                  <span className="chip" style={{ background: "#dcfce7", color: "#166534", fontWeight: 800, padding: "4px 10px" }}>
+                    ✅ {importResult.created_count} created
+                  </span>
+                  <span className="chip" style={{ background: "#fef9c3", color: "#854d0e", fontWeight: 800, padding: "4px 10px" }}>
+                    ⏭️ {importResult.skipped_count} skipped
+                  </span>
+                  <span className="chip" style={{ background: "#fee2e2", color: "#991b1b", fontWeight: 800, padding: "4px 10px" }}>
+                    ❌ {importResult.failed_count} failed
+                  </span>
+                </div>
+
+                {importResult.created.length > 0 && (
+                  <div style={{ marginBottom: 16 }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 800, color: "var(--text)", marginBottom: 6 }}>
+                      New Logins Created
+                    </div>
+                    <div style={{ maxHeight: 200, overflowY: "auto", border: "1px solid var(--border)", borderRadius: 8 }}>
+                      <table className="data-table" style={{ fontSize: 12.5 }}>
+                        <thead>
+                          <tr>
+                            <th>Roll No</th>
+                            <th>Name</th>
+                            <th>Username</th>
+                            <th>Password</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {importResult.created.map((r) => (
+                            <tr key={r.roll_no}>
+                              <td>{r.roll_no}</td>
+                              <td>{r.name}</td>
+                              <td>{r.username}</td>
+                              <td style={{ fontFamily: "monospace" }}>{r.password}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {importResult.skipped.length > 0 && (
+                  <div style={{ marginBottom: 16 }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 800, color: "var(--text)", marginBottom: 6 }}>
+                      Skipped Rows
+                    </div>
+                    <div style={{ maxHeight: 140, overflowY: "auto", border: "1px solid var(--border)", borderRadius: 8 }}>
+                      <table className="data-table" style={{ fontSize: 12.5 }}>
+                        <thead>
+                          <tr>
+                            <th>Row</th>
+                            <th>Roll No</th>
+                            <th>Reason</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {importResult.skipped.map((r) => (
+                            <tr key={r.row}>
+                              <td>{r.row}</td>
+                              <td>{r.roll_no}</td>
+                              <td>{r.reason}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {importResult.failed.length > 0 && (
+                  <div style={{ marginBottom: 16 }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 800, color: "#991b1b", marginBottom: 6 }}>
+                      Failed Rows
+                    </div>
+                    <div style={{ maxHeight: 140, overflowY: "auto", border: "1px solid var(--border)", borderRadius: 8 }}>
+                      <table className="data-table" style={{ fontSize: 12.5 }}>
+                        <thead>
+                          <tr>
+                            <th>Row</th>
+                            <th>Roll No</th>
+                            <th>Reason</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {importResult.failed.map((r) => (
+                            <tr key={r.row}>
+                              <td>{r.row}</td>
+                              <td>{r.roll_no}</td>
+                              <td>{r.reason}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+                  <button type="button" className="btn btn-outline" onClick={closeImportModal}>
+                    Close
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </AppShell>
   );
 }
