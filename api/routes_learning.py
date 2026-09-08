@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse
 from api.deps import CurrentUser, get_current_user
 from api.envelope import ApiError, ok
 from database import connect
+from webapp.photo_upload import UPLOADS_DIR
 from sms_app.services.learning_service import (
     create_note,
     delete_note,
@@ -88,7 +89,7 @@ async def notes_delete(note_id: int, user: CurrentUser = Depends(get_current_use
         raise ApiError(str(exc), 403, "FORBIDDEN")
     if file_path:
         try:
-            target = (Path(__file__).resolve().parent.parent / "webapp" / file_path.removeprefix("/files/")).resolve()
+            target = (UPLOADS_DIR / file_path.removeprefix("/files/")).resolve()
             if target.is_file():
                 target.unlink()
         except Exception:
@@ -107,10 +108,10 @@ async def notes_download(note_id: int, user: CurrentUser = Depends(get_current_u
     if not row:
         raise ApiError("Note not found or not authorized", 404, "NOT_FOUND")
     try:
-        target = (Path(__file__).resolve().parent.parent / "webapp" / row["file_path"].removeprefix("/files/")).resolve()
+        target = (UPLOADS_DIR / row["file_path"].removeprefix("/files/")).resolve()
     except ValueError:
         raise ApiError("Note not found", 404, "NOT_FOUND")
-    allowed_root = (Path(__file__).resolve().parent.parent / "webapp" / "uploads" / "notes").resolve()
+    allowed_root = (UPLOADS_DIR / "notes").resolve()
     if allowed_root not in target.parents or not target.is_file():
         raise ApiError("Note file not found", 404, "NOT_FOUND")
     return FileResponse(target, filename=row["original_filename"])
