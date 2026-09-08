@@ -10,7 +10,8 @@ import {
   getFacultyPage, createAccount, toggleAccountStatus, resetStudentPassword, deleteAccount,
   saveRolePermissions, getUserPermissions, saveUserPermissions,
   type FacultyPageData, type UserAccount, type RolePermission, type UserPermission,
-  getSmsAccessControl, saveSmsAccess, type FacultySmsAccessData, type FacultySmsAccessRow,
+  getSmsAccessControl, saveSmsAccess, saveSmsBatchHandler,
+  type FacultySmsAccessData, type FacultySmsAccessRow,
 } from "../../api/faculty";
 import { ApiClientError } from "../../api/client";
 import { type CurrentUser } from "../../api/auth";
@@ -37,6 +38,8 @@ export function FacultyPage({ user, onLoggedOut }: Props) {
   const [smsBatchIds, setSmsBatchIds] = useState<number[]>([]);
   const [loadingSmsAccess, setLoadingSmsAccess] = useState(false);
   const [savingSmsAccess, setSavingSmsAccess] = useState(false);
+  const [showBatchHandlers, setShowBatchHandlers] = useState(false);
+  const [savingBatchHandlerId, setSavingBatchHandlerId] = useState<number | null>(null);
 
   const [submitting, setSubmitting] = useState(false);
   const [revealedCreds, setRevealedCreds] = useState<{ username: string; password: string } | null>(null);
@@ -104,6 +107,19 @@ export function FacultyPage({ user, onLoggedOut }: Props) {
       setError(err instanceof ApiClientError ? err.message : "Failed to load SMS Gateway delegation");
     } finally {
       setLoadingSmsAccess(false);
+    }
+  }
+
+  async function handleAssignBatchHandler(semesterId: number, handlerUsername: string) {
+    setSavingBatchHandlerId(semesterId);
+    try {
+      const { batch_handlers } = await saveSmsBatchHandler(semesterId, handlerUsername);
+      setSmsAccess((prev) => (prev ? { ...prev, batch_handlers } : prev));
+      setNotice(handlerUsername === user.username ? "Batch assigned to yourself (HOD)" : `Batch assigned to ${handlerUsername}`);
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : "Failed to assign batch handler");
+    } finally {
+      setSavingBatchHandlerId(null);
     }
   }
 
@@ -373,6 +389,62 @@ export function FacultyPage({ user, onLoggedOut }: Props) {
           </div>
         )}
       </div>
+
+      {/* ── Batch Handlers: per-batch, HOD self-assigns or hands off to Faculty ── */}
+      {/* HOD-only: the assignment route requires the owning HOD, so Admin (who spans
+          multiple HOD scopes) doesn't get a control here that would just 403 on save. */}
+      {user.role === "HOD" && <div className="collapsible" style={{ marginBottom: 18 }}>
+        <div className="collapsible-trigger" onClick={() => { const next = !showBatchHandlers; setShowBatchHandlers(next); if (next && !smsAccess) void loadSmsDelegation(); }}>
+          <span><span style={{ marginRight: 8, fontSize: 12 }}>{showBatchHandlers ? "▼" : "▶"}</span>🗂️ BATCH SMS HANDLERS</span>
+          <span style={{ fontSize: 12, color: "#38bdf8", fontWeight: 700 }}>{showBatchHandlers ? "Click to collapse" : "Who sends SMS for each batch"}</span>
+        </div>
+        {showBatchHandlers && (
+          <div className="collapsible-body" style={{ padding: 20 }}>
+            <p className="subtitle-muted" style={{ marginBottom: 16 }}>
+              Pick who sends absentee SMS for each batch — keep it yourself, or hand it off to a Faculty who has SMS Gateway access enabled below. A batch always has exactly one handler.
+            </p>
+            {loadingSmsAccess ? <p className="empty-note">Loading batch handlers…</p> : !smsAccess ? <p className="empty-note">No batch handler data available.</p> : (
+              <div style={{ display: "grid", gap: 10 }}>
+                {(smsAccess.batch_handlers || []).map((b) => {
+                  const enabledFaculty = smsAccess.faculty.filter((f) => f.enabled && f.active);
+                  return (
+                    <div key={b.id} style={{ display: "grid", gridTemplateColumns: "minmax(140px,1fr) minmax(160px,1fr) auto", gap: 12, alignItems: "center", padding: 14, border: "1px solid var(--border)", borderRadius: 12, background: "var(--card-glass)" }}>
+                      <div>
+                        <div style={{ fontWeight: 800, color: "var(--text)" }}>{b.code || b.name}</div>
+                        <div style={{ fontSize: 12, color: "var(--muted)" }}>{b.student_count} students</div>
+                      </div>
+                      <div>
+                        {b.is_self ? (
+                          <span style={{ ...smsChip, color: "#22c55e" }}>👤 HOD (self) — {b.handler_full_name}</span>
+                        ) : (
+                          <span style={smsChip}>📲 {b.handler_full_name || b.handler_username}</span>
+                        )}
+                      </div>
+                      <select
+                        value={b.handler_username}
+                        disabled={savingBatchHandlerId === b.id}
+                        onChange={(e) => void handleAssignBatchHandler(b.id, e.target.value)}
+                        style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontWeight: 700 }}
+                      >
+                        <option value={user.username}>Assign to myself (HOD)</option>
+                        {enabledFaculty.map((f) => (
+                          <option key={f.username} value={f.username}>{f.full_name || f.username}</option>
+                        ))}
+                      </select>
+                    </div>
+                  );
+                })}
+                {!(smsAccess.batch_handlers || []).length && <div className="empty-note">No active student batches exist in this HOD scope.</div>}
+                {smsAccess.faculty.filter((f) => f.enabled && f.active).length === 0 && (
+                  <div style={{ padding: 12, borderRadius: 10, background: "var(--chip-bg-muted)", color: "var(--muted)", fontSize: 13 }}>
+                    No Faculty currently has SMS Gateway access enabled — grant it below before you can hand off a batch.
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>}
 
       {/* ── SMS Gateway Delegation (separate from ordinary Faculty permissions) ── */}
       <div className="collapsible" style={{ marginBottom: 18 }}>

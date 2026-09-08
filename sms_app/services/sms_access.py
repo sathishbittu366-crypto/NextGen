@@ -104,6 +104,126 @@ def batches_for_faculty(c, faculty_username: str):
     ).fetchall()
 
 
+def batch_handlers_for_hod(c, hod_username: str):
+    """One row per batch in this HOD's scope, with its current SMS handler.
+
+    handler_username is either the HOD themself (self-assigned / default
+    fallback) or a specific enabled Faculty the batch has been delegated to.
+    is_self tells the UI whether to render "HOD (self)" vs a Faculty name.
+    """
+    batches = batches_for_hod(c, hod_username)
+    delegated = c.execute(
+        """
+        SELECT d.semester_id, d.faculty_username, u.full_name
+        FROM sms_gateway_batch_delegations d
+        JOIN sms_gateway_access a
+          ON a.faculty_username=d.faculty_username AND a.enabled=1
+        JOIN users u ON u.username=d.faculty_username
+        WHERE LOWER(d.hod_username)=LOWER(%s) AND d.active=1
+        """,
+        (hod_username,),
+    ).fetchall()
+    by_semester = {int(r["semester_id"]): r for r in delegated}
+
+    hod_row = c.execute(
+        "SELECT full_name FROM users WHERE username=%s", (hod_username,)
+    ).fetchone()
+    hod_full_name = (hod_row or {}).get("full_name") or hod_username
+
+    result = []
+    for b in batches:
+        row = by_semester.get(int(b["id"]))
+        if row and _norm(row["faculty_username"]) != _norm(hod_username):
+            handler_username = row["faculty_username"]
+            handler_full_name = row.get("full_name") or handler_username
+            is_self = False
+        else:
+            # Either explicitly self-assigned, or no delegation row exists at
+            # all yet (undelegated defaults to HOD via the same gateway
+            # fallback sms_service.py already uses) — both render as self.
+            handler_username = hod_username
+            handler_full_name = hod_full_name
+            is_self = True
+        result.append({
+            "id": b["id"], "name": b["name"], "code": b["code"],
+            "student_count": b["student_count"],
+            "handler_username": handler_username,
+            "handler_full_name": handler_full_name,
+            "is_self": is_self,
+        })
+    return result
+
+
+def set_batch_handler(c, *, hod_username: str, semester_id: int, handler_username: str, actor: str):
+    """Assign a single batch's SMS handler: the HOD themself, or a Faculty.
+
+    A batch has exactly one handler at a time. Assigning it to anyone clears
+    whatever the previous handler was, so there's never a silent
+    last-write-wins race between two delegation rows for the same batch.
+    """
+    try:
+        semester_id = int(semester_id)
+    except (TypeError, ValueError):
+        raise ValueError("Invalid batch selected")
+
+    in_scope = c.execute(
+        """
+        SELECT 1 FROM academic_semesters sem
+        WHERE sem.id=%s
+          AND EXISTS (
+                SELECT 1 FROM students st
+                WHERE st.current_semester_id=sem.id
+                  AND st.active=1
+                  AND LOWER(COALESCE(st.hod_username,''))=LOWER(%s)
+          )
+        """,
+        (semester_id, hod_username),
+    ).fetchone()
+    if not in_scope:
+        raise ValueError("Selected batch is outside your HOD scope")
+
+    # Whichever Faculty (if any) currently handles this batch loses it —
+    # PRIMARY KEY(faculty_username, semester_id) allows multiple faculty to
+    # hold the same batch simultaneously at the DB level, so this must be
+    # enforced here, not left to insert order.
+    c.execute("DELETE FROM sms_gateway_batch_delegations WHERE semester_id=%s", (semester_id,))
+
+    self_assign = _norm(handler_username) == _norm(hod_username)
+    if self_assign:
+        # Self-assignment is represented by simply having no Faculty
+        # delegation row for this batch — sms_service.py's gateway fallback
+        # already routes undelegated batches to the HOD's own gateway.
+        from database import audit
+        audit(
+            c, actor, "SMS_BATCH_HANDLER_UPDATED", "sms_gateway_batch_delegations",
+            f"hod={hod_username}; semester_id={semester_id}; handler={hod_username} (self)",
+        )
+        return
+
+    target = get_faculty_scope(c, handler_username)
+    if not target:
+        raise ValueError("Faculty account not found")
+    if not bool(target.get("active")):
+        raise ValueError("Faculty account is inactive")
+    if _norm(target.get("hod_username")) != _norm(hod_username):
+        raise ValueError("You cannot delegate SMS Gateway access outside your HOD scope")
+    if not faculty_sms_enabled(c, handler_username):
+        raise ValueError("Enable SMS Gateway access for this Faculty before assigning a batch to them")
+
+    c.execute(
+        """
+        INSERT INTO sms_gateway_batch_delegations(faculty_username,hod_username,semester_id,active)
+        VALUES(%s,%s,%s,1)
+        """,
+        (handler_username, hod_username, semester_id),
+    )
+    from database import audit
+    audit(
+        c, actor, "SMS_BATCH_HANDLER_UPDATED", "sms_gateway_batch_delegations",
+        f"hod={hod_username}; semester_id={semester_id}; handler={handler_username}",
+    )
+
+
 def list_hod_sms_access(c, hod_username: str):
     rows = c.execute(
         """
@@ -207,6 +327,10 @@ def set_faculty_sms_access(c, *, hod_username: str, faculty_username: str, enabl
     c.execute("DELETE FROM sms_gateway_batch_delegations WHERE faculty_username=%s", (faculty_username,))
     if enabled:
         for semester_id in requested:
+            # A batch has exactly one handler. If another Faculty (or this
+            # HOD's own self-assignment, which simply has no row) currently
+            # holds it, this Faculty selection takes it over.
+            c.execute("DELETE FROM sms_gateway_batch_delegations WHERE semester_id=%s", (semester_id,))
             c.execute(
                 """
                 INSERT INTO sms_gateway_batch_delegations(faculty_username,hod_username,semester_id,active)

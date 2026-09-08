@@ -252,14 +252,20 @@ class SmsAccessUpdateBody(BaseModel):
     batch_ids: list[int] = Field(default_factory=list)
 
 
+class SmsBatchHandlerBody(BaseModel):
+    handler_username: str
+
+
 @router.get("/sms-access")
 async def get_sms_access_control(user: CurrentUser = Depends(get_current_user)):
     """HOD/Admin SMS Gateway delegation control; separate from ordinary Faculty permissions."""
     _require_hod_or_admin(user)
-    from sms_app.services.sms_access import list_hod_sms_access
+    from sms_app.services.sms_access import list_hod_sms_access, batch_handlers_for_hod
+    batch_handlers = []
     with connect() as c:
         if user.role == "HOD":
             rows, batches = list_hod_sms_access(c, user.username)
+            batch_handlers = batch_handlers_for_hod(c, user.username)
         else:
             rows = c.execute("""
                 SELECT u.username, u.full_name, u.active, COALESCE(a.enabled,0) AS enabled
@@ -278,7 +284,29 @@ async def get_sms_access_control(user: CurrentUser = Depends(get_current_user)):
             for r in rows:
                 r["enabled"] = bool(r["enabled"])
                 r["allowed_batches"] = [dict(b) for b in batches if int(b["id"]) in by.get(r["username"], set())]
-    return ok({"faculty": [dict(r) for r in rows], "batches": [dict(b) for b in batches]})
+    return ok({"faculty": [dict(r) for r in rows], "batches": [dict(b) for b in batches], "batch_handlers": batch_handlers})
+
+
+@router.post("/sms-access/batch/{semester_id}")
+async def save_sms_batch_handler(semester_id: int, body: SmsBatchHandlerBody, user: CurrentUser = Depends(get_current_user)):
+    """Assign a single batch's SMS handler to the HOD themself or a delegated Faculty."""
+    _require_hod_or_admin(user)
+    if user.role != "HOD":
+        raise ApiError("Only the owning HOD can assign a batch handler", 403, "FORBIDDEN")
+    from sms_app.services.sms_access import set_batch_handler, batch_handlers_for_hod
+    with connect() as c:
+        try:
+            set_batch_handler(
+                c,
+                hod_username=user.username,
+                semester_id=semester_id,
+                handler_username=body.handler_username,
+                actor=user.username,
+            )
+        except ValueError as exc:
+            raise ApiError(str(exc), 400, "SMS_ACCESS_VALIDATION")
+        batch_handlers = batch_handlers_for_hod(c, user.username)
+    return ok({"batch_handlers": batch_handlers})
 
 
 @router.post("/sms-access/{username}")

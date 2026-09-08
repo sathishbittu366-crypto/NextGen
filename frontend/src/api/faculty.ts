@@ -111,9 +111,20 @@ export interface FacultySmsAccessRow {
   allowed_batches: SmsDelegatedBatch[];
 }
 
+export interface SmsBatchHandler {
+  id: number;
+  name: string;
+  code: string;
+  student_count: number;
+  handler_username: string;
+  handler_full_name: string;
+  is_self: boolean;
+}
+
 export interface FacultySmsAccessData {
   faculty: FacultySmsAccessRow[];
   batches: SmsDelegatedBatch[];
+  batch_handlers?: SmsBatchHandler[];
 }
 
 export async function getSmsAccessControl(): Promise<FacultySmsAccessData> {
@@ -122,4 +133,8 @@ export async function getSmsAccessControl(): Promise<FacultySmsAccessData> {
 
 export async function saveSmsAccess(username: string, body: { enabled: boolean; batch_ids: number[] }): Promise<FacultySmsAccessRow> {
   return apiFetch<FacultySmsAccessRow>(`/api/faculty/sms-access/${encodeURIComponent(username)}`, { method: "POST", body });
+}
+
+export async function saveSmsBatchHandler(semesterId: number, handlerUsername: string): Promise<{ batch_handlers: SmsBatchHandler[] }> {
+  return apiFetch(`/api/faculty/sms-access/batch/${semesterId}`, { method: "POST", body: { handler_username: handlerUsername } });
 }
