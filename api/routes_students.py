@@ -709,13 +709,27 @@ def _present_import_updates(data: dict[str, str]) -> dict[str, str]:
     return {k: v for k, v in data.items() if k in IMPORT_FIELD_KEYS and v != ""}
 
 
+def _parse_optional_int(raw: str | None, label: str) -> int | None:
+    # WHY: some frontend paths can send the literal string "undefined" or ""
+    # instead of omitting the query param (e.g. String(possiblyUndefined)).
+    # FastAPI's native `int | None` param typing rejects that with a bare,
+    # unhelpful 422 before this handler even runs. Accepting str | None here
+    # and parsing manually lets us fail with a clear VALIDATION_ERROR instead.
+    if raw is None or raw.strip() == "" or raw.strip().lower() == "undefined":
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        raise ApiError(f"Invalid {label} value", 400, "VALIDATION_ERROR")
+
+
 @router.post("/bulk-import")
 async def student_bulk_import(
     file: UploadFile = File(...),
     branch: str = "CSD",
     year: int = 0,
-    semester_id: int | None = None,
-    semester: int | None = None,
+    semester_id: str | None = None,
+    semester: str | None = None,
     mode: str = "merge",
     user: CurrentUser = Depends(get_current_user),
 ):
@@ -733,6 +747,9 @@ async def student_bulk_import(
     if mode not in ("merge", "create_only"):
         raise ApiError("Invalid import mode", 400, "VALIDATION_ERROR")
 
+    parsed_semester_id = _parse_optional_int(semester_id, "semester_id")
+    parsed_semester = _parse_optional_int(semester, "semester")
+
     filename = file.filename or ""
     if not filename.lower().endswith((".xlsx", ".xls", ".xlsm")):
         raise ApiError("Upload an .xlsx, .xls, or .xlsm file exported from Excel", 400, "VALIDATION_ERROR")
@@ -742,7 +759,7 @@ async def student_bulk_import(
 
     try:
         with connect() as c:
-            resolved_semester_id = _resolve_import_semester(c, year, semester_id, semester)
+            resolved_semester_id = _resolve_import_semester(c, year, parsed_semester_id, parsed_semester)
     except ApiError:
         raise
 

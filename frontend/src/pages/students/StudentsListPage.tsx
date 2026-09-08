@@ -137,6 +137,18 @@ export function StudentsListPage({ user, onLoggedOut }: StudentsListPageProps) {
 
   async function handleImportSubmit() {
     if (!importFile || !importBranch || !importYear || !importSemester) return;
+    // WHY: importSemester is just "1" or "2" from the dropdown, not a real
+    // academic_semesters.id. bulkImportStudents() needs the actual row id,
+    // so resolve it here the same way the semester filter dropdown does.
+    // Previously this passed `semester: importSemester` — a key the upload
+    // function doesn't accept — so semesterId was always undefined and the
+    // request was sent with semester_id=undefined, which FastAPI rejects
+    // with a 422 before the file is ever read.
+    const resolvedSemester = semesterForYear(importYear, importSemester);
+    if (!resolvedSemester) {
+      setImportError("Could not resolve that semester for the selected year. Please reselect.");
+      return;
+    }
     setImporting(true);
     setImportError(null);
     setImportResult(null);
@@ -144,7 +156,7 @@ export function StudentsListPage({ user, onLoggedOut }: StudentsListPageProps) {
       const result = await bulkImportStudents(importFile, {
         branch: importBranch,
         year: importYear,
-        semester: importSemester,
+        semesterId: resolvedSemester.id,
         mode: importMode,
       });
       setImportResult(result);
