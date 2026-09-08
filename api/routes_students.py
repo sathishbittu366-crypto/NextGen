@@ -7,6 +7,7 @@ in frontend/src/pages/students/ and call through frontend/src/api/students.ts.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from io import BytesIO
 from typing import Any
@@ -711,6 +712,24 @@ def _present_import_updates(data: dict[str, str]) -> dict[str, str]:
     return {k: v for k, v in data.items() if k in IMPORT_FIELD_KEYS and v != ""}
 
 
+def _drop_unverified_aadhaar(data: dict[str, Any]) -> dict[str, Any]:
+    # WHY: Aadhaar isn't collected/verified at import time yet (Boss: "don't
+    # consider checking aadhaar yet, we can add them later"). Sheets often
+    # have junk or placeholder text in that column (e.g. a roll-number-shaped
+    # value), which used to hard-fail the whole row via validate_student's
+    # 12-digit check. Rather than loosen validate_student itself — which is
+    # shared with the manual add/edit student forms and must keep enforcing
+    # Aadhaar there — we only drop an unverified value here, at import time,
+    # before validation runs. A clean 12-digit Aadhaar in the sheet still
+    # comes through fine; anything else is silently skipped, not stored as
+    # garbage, and can be added properly later via student edit.
+    aadhaar = re.sub(r"\s", "", str(data.get("aadhaar_number") or ""))
+    if aadhaar and not (aadhaar.isdigit() and len(aadhaar) == 12):
+        data = dict(data)
+        data["aadhaar_number"] = ""
+    return data
+
+
 def _parse_optional_int(raw: str | None, label: str) -> int | None:
     # WHY: some frontend paths can send the literal string "undefined" or ""
     # instead of omitting the query param (e.g. String(possiblyUndefined)).
@@ -849,6 +868,7 @@ async def student_bulk_import(
                         merged[k] = v
                     merged["department"] = "CSD"
                     merged["current_semester_id"] = semester_id
+                    merged = _drop_unverified_aadhaar(merged)
 
                     validate_student({k: _cell_to_str(merged.get(k)) for k in STUDENT_DB_KEYS if k != "department"} | {"department": "CSD"})
                     if merged.get("dob"):
@@ -873,8 +893,12 @@ async def student_bulk_import(
                     aadhaar = merged.get("aadhaar_number")
                     apaar = merged.get("apaar_id")
                     # Existing encrypted values must be reused unless the sheet
-                    # actually supplied a replacement value.
-                    if "aadhaar_number" in updates:
+                    # actually supplied a replacement value. A sheet cell that
+                    # looked non-blank but wasn't a verified 12-digit Aadhaar
+                    # was already cleared to "" by _drop_unverified_aadhaar
+                    # above — treat that the same as "sheet didn't supply one"
+                    # so junk input never overwrites a good existing value.
+                    if "aadhaar_number" in updates and aadhaar:
                         merged["aadhaar_number"] = encrypt_field(aadhaar)
                     else:
                         merged["aadhaar_number"] = existing.get("aadhaar_number")
@@ -927,6 +951,7 @@ async def student_bulk_import(
                     failed.append({"row": row_num, "roll_no": display_roll, "reason": "Missing name"})
                     continue
 
+                data = _drop_unverified_aadhaar(data)
                 validate_student(data)
                 if data["dob"]:
                     datetime.strptime(data["dob"], "%Y-%m-%d")
