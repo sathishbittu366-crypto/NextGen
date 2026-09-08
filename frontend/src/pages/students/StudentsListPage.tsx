@@ -118,7 +118,10 @@ export function StudentsListPage({ user, onLoggedOut }: StudentsListPageProps) {
     try {
       const options = await getBulkImportOptions();
       setImportOptions(options);
-      setImportBranch("");
+      // Preselect the first available branch so the guided flow is immediately usable.
+      // The previous empty state made the Semester control remain disabled even when
+      // the UI appeared to show a branch selection.
+      setImportBranch(options.branches.length ? String(options.branches[0].value) : "");
       setImportYear(0);
       setImportSemester(0);
     } catch (err) {
@@ -141,7 +144,7 @@ export function StudentsListPage({ user, onLoggedOut }: StudentsListPageProps) {
       const result = await bulkImportStudents(importFile, {
         branch: importBranch,
         year: importYear,
-        semester_id: importSemester,
+        semester: importSemester,
         mode: importMode,
       });
       setImportResult(result);
@@ -729,7 +732,7 @@ export function StudentsListPage({ user, onLoggedOut }: StudentsListPageProps) {
                         <select
                           value={importSemester || ""}
                           onChange={(e) => setImportSemester(Number(e.target.value))}
-                          disabled={importing || !importBranch || !importYear}
+                          disabled={importing || !importYear}
                           style={{ height: 42, padding: "0 11px", border: "1.5px solid var(--border)", borderRadius: 9, fontSize: 13.5, fontWeight: 700, background: "var(--input-bg)", color: "var(--text)" }}
                         >
                           <option value="">Select semester…</option>
