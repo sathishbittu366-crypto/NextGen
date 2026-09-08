@@ -89,13 +89,12 @@ const ICONS = {
 
 // ── Nav item definitions per role ──────────────────────────────────────────
 
-export function navItemsFor(role: Role): NavItem[] {
+export function navItemsFor(role: Role, options?: { smsGatewayAccess?: boolean }): NavItem[] {
   if (role === "STUDENT") {
     return [
       { href: "/me/profile", icon: ICONS.profile, label: "Profile", key: "profile" },
       { href: "/student-dashboard", icon: ICONS.trending, label: "Attendance Summary", key: "attendance-summary" },
       { href: "/academic-calendar", icon: ICONS.calendar, label: "Academic Calendar", key: "academic-calendar" },
-      { href: "/sms-log", icon: ICONS.sms, label: "SMS Gateway", key: "sms-log" },
     ];
   }
   if (role === "FACULTY") {
@@ -104,7 +103,7 @@ export function navItemsFor(role: Role): NavItem[] {
       { href: "/attendance", icon: ICONS.attendance, label: "Mark Attendance", key: "attendance" },
       { href: "/students", icon: ICONS.students, label: "Students", key: "students" },
       { href: "/academic-calendar", icon: ICONS.calendar, label: "Academic Calendar", key: "academic-calendar" },
-      { href: "/sms-log", icon: ICONS.sms, label: "SMS Gateway", key: "sms-log" },
+      ...(options?.smsGatewayAccess ? [{ href: "/sms-log", icon: ICONS.sms, label: "SMS Gateway", key: "sms-log" }] : []),
     ];
   }
   if (role === "ADMIN") {

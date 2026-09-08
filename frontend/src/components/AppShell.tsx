@@ -11,10 +11,11 @@
 // one of nav.ts's `key` values for that role, or nothing highlights —
 // that's a deliberate signal (not a crash) that the page passed the wrong
 // key, easy to spot visually.
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { type CurrentUser, logout } from "../api/auth";
 import { navItemsFor } from "../nav";
+import { getMySmsAccess } from "../api/logs";
 import { ReportProblemModal } from "./ReportProblemModal";
 import { ThemeToggle } from "./ThemeToggle";
 import { ProfileAvatar } from "./ProfileAvatar";
@@ -32,7 +33,24 @@ export function AppShell({ user, activeNav, heading, whoami, onLoggedOut, childr
   const navigate = useNavigate();
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
-  const items = navItemsFor(user.role).filter((item) => !item.disabled);
+  const [smsGatewayAccess, setSmsGatewayAccess] = useState(user.role !== "FACULTY");
+
+  useEffect(() => {
+    let cancelled = false;
+    if (user.role !== "FACULTY") {
+      setSmsGatewayAccess(true);
+      return () => { cancelled = true; };
+    }
+    setSmsGatewayAccess(false);
+    void getMySmsAccess().then((access) => {
+      if (!cancelled) setSmsGatewayAccess(Boolean(access.enabled));
+    }).catch(() => {
+      if (!cancelled) setSmsGatewayAccess(false);
+    });
+    return () => { cancelled = true; };
+  }, [user.role, user.username]);
+
+  const items = navItemsFor(user.role, { smsGatewayAccess }).filter((item) => !item.disabled);
 
   // Reserve 1 slot for the always-visible Logout button
   // If items count > 3, split into primary (first 3) and overflow items (remaining) + More tab
@@ -79,7 +97,7 @@ export function AppShell({ user, activeNav, heading, whoami, onLoggedOut, childr
           </div>
         </div>
         <div className="nav-links">
-          {navItemsFor(user.role).map((item) =>
+          {navItemsFor(user.role, { smsGatewayAccess }).map((item) =>
             item.disabled ? (
               <button key={item.key} className="nav-link" disabled title="Coming soon">
                 <span className="nav-icon" dangerouslySetInnerHTML={{ __html: item.icon }} /> {item.label}
