@@ -669,15 +669,17 @@ def _row_to_import_data(row_map: dict[str, Any]) -> dict:
     return data
 
 
-def _resolve_import_semester(c, year: int, semester: int) -> int:
-    if year not in YEAR_TO_SEMESTER_CODES or semester not in (1, 2):
+def _resolve_import_semester(c, year: int, semester_id: int) -> int:
+    if year not in YEAR_TO_SEMESTER_CODES or not semester_id:
         raise ApiError("Select a valid year and semester", 400, "VALIDATION_ERROR")
-    code = YEAR_TO_SEMESTER_CODES[year][semester]
     row = c.execute(
-        "SELECT id FROM academic_semesters WHERE code=%s AND active=1", (code,)
+        "SELECT id, code, active FROM academic_semesters WHERE id=%s", (semester_id,)
     ).fetchone()
     if not row:
-        raise ApiError(f"{code} is not available for import", 400, "VALIDATION_ERROR")
+        raise ApiError("Selected semester was not found", 400, "VALIDATION_ERROR")
+    expected_codes = set(YEAR_TO_SEMESTER_CODES[year].values())
+    if row["code"] not in expected_codes:
+        raise ApiError("Selected semester does not belong to the selected year", 400, "VALIDATION_ERROR")
     return row["id"]
 
 
@@ -691,7 +693,7 @@ async def student_bulk_import(
     file: UploadFile = File(...),
     branch: str = "CSD",
     year: int = 0,
-    semester: int = 0,
+    semester_id: int = 0,
     mode: str = "merge",
     user: CurrentUser = Depends(get_current_user),
 ):
@@ -722,7 +724,9 @@ async def student_bulk_import(
 
     try:
         with connect() as c:
-            semester_id = _resolve_import_semester(c, year, semester)
+            semester_id = _resolve_import_semester(c, year, semester_id)
+            semester_row = c.execute("SELECT code FROM academic_semesters WHERE id=%s", (semester_id,)).fetchone()
+            semester_code = semester_row["code"] if semester_row else None
     except ApiError:
         raise
 
@@ -909,7 +913,7 @@ async def student_bulk_import(
         "failed": failed,
         "branch": branch.upper(),
         "year": year,
-        "semester": semester,
+        "semester": semester_code,
         "semester_id": semester_id,
         "mode": mode,
     })

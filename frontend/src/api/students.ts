@@ -245,12 +245,12 @@ export async function getBulkImportOptions(): Promise<BulkImportOptions> {
 
 export async function bulkImportStudents(
   file: File,
-  options: { branch: string; year: number; semester: number; mode?: "merge" | "create_only" }
+  options: { branch: string; year: number; semester_id: number; mode?: "merge" | "create_only" }
 ): Promise<BulkImportResult> {
   const params = new URLSearchParams({
     branch: options.branch,
     year: String(options.year),
-    semester: String(options.semester),
+    semester_id: String(options.semester_id),
     mode: options.mode ?? "merge",
   });
   return apiUpload<BulkImportResult>(`/api/students/bulk-import?${params.toString()}`, file, "file");

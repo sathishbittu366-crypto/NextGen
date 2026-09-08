@@ -141,7 +141,7 @@ export function StudentsListPage({ user, onLoggedOut }: StudentsListPageProps) {
       const result = await bulkImportStudents(importFile, {
         branch: importBranch,
         year: importYear,
-        semester: importSemester,
+        semester_id: importSemester,
         mode: importMode,
       });
       setImportResult(result);
@@ -733,7 +733,7 @@ export function StudentsListPage({ user, onLoggedOut }: StudentsListPageProps) {
                           style={{ height: 42, padding: "0 11px", border: "1.5px solid var(--border)", borderRadius: 9, fontSize: 13.5, fontWeight: 700, background: "var(--input-bg)", color: "var(--text)" }}
                         >
                           <option value="">Select semester…</option>
-                          {importYear && importOptions.semesters.filter((s) => s.active && s.code.startsWith(["", "I", "II", "III", "IV"][importYear] + "-")).map((s) => (
+                          {importYear && importOptions.semesters.filter((s) => s.code.startsWith(["", "I", "II", "III", "IV"][importYear] + "-")).map((s) => (
                             <option key={s.id} value={s.id}>{s.code} · {s.name}</option>
                           ))}
                         </select>
