@@ -15,6 +15,10 @@ from fastapi import APIRouter, Depends, File, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel
 from openpyxl import load_workbook
+try:
+    import xlrd
+except ImportError:  # optional until a legacy .xls file is uploaded
+    xlrd = None
 
 from database import (
     audit, connect, ensure_student_login, mask_aadhaar, DEPARTMENTS,
@@ -669,17 +673,34 @@ def _row_to_import_data(row_map: dict[str, Any]) -> dict:
     return data
 
 
-def _resolve_import_semester(c, year: int, semester_id: int) -> int:
-    if year not in YEAR_TO_SEMESTER_CODES or not semester_id:
-        raise ApiError("Select a valid year and semester", 400, "VALIDATION_ERROR")
+def _resolve_import_semester(c, year: int, semester_id: int | None = None, semester: int | None = None) -> int:
+    """Resolve the selected academic semester safely.
+
+    The UI stores academic_semesters.id, so prefer semester_id. The legacy
+    semester=1/2 form is retained only as a fallback for older clients.
+    """
+    if year not in YEAR_TO_SEMESTER_CODES:
+        raise ApiError("Select a valid year", 400, "VALIDATION_ERROR")
+
+    if semester_id is not None and semester_id > 0:
+        row = c.execute(
+            "SELECT id, code FROM academic_semesters WHERE id=?", (semester_id,)
+        ).fetchone()
+        if not row:
+            raise ApiError("Selected semester does not exist", 400, "VALIDATION_ERROR")
+        expected_codes = set(YEAR_TO_SEMESTER_CODES[year].values())
+        if row["code"] not in expected_codes:
+            raise ApiError("Selected semester does not belong to the selected year", 400, "VALIDATION_ERROR")
+        return row["id"]
+
+    if semester not in (1, 2):
+        raise ApiError("Select a valid semester", 400, "VALIDATION_ERROR")
+    code = YEAR_TO_SEMESTER_CODES[year][semester]
     row = c.execute(
-        "SELECT id, code, active FROM academic_semesters WHERE id=%s", (semester_id,)
+        "SELECT id FROM academic_semesters WHERE code=?", (code,)
     ).fetchone()
     if not row:
-        raise ApiError("Selected semester was not found", 400, "VALIDATION_ERROR")
-    expected_codes = set(YEAR_TO_SEMESTER_CODES[year].values())
-    if row["code"] not in expected_codes:
-        raise ApiError("Selected semester does not belong to the selected year", 400, "VALIDATION_ERROR")
+        raise ApiError(f"{code} is not available for import", 400, "VALIDATION_ERROR")
     return row["id"]
 
 
@@ -693,7 +714,8 @@ async def student_bulk_import(
     file: UploadFile = File(...),
     branch: str = "CSD",
     year: int = 0,
-    semester_id: int = 0,
+    semester_id: int | None = None,
+    semester: int | None = None,
     mode: str = "merge",
     user: CurrentUser = Depends(get_current_user),
 ):
@@ -712,29 +734,44 @@ async def student_bulk_import(
         raise ApiError("Invalid import mode", 400, "VALIDATION_ERROR")
 
     filename = file.filename or ""
-    if not filename.lower().endswith((".xlsx", ".xlsm")):
-        raise ApiError("Upload an .xlsx or .xlsm file exported from Excel", 400, "VALIDATION_ERROR")
+    if not filename.lower().endswith((".xlsx", ".xls", ".xlsm")):
+        raise ApiError("Upload an .xlsx, .xls, or .xlsm file exported from Excel", 400, "VALIDATION_ERROR")
 
     raw = await file.read()
-    try:
-        wb = load_workbook(filename=BytesIO(raw), read_only=True, data_only=True)
-        ws = wb.active
-    except Exception:
-        raise ApiError("Could not read that file — is it a valid Excel workbook?", 400, "VALIDATION_ERROR")
+    suffix = filename.lower().rsplit(".", 1)[-1]
 
     try:
         with connect() as c:
-            semester_id = _resolve_import_semester(c, year, semester_id)
-            semester_row = c.execute("SELECT code FROM academic_semesters WHERE id=%s", (semester_id,)).fetchone()
-            semester_code = semester_row["code"] if semester_row else None
+            resolved_semester_id = _resolve_import_semester(c, year, semester_id, semester)
     except ApiError:
         raise
 
-    rows_iter = ws.iter_rows(values_only=True)
-    try:
-        header_row = next(rows_iter)
-    except StopIteration:
+    if suffix in ("xlsx", "xlsm"):
+        try:
+            wb = load_workbook(filename=BytesIO(raw), read_only=True, data_only=True)
+            ws = wb.active
+            rows_iter = ws.iter_rows(values_only=True)
+            header_row = next(rows_iter, None)
+        except Exception:
+            raise ApiError("Could not read that Excel workbook — is it valid?", 400, "VALIDATION_ERROR")
+    else:
+        if xlrd is None:
+            raise ApiError("Legacy .xls support requires xlrd. Install the backend requirements and retry.", 400, "VALIDATION_ERROR")
+        try:
+            book = xlrd.open_workbook(file_contents=raw, on_demand=True)
+            sheet = book.sheet_by_index(0)
+            def legacy_rows():
+                for r in range(sheet.nrows):
+                    yield tuple(sheet.cell_value(r, c) for c in range(sheet.ncols))
+            rows_iter = legacy_rows()
+            header_row = next(rows_iter, None)
+        except Exception:
+            raise ApiError("Could not read that legacy .xls workbook — is it valid?", 400, "VALIDATION_ERROR")
+
+    if header_row is None:
         raise ApiError("The sheet is empty", 400, "VALIDATION_ERROR")
+
+    semester_id = resolved_semester_id
 
     col_index_to_field: dict[int, str] = {}
     for idx, header in enumerate(header_row):
@@ -913,7 +950,7 @@ async def student_bulk_import(
         "failed": failed,
         "branch": branch.upper(),
         "year": year,
-        "semester": semester_code,
+        "semester": semester,
         "semester_id": semester_id,
         "mode": mode,
     })

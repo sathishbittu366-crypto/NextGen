@@ -245,12 +245,16 @@ export async function getBulkImportOptions(): Promise<BulkImportOptions> {
 
 export async function bulkImportStudents(
   file: File,
-  options: { branch: string; year: number; semester_id: number; mode?: "merge" | "create_only" }
+  options: { branch: string; year: number; semesterId: number; mode?: "merge" | "create_only" }
 ): Promise<BulkImportResult> {
+  // The semester dropdown stores the REAL academic_semesters.id.
+  // Send it explicitly as semester_id; also keep `semester` as a backwards-
+  // compatible alias for older API deployments.
   const params = new URLSearchParams({
     branch: options.branch,
     year: String(options.year),
-    semester_id: String(options.semester_id),
+    semester_id: String(options.semesterId),
+    semester: String(options.semesterId),
     mode: options.mode ?? "merge",
   });
   return apiUpload<BulkImportResult>(`/api/students/bulk-import?${params.toString()}`, file, "file");

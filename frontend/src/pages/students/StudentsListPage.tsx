@@ -118,10 +118,7 @@ export function StudentsListPage({ user, onLoggedOut }: StudentsListPageProps) {
     try {
       const options = await getBulkImportOptions();
       setImportOptions(options);
-      // Preselect the first available branch so the guided flow is immediately usable.
-      // The previous empty state made the Semester control remain disabled even when
-      // the UI appeared to show a branch selection.
-      setImportBranch(options.branches.length ? String(options.branches[0].value) : "");
+      setImportBranch("");
       setImportYear(0);
       setImportSemester(0);
     } catch (err) {
@@ -144,7 +141,7 @@ export function StudentsListPage({ user, onLoggedOut }: StudentsListPageProps) {
       const result = await bulkImportStudents(importFile, {
         branch: importBranch,
         year: importYear,
-        semester: importSemester,
+        semesterId: importSemester,
         mode: importMode,
       });
       setImportResult(result);
@@ -732,11 +729,11 @@ export function StudentsListPage({ user, onLoggedOut }: StudentsListPageProps) {
                         <select
                           value={importSemester || ""}
                           onChange={(e) => setImportSemester(Number(e.target.value))}
-                          disabled={importing || !importYear}
+                          disabled={importing || !importBranch || !importYear}
                           style={{ height: 42, padding: "0 11px", border: "1.5px solid var(--border)", borderRadius: 9, fontSize: 13.5, fontWeight: 700, background: "var(--input-bg)", color: "var(--text)" }}
                         >
                           <option value="">Select semester…</option>
-                          {importYear && importOptions.semesters.filter((s) => s.code.startsWith(["", "I", "II", "III", "IV"][importYear] + "-")).map((s) => (
+                          {importYear && importOptions.semesters.filter((s) => s.active && s.code.startsWith(["", "I", "II", "III", "IV"][importYear] + "-")).map((s) => (
                             <option key={s.id} value={s.id}>{s.code} · {s.name}</option>
                           ))}
                         </select>
@@ -763,7 +760,7 @@ export function StudentsListPage({ user, onLoggedOut }: StudentsListPageProps) {
 
                     <div style={{ border: "1.5px dashed var(--border)", borderRadius: 12, padding: 18, textAlign: "center", marginBottom: 16, background: "var(--bg-card)" }}>
                       <div style={{ fontSize: 12, fontWeight: 800, marginBottom: 7, color: "var(--muted)" }}>Step 2 · Choose Excel file</div>
-                      <input type="file" accept=".xlsx,.xlsm" onChange={(e) => setImportFile(e.target.files?.[0] ?? null)} disabled={importing} style={{ fontSize: 13, fontWeight: 600 }} />
+                      <input type="file" accept=".xlsx,.xls,.xlsm" onChange={(e) => setImportFile(e.target.files?.[0] ?? null)} disabled={importing} style={{ fontSize: 13, fontWeight: 600 }} />
                       {importFile && <div style={{ marginTop: 9, fontSize: 12.5, fontWeight: 800, color: "var(--blue)" }}>{importFile.name}</div>}
                     </div>
 
