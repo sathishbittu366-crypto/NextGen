@@ -60,6 +60,13 @@ def _authorize(user: CurrentUser, subdir: str, filename: str) -> None:
             return
         raise ApiError("Not authorized to view this file", 403, "FORBIDDEN")
 
+    if subdir == "notes":
+        # Notes are intentionally served through the dedicated note-id
+        # endpoint in routes_learning.py, which performs subject/faculty/student
+        # authorization. Keep generic file serving fail-closed for notes so a
+        # discovered filename can never bypass that relationship check.
+        raise ApiError("Not authorized to view this file", 403, "FORBIDDEN")
+
     if subdir == "certificates":
         if not user.student_roll_no:
             raise ApiError("Not authorized to view this file", 403, "FORBIDDEN")

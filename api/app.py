@@ -27,6 +27,7 @@ from api.routes_academic_calendar import router as academic_calendar_router
 from api.routes_me import router as me_router
 from api.routes_files import router as files_router
 from api.routes_reports import router as reports_router
+from api.routes_learning import router as learning_router
 
 app = FastAPI(
     title="SMS API",
@@ -107,6 +108,7 @@ app.include_router(academic_calendar_router)  # Group 5 — Academic Calendar
 app.include_router(me_router)             # Group 6 — Self-service
 app.include_router(files_router)          # Group 7 — Protected files
 app.include_router(reports_router)        # Problem Reports
+app.include_router(learning_router)       # Notes + Results
 
 
 @app.get("/")

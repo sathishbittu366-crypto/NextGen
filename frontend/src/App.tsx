@@ -22,6 +22,9 @@ import { ProfilePage } from "./pages/me/ProfilePage";
 import { AuditLogPage } from "./pages/dashboard/AuditLogPage";
 import { SmsLogPage } from "./pages/dashboard/SmsLogPage";
 import { ProblemReportsPage } from "./pages/dashboard/ProblemReportsPage";
+import { NotesPage } from "./pages/learning/NotesPage";
+import { ResultsUploadPage } from "./pages/learning/ResultsUploadPage";
+import { ResultsPage } from "./pages/learning/ResultsPage";
 import { SplashScreen } from "./components/SplashScreen";
 import { WindowLogoLoader } from "./components/WindowLogoLoader";
 
@@ -164,6 +167,36 @@ export function App() {
         element={
           <Guard user={user} reload={reload} condition={user?.role === "HOD" || user?.role === "ADMIN"} fallback="/">
             <SubjectsPage user={user!} onLoggedOut={handleLoggedOut} />
+          </Guard>
+        }
+      />
+
+      {/* ── Notes ── */}
+      <Route
+        path="/notes"
+        element={
+          <Guard user={user} reload={reload} condition={user?.role === "STUDENT" || user?.role === "FACULTY"} fallback="/">
+            <NotesPage user={user!} onLoggedOut={handleLoggedOut} />
+          </Guard>
+        }
+      />
+
+      {/* ── Student Results ── */}
+      <Route
+        path="/results"
+        element={
+          <Guard user={user} reload={reload} condition={user?.role === "STUDENT"} fallback="/">
+            <ResultsPage user={user!} onLoggedOut={handleLoggedOut} />
+          </Guard>
+        }
+      />
+
+      {/* ── Admin Results Upload ── */}
+      <Route
+        path="/results-upload"
+        element={
+          <Guard user={user} reload={reload} condition={user?.role === "ADMIN"} fallback="/">
+            <ResultsUploadPage user={user!} onLoggedOut={handleLoggedOut} />
           </Guard>
         }
       />

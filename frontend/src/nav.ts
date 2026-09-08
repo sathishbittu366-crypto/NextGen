@@ -57,6 +57,16 @@ const ICONS = {
     <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
   </svg>`,
 
+  // File/book – notes
+  notes: `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4 4h16v16H4z"/><path d="M8 8h8M8 12h8M8 16h5"/>
+  </svg>`,
+
+  // Trophy – results
+  results: `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M8 21h8M12 17v4M7 4h10v4a5 5 0 0 1-10 0z"/><path d="M7 6H4a3 3 0 0 0 3 3M17 6h3a3 3 0 0 1-3 3"/>
+  </svg>`,
+
   // Calendar – academic calendar
   calendar: `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
     <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
@@ -95,6 +105,8 @@ export function navItemsFor(role: Role, options?: { smsGatewayAccess?: boolean }
       { href: "/me/profile", icon: ICONS.profile, label: "Profile", key: "profile" },
       { href: "/student-dashboard", icon: ICONS.trending, label: "Attendance Summary", key: "attendance-summary" },
       { href: "/academic-calendar", icon: ICONS.calendar, label: "Academic Calendar", key: "academic-calendar" },
+      { href: "/notes", icon: ICONS.notes, label: "Notes", key: "notes" },
+      { href: "/results", icon: ICONS.results, label: "Results", key: "results" },
     ];
   }
   if (role === "FACULTY") {
@@ -103,6 +115,7 @@ export function navItemsFor(role: Role, options?: { smsGatewayAccess?: boolean }
       { href: "/attendance", icon: ICONS.attendance, label: "Mark Attendance", key: "attendance" },
       { href: "/students", icon: ICONS.students, label: "Students", key: "students" },
       { href: "/academic-calendar", icon: ICONS.calendar, label: "Academic Calendar", key: "academic-calendar" },
+      { href: "/notes", icon: ICONS.notes, label: "Notes", key: "notes" },
       ...(options?.smsGatewayAccess ? [{ href: "/sms-log", icon: ICONS.sms, label: "SMS Gateway", key: "sms-log" }] : []),
     ];
   }
@@ -115,6 +128,7 @@ export function navItemsFor(role: Role, options?: { smsGatewayAccess?: boolean }
       { href: "/subjects", icon: ICONS.subjects, label: "Subjects", key: "subjects" },
       { href: "/students", icon: ICONS.students, label: "Students", key: "students" },
       { href: "/academic-calendar", icon: ICONS.calendar, label: "Academic Calendar", key: "academic-calendar" },
+      { href: "/results-upload", icon: ICONS.results, label: "Results Upload", key: "results-admin" },
       { href: "/audit-log", icon: ICONS.audit, label: "Audit Log", key: "audit" },
       { href: "/sms-log", icon: ICONS.sms, label: "SMS Gateways", key: "sms-log" },
       { href: "/problem-reports", icon: ICONS.reports, label: "Problem Reports", key: "problem-reports" },

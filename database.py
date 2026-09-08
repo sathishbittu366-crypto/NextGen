@@ -868,6 +868,59 @@ def init_db(db_name=None):
         """)
 
         c.execute("""
+        CREATE TABLE IF NOT EXISTS notes(
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            subject_id INT NOT NULL,
+            faculty_username VARCHAR(64) NOT NULL,
+            title VARCHAR(180) NOT NULL,
+            original_filename VARCHAR(255) NOT NULL,
+            file_path VARCHAR(512) NOT NULL,
+            active TINYINT(1) NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE CASCADE,
+            FOREIGN KEY(faculty_username) REFERENCES users(username) ON UPDATE CASCADE ON DELETE CASCADE,
+            INDEX idx_notes_subject_created (subject_id, created_at),
+            INDEX idx_notes_faculty_created (faculty_username, created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """)
+
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS result_batches(
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            department VARCHAR(64) NOT NULL DEFAULT 'CSD',
+            semester_id INT NOT NULL,
+            title VARCHAR(120) NOT NULL,
+            uploaded_by VARCHAR(64) NOT NULL,
+            source_filename VARCHAR(255),
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(semester_id) REFERENCES academic_semesters(id) ON DELETE CASCADE,
+            FOREIGN KEY(uploaded_by) REFERENCES users(username) ON UPDATE CASCADE,
+            INDEX idx_result_batches_scope (department, semester_id, created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """)
+
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS result_items(
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            batch_id INT NOT NULL,
+            roll_no VARCHAR(64) NOT NULL,
+            subject_code VARCHAR(64) NOT NULL,
+            subject_name VARCHAR(255) NOT NULL,
+            marks DECIMAL(10,2) NOT NULL,
+            max_marks DECIMAL(10,2) NOT NULL DEFAULT 100,
+            grade VARCHAR(32),
+            grade_point VARCHAR(32),
+            result_status VARCHAR(64),
+            sgpa VARCHAR(32),
+            percentage VARCHAR(32),
+            FOREIGN KEY(batch_id) REFERENCES result_batches(id) ON DELETE CASCADE,
+            FOREIGN KEY(roll_no) REFERENCES students(roll_no) ON UPDATE CASCADE ON DELETE CASCADE,
+            UNIQUE(batch_id, roll_no, subject_code),
+            INDEX idx_result_items_roll_batch (roll_no, batch_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """)
+
+        c.execute("""
         CREATE TABLE IF NOT EXISTS attendance_sessions(
             id INT AUTO_INCREMENT PRIMARY KEY,
             attendance_date VARCHAR(32) NOT NULL,
