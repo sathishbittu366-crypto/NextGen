@@ -199,14 +199,14 @@ def create_note(*, subject_id: int, title: str, filename: str, file_path: str, f
         ).fetchone()
         if not row:
             raise ValueError("You can upload notes only for subjects assigned to you")
-        c.execute(
+        cur = c.execute(
             """
             INSERT INTO notes(subject_id,faculty_username,title,original_filename,file_path,active)
             VALUES(?,?,?,?,?,1)
             """,
             (subject_id, faculty_username, title, filename, file_path),
         )
-        note_id = c.lastrowid
+        note_id = cur.lastrowid
         audit(c, faculty_username, "UPLOAD", "note", f"{row['code']} — {title}")
     return int(note_id)
 
@@ -381,11 +381,11 @@ def upload_results_excel(*, raw: bytes, filename: str, department: str, semester
         if not parsed:
             raise ValueError("No valid result rows were found in the Excel file")
 
-        c.execute(
+        batch_cur = c.execute(
             "INSERT INTO result_batches(department,semester_id,title,uploaded_by,source_filename) VALUES(?,?,?,?,?)",
             (department, semester_id, title, admin_username, filename),
         )
-        batch_id = int(c.lastrowid)
+        batch_id = int(batch_cur.lastrowid)
         for item in parsed:
             c.execute(
                 """
