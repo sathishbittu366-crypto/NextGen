@@ -190,6 +190,11 @@ export function FacultyPage({ user, onLoggedOut }: Props) {
       setShowCreateForm(false);
       setNotice("Account created successfully");
       await reload();
+      // The SMS delegation panel keeps its own snapshot. Refresh it too so a
+      // newly-created Faculty appears immediately as an assignable handler.
+      if (smsAccess || showSmsDelegation || showBatchHandlers) {
+        await loadSmsDelegation();
+      }
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : "Failed to create account");
     } finally {
@@ -394,7 +399,7 @@ export function FacultyPage({ user, onLoggedOut }: Props) {
       {/* HOD-only: the assignment route requires the owning HOD, so Admin (who spans
           multiple HOD scopes) doesn't get a control here that would just 403 on save. */}
       {user.role === "HOD" && <div className="collapsible" style={{ marginBottom: 18 }}>
-        <div className="collapsible-trigger" onClick={() => { const next = !showBatchHandlers; setShowBatchHandlers(next); if (next && !smsAccess) void loadSmsDelegation(); }}>
+        <div className="collapsible-trigger" onClick={() => { const next = !showBatchHandlers; setShowBatchHandlers(next); if (next) void loadSmsDelegation(); }}>
           <span><span style={{ marginRight: 8, fontSize: 12 }}>{showBatchHandlers ? "▼" : "▶"}</span>🗂️ BATCH SMS HANDLERS</span>
           <span style={{ fontSize: 12, color: "#38bdf8", fontWeight: 700 }}>{showBatchHandlers ? "Click to collapse" : "Who sends SMS for each batch"}</span>
         </div>
@@ -448,7 +453,7 @@ export function FacultyPage({ user, onLoggedOut }: Props) {
 
       {/* ── SMS Gateway Delegation (separate from ordinary Faculty permissions) ── */}
       <div className="collapsible" style={{ marginBottom: 18 }}>
-        <div className="collapsible-trigger" onClick={() => { const next = !showSmsDelegation; setShowSmsDelegation(next); if (next && !smsAccess) void loadSmsDelegation(); }}>
+        <div className="collapsible-trigger" onClick={() => { const next = !showSmsDelegation; setShowSmsDelegation(next); if (next) void loadSmsDelegation(); }}>
           <span><span style={{ marginRight: 8, fontSize: 12 }}>{showSmsDelegation ? "▼" : "▶"}</span>📲 SMS GATEWAY DELEGATION</span>
           <span style={{ fontSize: 12, color: "#38bdf8", fontWeight: 700 }}>{showSmsDelegation ? "Click to collapse" : "Manage SMS-only access"}</span>
         </div>
