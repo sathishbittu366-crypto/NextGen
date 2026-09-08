@@ -6,9 +6,11 @@ import {
   deleteStudent,
   studentsPdfUrl,
   bulkImportStudents,
+  getBulkImportOptions,
   type StudentListRow,
   type SemesterOption,
   type BulkImportResult,
+  type BulkImportOptions,
 } from "../../api/students";
 import { ApiClientError, formatPhotoUrl } from "../../api/client";
 import { type CurrentUser } from "../../api/auth";
@@ -42,6 +44,11 @@ export function StudentsListPage({ user, onLoggedOut }: StudentsListPageProps) {
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<BulkImportResult | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
+  const [importOptions, setImportOptions] = useState<BulkImportOptions | null>(null);
+  const [importBranch, setImportBranch] = useState("");
+  const [importYear, setImportYear] = useState(0);
+  const [importSemester, setImportSemester] = useState(0);
+  const [importMode, setImportMode] = useState<"merge" | "create_only">("merge");
 
   // Print Permission (HOD & ADMIN ONLY)
   const canPrint = ["HOD", "ADMIN"].includes(user.role);
@@ -104,16 +111,42 @@ export function StudentsListPage({ user, onLoggedOut }: StudentsListPageProps) {
     }
   }
 
+  async function openImportModal() {
+    setImportModalOpen(true);
+    setImportError(null);
+    setImportResult(null);
+    try {
+      const options = await getBulkImportOptions();
+      setImportOptions(options);
+      setImportBranch("");
+      setImportYear(0);
+      setImportSemester(0);
+    } catch (err) {
+      setImportError(err instanceof ApiClientError ? err.message : "Could not load import options");
+    }
+  }
+
+  function semesterForYear(year: number, semesterNumber: number) {
+    const roman = ["", "I", "II", "III", "IV"][year] ?? "";
+    const code = `${roman}-${semesterNumber === 2 ? "II" : "I"}`;
+    return importOptions?.semesters.find((s) => s.active && s.code === code);
+  }
+
   async function handleImportSubmit() {
-    if (!importFile) return;
+    if (!importFile || !importBranch || !importYear || !importSemester) return;
     setImporting(true);
     setImportError(null);
     setImportResult(null);
     try {
-      const result = await bulkImportStudents(importFile);
+      const result = await bulkImportStudents(importFile, {
+        branch: importBranch,
+        year: importYear,
+        semester: importSemester,
+        mode: importMode,
+      });
       setImportResult(result);
-      if (result.created_count > 0) {
-        setNotice(`Imported ${result.created_count} student${result.created_count === 1 ? "" : "s"} successfully`);
+      if (result.created_count || result.updated_count) {
+        setNotice(`${result.created_count} created · ${result.updated_count} updated successfully`);
         load(q);
       }
     } catch (err) {
@@ -128,6 +161,11 @@ export function StudentsListPage({ user, onLoggedOut }: StudentsListPageProps) {
     setImportFile(null);
     setImportResult(null);
     setImportError(null);
+    setImportOptions(null);
+    setImportBranch("");
+    setImportYear(0);
+    setImportSemester(0);
+    setImportMode("merge");
   }
 
   // Client-side year & semester filtering
@@ -300,7 +338,7 @@ export function StudentsListPage({ user, onLoggedOut }: StudentsListPageProps) {
             <button
               type="button"
               className="btn btn-outline"
-              onClick={() => setImportModalOpen(true)}
+              onClick={openImportModal}
               style={{ height: 40, fontWeight: 700, borderRadius: 8, padding: "0 16px", whiteSpace: "nowrap" }}
               title="Bulk-create student accounts from an Excel sheet"
             >
@@ -609,15 +647,15 @@ export function StudentsListPage({ user, onLoggedOut }: StudentsListPageProps) {
         );
       })()}
 
-      {/* ── Bulk Import Students (Excel) Modal ── */}
+      {/* ── Guided Bulk Import Students (Excel) Modal ── */}
       {importModalOpen && (
         <div className="modal-overlay no-print" onClick={() => !importing && closeImportModal()}>
           <div
             className="modal-box modal3dPopIn"
             style={{
-              maxWidth: 620,
+              maxWidth: 700,
               width: "94%",
-              maxHeight: "85vh",
+              maxHeight: "88vh",
               overflowY: "auto",
               background: "var(--bg-card)",
               border: "1.5px solid var(--border)",
@@ -627,111 +665,154 @@ export function StudentsListPage({ user, onLoggedOut }: StudentsListPageProps) {
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
-              <h3 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: "var(--text)" }}>
-                📥 Import Students from Excel
-              </h3>
-              <button
-                className="btn btn-sm btn-outline"
-                onClick={closeImportModal}
-                disabled={importing}
-                style={{ padding: "4px 10px" }}
-              >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 800, color: "var(--blue)", letterSpacing: 0.8, textTransform: "uppercase" }}>
+                  Step 1 · Choose Scope
+                </div>
+                <h3 style={{ margin: "4px 0 0", fontSize: 19, fontWeight: 850, color: "var(--text)" }}>
+                  📥 Import Students
+                </h3>
+              </div>
+              <button className="btn btn-sm btn-outline" onClick={closeImportModal} disabled={importing} style={{ padding: "4px 10px" }}>
                 ✕
               </button>
             </div>
 
             {!importResult && (
               <>
-                <div style={{ fontSize: 13, color: "var(--muted)", fontWeight: 600, marginBottom: 16, lineHeight: 1.5 }}>
-                  Upload an .xlsx sheet with columns for HallTicket, Full Name, Phone, Email, Address,
-                  Aadhaar Number, Father's Name and Father's Phone Number. A login is created automatically
-                  for every new student (username = roll number, password = roll number + "@CSD").
-                  Rows with a roll number that already exists are skipped, not overwritten.
+                <div style={{ fontSize: 13, color: "var(--muted)", fontWeight: 600, marginBottom: 18, lineHeight: 1.55 }}>
+                  Select exactly where this sheet belongs. New students are created; existing students are merged by Roll Number.
+                  Blank cells never erase existing values. To rename a roll number, add a <strong>Previous Roll Number</strong> column.
                 </div>
 
-                <div
-                  style={{
-                    border: "1.5px dashed var(--border)",
-                    borderRadius: 12,
-                    padding: 20,
-                    textAlign: "center",
-                    marginBottom: 16,
-                    background: "var(--row-alt)",
-                  }}
-                >
-                  <input
-                    type="file"
-                    accept=".xlsx,.xlsm"
-                    onChange={(e) => setImportFile(e.target.files?.[0] ?? null)}
-                    disabled={importing}
-                    style={{ fontSize: 13, fontWeight: 600 }}
-                  />
-                  {importFile && (
-                    <div style={{ marginTop: 10, fontSize: 12.5, fontWeight: 700, color: "var(--blue)" }}>
-                      {importFile.name}
+                {!importOptions && importError && <div className="login-error" style={{ marginBottom: 16 }}>{importError}</div>}
+
+                {importOptions && (
+                  <>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 12, marginBottom: 18 }}>
+                      <label style={{ display: "grid", gap: 6 }}>
+                        <span style={{ fontSize: 11.5, fontWeight: 800, color: "var(--muted)", textTransform: "uppercase" }}>Branch</span>
+                        <select
+                          value={importBranch}
+                          onChange={(e) => {
+                            setImportBranch(e.target.value);
+                            setImportYear(0);
+                            setImportSemester(0);
+                          }}
+                          disabled={importing}
+                          style={{ height: 42, padding: "0 11px", border: "1.5px solid var(--border)", borderRadius: 9, fontSize: 13.5, fontWeight: 700, background: "var(--input-bg)", color: "var(--text)" }}
+                        >
+                          {importOptions.branches.map((b) => <option key={String(b.value)} value={String(b.value)}>{b.label}</option>)}
+                        </select>
+                      </label>
+
+                      <label style={{ display: "grid", gap: 6 }}>
+                        <span style={{ fontSize: 11.5, fontWeight: 800, color: "var(--muted)", textTransform: "uppercase" }}>Year</span>
+                        <select
+                          value={importYear || ""}
+                          onChange={(e) => {
+                            const y = Number(e.target.value);
+                            setImportYear(y);
+                            setImportSemester(0);
+                          }}
+                          disabled={importing}
+                          style={{ height: 42, padding: "0 11px", border: "1.5px solid var(--border)", borderRadius: 9, fontSize: 13.5, fontWeight: 700, background: "var(--input-bg)", color: "var(--text)" }}
+                        >
+                          <option value="">Select year…</option>
+                          {importOptions.years.map((y) => <option key={String(y.value)} value={String(y.value)}>{y.label}</option>)}
+                        </select>
+                      </label>
+
+                      <label style={{ display: "grid", gap: 6 }}>
+                        <span style={{ fontSize: 11.5, fontWeight: 800, color: "var(--muted)", textTransform: "uppercase" }}>Semester</span>
+                        <select
+                          value={importSemester || ""}
+                          onChange={(e) => setImportSemester(Number(e.target.value))}
+                          disabled={importing || !importBranch || !importYear}
+                          style={{ height: 42, padding: "0 11px", border: "1.5px solid var(--border)", borderRadius: 9, fontSize: 13.5, fontWeight: 700, background: "var(--input-bg)", color: "var(--text)" }}
+                        >
+                          <option value="">Select semester…</option>
+                          {importYear && importOptions.semesters.filter((s) => s.active && s.code.startsWith(["", "I", "II", "III", "IV"][importYear] + "-")).map((s) => (
+                            <option key={s.id} value={s.id}>{s.code} · {s.name}</option>
+                          ))}
+                        </select>
+                      </label>
                     </div>
-                  )}
-                </div>
 
-                {importError && <div className="login-error" style={{ marginBottom: 16 }}>{importError}</div>}
+                    <div style={{ border: "1px solid var(--border)", borderRadius: 12, padding: 14, marginBottom: 14, background: "var(--row-alt)" }}>
+                      <div style={{ fontSize: 12, fontWeight: 800, color: "var(--text)", marginBottom: 9 }}>Import behavior</div>
+                      <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer" }}>
+                        <input type="radio" name="student-import-mode" checked={importMode === "merge"} onChange={() => setImportMode("merge")} disabled={importing} />
+                        <span>
+                          <strong style={{ fontSize: 13 }}>Merge / update existing</strong>
+                          <span style={{ display: "block", fontSize: 12, color: "var(--muted)", marginTop: 2 }}>Recommended. Existing Roll Numbers are updated; new Roll Numbers are created.</span>
+                        </span>
+                      </label>
+                      <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer", marginTop: 10 }}>
+                        <input type="radio" name="student-import-mode" checked={importMode === "create_only"} onChange={() => setImportMode("create_only")} disabled={importing} />
+                        <span>
+                          <strong style={{ fontSize: 13 }}>Create only</strong>
+                          <span style={{ display: "block", fontSize: 12, color: "var(--muted)", marginTop: 2 }}>Never overwrite existing students; duplicates are reported as skipped.</span>
+                        </span>
+                      </label>
+                    </div>
 
-                <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
-                  <button type="button" className="btn btn-outline" onClick={closeImportModal} disabled={importing}>
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    className="btn"
-                    onClick={handleImportSubmit}
-                    disabled={!importFile || importing}
-                    style={{ fontWeight: 800, opacity: !importFile || importing ? 0.6 : 1 }}
-                  >
-                    {importing ? "Importing…" : "Import"}
-                  </button>
-                </div>
+                    <div style={{ border: "1.5px dashed var(--border)", borderRadius: 12, padding: 18, textAlign: "center", marginBottom: 16, background: "var(--bg-card)" }}>
+                      <div style={{ fontSize: 12, fontWeight: 800, marginBottom: 7, color: "var(--muted)" }}>Step 2 · Choose Excel file</div>
+                      <input type="file" accept=".xlsx,.xlsm" onChange={(e) => setImportFile(e.target.files?.[0] ?? null)} disabled={importing} style={{ fontSize: 13, fontWeight: 600 }} />
+                      {importFile && <div style={{ marginTop: 9, fontSize: 12.5, fontWeight: 800, color: "var(--blue)" }}>{importFile.name}</div>}
+                    </div>
+
+                    <div style={{ fontSize: 12, color: "var(--muted)", lineHeight: 1.55, marginBottom: 14 }}>
+                      Recognized columns include <strong>Roll Number, Name, Parent Phone, Student Phone, Email, Address</strong> and the other student fields.
+                      Existing data is preserved when a matching cell is blank. Unknown Excel columns are ignored.
+                    </div>
+
+                    {importError && <div className="login-error" style={{ marginBottom: 16 }}>{importError}</div>}
+
+                    <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+                      <button type="button" className="btn btn-outline" onClick={closeImportModal} disabled={importing}>Cancel</button>
+                      <button type="button" className="btn" onClick={handleImportSubmit} disabled={!importFile || !importBranch || !importYear || !importSemester || importing} style={{ fontWeight: 800, opacity: !importFile || !importBranch || !importYear || !importSemester || importing ? 0.6 : 1 }}>
+                        {importing ? "Importing…" : importMode === "merge" ? "Import & Merge" : "Import New Students"}
+                      </button>
+                    </div>
+                  </>
+                )}
               </>
             )}
 
             {importResult && (
               <>
+                <div style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 12 }}>
+                  {importResult.branch} · Year {importResult.year} · Semester {importResult.semester} · {importResult.mode === "merge" ? "Merge mode" : "Create-only mode"}
+                </div>
                 <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
-                  <span className="chip" style={{ background: "#dcfce7", color: "#166534", fontWeight: 800, padding: "4px 10px" }}>
-                    ✅ {importResult.created_count} created
-                  </span>
-                  <span className="chip" style={{ background: "#fef9c3", color: "#854d0e", fontWeight: 800, padding: "4px 10px" }}>
-                    ⏭️ {importResult.skipped_count} skipped
-                  </span>
-                  <span className="chip" style={{ background: "#fee2e2", color: "#991b1b", fontWeight: 800, padding: "4px 10px" }}>
-                    ❌ {importResult.failed_count} failed
-                  </span>
+                  <span className="chip" style={{ background: "#dcfce7", color: "#166534", fontWeight: 800, padding: "4px 10px" }}>✅ {importResult.created_count} created</span>
+                  <span className="chip" style={{ background: "#dbeafe", color: "#1d4ed8", fontWeight: 800, padding: "4px 10px" }}>↻ {importResult.updated_count} updated</span>
+                  <span className="chip" style={{ background: "#fef9c3", color: "#854d0e", fontWeight: 800, padding: "4px 10px" }}>⏭️ {importResult.skipped_count} skipped</span>
+                  <span className="chip" style={{ background: "#fee2e2", color: "#991b1b", fontWeight: 800, padding: "4px 10px" }}>❌ {importResult.failed_count} failed</span>
                 </div>
 
                 {importResult.created.length > 0 && (
                   <div style={{ marginBottom: 16 }}>
-                    <div style={{ fontSize: 12.5, fontWeight: 800, color: "var(--text)", marginBottom: 6 }}>
-                      New Logins Created
-                    </div>
-                    <div style={{ maxHeight: 200, overflowY: "auto", border: "1px solid var(--border)", borderRadius: 8 }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 800, color: "var(--text)", marginBottom: 6 }}>New Logins Created</div>
+                    <div style={{ maxHeight: 180, overflowY: "auto", border: "1px solid var(--border)", borderRadius: 8 }}>
                       <table className="data-table" style={{ fontSize: 12.5 }}>
-                        <thead>
-                          <tr>
-                            <th>Roll No</th>
-                            <th>Name</th>
-                            <th>Username</th>
-                            <th>Password</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {importResult.created.map((r) => (
-                            <tr key={r.roll_no}>
-                              <td>{r.roll_no}</td>
-                              <td>{r.name}</td>
-                              <td>{r.username}</td>
-                              <td style={{ fontFamily: "monospace" }}>{r.password}</td>
-                            </tr>
-                          ))}
-                        </tbody>
+                        <thead><tr><th>Roll No</th><th>Name</th><th>Username</th><th>Password</th></tr></thead>
+                        <tbody>{importResult.created.map((r) => <tr key={r.roll_no}><td>{r.roll_no}</td><td>{r.name}</td><td>{r.username}</td><td style={{ fontFamily: "monospace" }}>{r.password}</td></tr>)}</tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {importResult.updated.length > 0 && (
+                  <div style={{ marginBottom: 16 }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 800, color: "var(--text)", marginBottom: 6 }}>Updated Students</div>
+                    <div style={{ maxHeight: 150, overflowY: "auto", border: "1px solid var(--border)", borderRadius: 8 }}>
+                      <table className="data-table" style={{ fontSize: 12.5 }}>
+                        <thead><tr><th>Row</th><th>Roll No</th><th>Name</th></tr></thead>
+                        <tbody>{importResult.updated.map((r) => <tr key={`${r.row}-${r.roll_no}`}><td>{r.row}</td><td>{r.roll_no}</td><td>{r.name}</td></tr>)}</tbody>
                       </table>
                     </div>
                   </div>
@@ -739,27 +820,11 @@ export function StudentsListPage({ user, onLoggedOut }: StudentsListPageProps) {
 
                 {importResult.skipped.length > 0 && (
                   <div style={{ marginBottom: 16 }}>
-                    <div style={{ fontSize: 12.5, fontWeight: 800, color: "var(--text)", marginBottom: 6 }}>
-                      Skipped Rows
-                    </div>
+                    <div style={{ fontSize: 12.5, fontWeight: 800, color: "var(--text)", marginBottom: 6 }}>Skipped Rows</div>
                     <div style={{ maxHeight: 140, overflowY: "auto", border: "1px solid var(--border)", borderRadius: 8 }}>
                       <table className="data-table" style={{ fontSize: 12.5 }}>
-                        <thead>
-                          <tr>
-                            <th>Row</th>
-                            <th>Roll No</th>
-                            <th>Reason</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {importResult.skipped.map((r) => (
-                            <tr key={r.row}>
-                              <td>{r.row}</td>
-                              <td>{r.roll_no}</td>
-                              <td>{r.reason}</td>
-                            </tr>
-                          ))}
-                        </tbody>
+                        <thead><tr><th>Row</th><th>Roll No</th><th>Reason</th></tr></thead>
+                        <tbody>{importResult.skipped.map((r) => <tr key={`${r.row}-${r.roll_no}`}><td>{r.row}</td><td>{r.roll_no}</td><td>{r.reason}</td></tr>)}</tbody>
                       </table>
                     </div>
                   </div>
@@ -767,36 +832,19 @@ export function StudentsListPage({ user, onLoggedOut }: StudentsListPageProps) {
 
                 {importResult.failed.length > 0 && (
                   <div style={{ marginBottom: 16 }}>
-                    <div style={{ fontSize: 12.5, fontWeight: 800, color: "#991b1b", marginBottom: 6 }}>
-                      Failed Rows
-                    </div>
-                    <div style={{ maxHeight: 140, overflowY: "auto", border: "1px solid var(--border)", borderRadius: 8 }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 800, color: "#991b1b", marginBottom: 6 }}>Failed Rows</div>
+                    <div style={{ maxHeight: 150, overflowY: "auto", border: "1px solid var(--border)", borderRadius: 8 }}>
                       <table className="data-table" style={{ fontSize: 12.5 }}>
-                        <thead>
-                          <tr>
-                            <th>Row</th>
-                            <th>Roll No</th>
-                            <th>Reason</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {importResult.failed.map((r) => (
-                            <tr key={r.row}>
-                              <td>{r.row}</td>
-                              <td>{r.roll_no}</td>
-                              <td>{r.reason}</td>
-                            </tr>
-                          ))}
-                        </tbody>
+                        <thead><tr><th>Row</th><th>Roll No</th><th>Reason</th></tr></thead>
+                        <tbody>{importResult.failed.map((r) => <tr key={`${r.row}-${r.roll_no}`}><td>{r.row}</td><td>{r.roll_no}</td><td>{r.reason}</td></tr>)}</tbody>
                       </table>
                     </div>
                   </div>
                 )}
 
                 <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
-                  <button type="button" className="btn btn-outline" onClick={closeImportModal}>
-                    Close
-                  </button>
+                  <button type="button" className="btn btn-outline" onClick={closeImportModal}>Close</button>
+                  <button type="button" className="btn" onClick={openImportModal} style={{ fontWeight: 800 }}>Import Another File</button>
                 </div>
               </>
             )}

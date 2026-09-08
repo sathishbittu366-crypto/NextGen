@@ -195,7 +195,7 @@ export async function deleteStudent(id: number): Promise<{ deleted: boolean; id:
 }
 
 // ──────────────────────────────────────────────
-// Bulk Import (Excel) — matches api/routes_students.py's student_bulk_import
+// Guided Bulk Import (Excel) — matches api/routes_students.py student_bulk_import/options
 // ──────────────────────────────────────────────
 
 export interface BulkImportCreatedRow {
@@ -218,9 +218,18 @@ export interface BulkImportFailedRow {
   reason: string;
 }
 
+export interface BulkImportOption { value: string | number; label: string; }
+
+export interface BulkImportOptions {
+  branches: BulkImportOption[];
+  years: BulkImportOption[];
+  semesters: Array<SemesterOption & { active: boolean }>;
+}
+
 export interface BulkImportResult {
   total_rows: number;
   created_count: number;
+  updated_count: number;
   skipped_count: number;
   failed_count: number;
   created: BulkImportCreatedRow[];
@@ -228,10 +237,23 @@ export interface BulkImportResult {
   failed: BulkImportFailedRow[];
 }
 
-// Multipart, same pattern as uploadStudentPhoto — apiUpload omits
-// Content-Type so the browser sets its own multipart boundary.
-export async function bulkImportStudents(file: File): Promise<BulkImportResult> {
-  return apiUpload<BulkImportResult>("/api/students/bulk-import", file, "file");
+// Multipart upload stays inside apiUpload(). Scope/mode are sent as query
+// parameters so the shared upload helper remains responsible for auth/boundaries.
+export async function getBulkImportOptions(): Promise<BulkImportOptions> {
+  return apiFetch<BulkImportOptions>("/api/students/bulk-import/options", { method: "GET" });
+}
+
+export async function bulkImportStudents(
+  file: File,
+  options: { branch: string; year: number; semester: number; mode?: "merge" | "create_only" }
+): Promise<BulkImportResult> {
+  const params = new URLSearchParams({
+    branch: options.branch,
+    year: String(options.year),
+    semester: String(options.semester),
+    mode: options.mode ?? "merge",
+  });
+  return apiUpload<BulkImportResult>(`/api/students/bulk-import?${params.toString()}`, file, "file");
 }
 
 export function studentsPdfUrl(
