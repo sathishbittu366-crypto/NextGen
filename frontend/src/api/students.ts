@@ -206,6 +206,12 @@ export interface BulkImportCreatedRow {
   password: string;
 }
 
+export interface BulkImportUpdatedRow {
+  row: number;
+  roll_no: string;
+  name: string;
+}
+
 export interface BulkImportSkippedRow {
   row: number;
   roll_no: string;
@@ -233,8 +239,17 @@ export interface BulkImportResult {
   skipped_count: number;
   failed_count: number;
   created: BulkImportCreatedRow[];
+  updated: BulkImportUpdatedRow[];
   skipped: BulkImportSkippedRow[];
   failed: BulkImportFailedRow[];
+  // WHY: the backend echoes back the resolved import scope (routes_students.py
+  // student_bulk_import's final `return ok({...})`) so the summary banner
+  // above the results table can confirm what was actually imported.
+  branch: string;
+  year: number;
+  semester: number | null;
+  semester_id: number;
+  mode: "merge" | "create_only";
 }
 
 // Multipart upload stays inside apiUpload(). Scope/mode are sent as query
