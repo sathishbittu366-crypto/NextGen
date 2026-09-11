@@ -103,30 +103,84 @@ export function ResultsUploadPage({ user, onLoggedOut }: Props) {
         )}
 
         {result && (
-          <div style={{ marginTop: 20, border: "1px solid var(--border)", borderRadius: 12, padding: 14 }}>
-            <div className="success-banner" style={{ marginBottom: 12 }}>
-              {result.rows_imported} result rows imported for {result.students_affected} students in {result.department} / {result.semester_code}. Detected format: {result.source_format}.
+          <section className="results-upload-summary" aria-live="polite">
+            <div className="results-upload-summary-head">
+              <div>
+                <div className="results-upload-kicker">Upload complete</div>
+                <h3>Results imported successfully</h3>
+                <p>
+                  {result.title} · {result.department} / {result.semester_code}
+                </p>
+              </div>
+              <span className="results-upload-format">{result.source_format === "wide" ? "Wide format" : "Long format"}</span>
             </div>
+
+            <div className="results-upload-metrics">
+              <div className="results-upload-metric">
+                <strong>{result.students_affected}</strong>
+                <span>Students imported</span>
+              </div>
+              <div className="results-upload-metric">
+                <strong>{result.rows_imported}</strong>
+                <span>Result rows</span>
+              </div>
+              <div className={`results-upload-metric ${result.skipped_count > 0 ? "is-warning" : ""}`}>
+                <strong>{result.skipped_count}</strong>
+                <span>Not registered · skipped</span>
+              </div>
+            </div>
+
             {result.skipped_count > 0 && (
-              <div style={{ marginBottom: 12, padding: "10px 12px", border: "1px solid #fcd34d", borderRadius: 10, background: "#fffbeb", color: "#92400e", fontSize: 13 }}>
-                <strong>{result.skipped_count} student{result.skipped_count === 1 ? "" : "s"} skipped</strong> because they are not registered in the app for the selected branch/batch. Their Excel rows were not imported.
-              </div>
+              <details className="results-upload-detail results-upload-warning" open={false}>
+                <summary>
+                  <span>
+                    <strong>{result.skipped_count} student{result.skipped_count === 1 ? " was" : "s were"} skipped</strong>
+                    <small>These roll numbers are not registered in NextGen for this batch/branch.</small>
+                  </span>
+                  <span className="results-upload-summary-chevron" aria-hidden="true">⌄</span>
+                </summary>
+                <div className="results-upload-skipped-list">
+                  {result.skipped_students.map((student, i) => (
+                    <div className="results-upload-skipped-row" key={`${student.roll_no}-${student.row}-${i}`}>
+                      <code>{student.roll_no}</code>
+                      <span>Excel row {student.row}</span>
+                    </div>
+                  ))}
+                </div>
+              </details>
             )}
-            <div style={{ fontWeight: 800, marginBottom: 8 }}>Column Mapping</div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: result.column_mapping.ignored.length ? 10 : 0 }}>
-              {result.column_mapping.mapped.map((m, i) => (
-                <span key={`${m.header}-${m.field}-${i}`} className="chip" style={{ background: "#dcfce7", color: "#166534", fontWeight: 700, padding: "3px 9px", fontSize: 11.5 }} title={m.matched_via === "fuzzy" ? "Similarity matched" : "Exact normalized match"}>
-                  "{m.header}" → {m.field}{m.matched_via === "fuzzy" ? " ~" : ""}
+
+            <details className="results-upload-detail">
+              <summary>
+                <span>
+                  <strong>Import details</strong>
+                  <small>Column matching and ignored headers</small>
                 </span>
-              ))}
-            </div>
-            {result.column_mapping.ignored.length ? (
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                {result.column_mapping.ignored.map((header, i) => <span key={`${header}-${i}`} className="chip" style={{ background: "#f1f5f9", color: "var(--muted)", fontWeight: 700, padding: "3px 9px", fontSize: 11.5 }}>&quot;{header}&quot; ignored</span>)}
+                <span className="results-upload-summary-chevron" aria-hidden="true">⌄</span>
+              </summary>
+              <div className="results-upload-details-body">
+                <div className="results-upload-detail-title">Recognized columns</div>
+                <div className="results-upload-chips">
+                  {result.column_mapping.mapped.map((m, i) => (
+                    <span key={`${m.header}-${m.field}-${i}`} className="results-upload-chip" title={m.matched_via === "fuzzy" ? "Similarity matched" : "Exact normalized match"}>
+                      {m.header} → {m.field}{m.matched_via === "fuzzy" ? " ~" : ""}
+                    </span>
+                  ))}
+                </div>
+                {result.column_mapping.ignored.length > 0 && (
+                  <>
+                    <div className="results-upload-detail-title" style={{ marginTop: 14 }}>Ignored columns</div>
+                    <div className="results-upload-chips">
+                      {result.column_mapping.ignored.map((header, i) => (
+                        <span key={`${header}-${i}`} className="results-upload-chip results-upload-chip-muted">{header}</span>
+                      ))}
+                    </div>
+                  </>
+                )}
               </div>
-            ) : <div className="subtitle-muted" style={{ fontSize: 11.5 }}>Every detected import column was recognized.</div>}
-          </div>
-        )}
+            </details>
+          </section>
+        )}}
       </div>
     </AppShell>
   );
