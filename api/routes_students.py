@@ -32,6 +32,7 @@ from webapp.photo_upload import PhotoUploadError, save_profile_photo
 
 from api.deps import CurrentUser, get_current_user
 from api.envelope import ApiError, ok
+from excel_import import FieldSpec, match_headers, normalize_header, roll_prefix_to_batch
 
 router = APIRouter(prefix="/api/students", tags=["students"])
 
@@ -67,39 +68,42 @@ def _decrypt_row(row) -> dict:
 def _compute_year_and_batch(d: dict) -> tuple[str, str]:
     roll_no = str(d.get("roll_no") or "").strip().upper()
     sem_id = d.get("current_semester_id")
+    current_year = datetime.now().year
+    cohort = roll_prefix_to_batch(roll_no)
+    joining_year = int(cohort[:4]) if cohort else None
 
-    # Determine batch from roll number (e.g. 24BT1A6722 -> 2024-2028 Batch)
-    batch = ""
-    joining_year = None
-    if len(roll_no) >= 2 and roll_no[:2].isdigit():
-        yy = int(roll_no[:2])
-        if 18 <= yy <= 35:
-            joining_year = 2000 + yy
-            batch = f"{joining_year}-{joining_year + 4} Batch"
+    # Preserve the stable, roll-derived cohort when it is available.
+    batch = f"{cohort} Batch" if cohort else ""
 
-    # Determine Year of study
+    # Determine Year of study from the live academic year / admission year.
     year = ""
-    if sem_id in (1, 2):
-        year = "1st Year"
-        if not batch: batch = "2026-2030 Batch"
-    elif sem_id in (3, 4):
-        year = "2nd Year"
-        if not batch: batch = "2025-2029 Batch"
-    elif sem_id in (5, 6):
-        year = "3rd Year"
-        if not batch: batch = "2024-2028 Batch"
-    elif sem_id in (7, 8):
-        year = "4th Year"
-        if not batch: batch = "2023-2027 Batch"
-    elif joining_year:
-        diff = 2026 - joining_year + 1
+    if joining_year:
+        diff = current_year - joining_year + 1
         if diff <= 1: year = "1st Year"
         elif diff == 2: year = "2nd Year"
         elif diff == 3: year = "3rd Year"
         else: year = "4th Year"
-    else:
-        year = "1st Year"
-        batch = "2026-2030 Batch"
+
+    # Only malformed/unparseable roll numbers need a semester-based fallback.
+    # The fallback is computed relative to the current calendar/academic year,
+    # never from hardcoded future-facing literals.
+    if not year:
+        if sem_id in (1, 2):
+            joining_year = current_year
+            year = "1st Year"
+        elif sem_id in (3, 4):
+            joining_year = current_year - 1
+            year = "2nd Year"
+        elif sem_id in (5, 6):
+            joining_year = current_year - 2
+            year = "3rd Year"
+        elif sem_id in (7, 8):
+            joining_year = current_year - 3
+            year = "4th Year"
+        else:
+            joining_year = current_year
+            year = "1st Year"
+        batch = f"{joining_year}-{joining_year + 4} Batch"
 
     return year, batch
 
@@ -531,7 +535,7 @@ STUDENT_DB_KEYS = [
     "certificates_submitted", "certificates_due", "consultant_name",
     "tenth_school", "tenth_year", "tenth_marks",
     "twelfth_school", "twelfth_year", "twelfth_marks",
-    "diploma_college", "diploma_year", "diploma_marks",
+    "diploma_college", "diploma_year", "diploma_marks", "batch",
 ]
 
 
@@ -545,6 +549,7 @@ async def student_create(body: StudentBody, user: CurrentUser = Depends(get_curr
         validate_student(data)
         if data["dob"]:
             datetime.strptime(data["dob"], "%Y-%m-%d")
+        data["batch"] = roll_prefix_to_batch(data["roll_no"]) or _compute_year_and_batch({**data, "current_semester_id": body.current_semester_id})[1].removesuffix(" Batch")
         # Encrypt AFTER validation — §4.4 ordering requirement
         data["aadhaar_number"] = encrypt_field(data["aadhaar_number"])
         data["apaar_id"] = encrypt_field(data["apaar_id"])
@@ -554,8 +559,8 @@ async def student_create(body: StudentBody, user: CurrentUser = Depends(get_curr
                    category,gender,seat_category,apaar_id,aadhaar_number,
                    certificates_submitted,certificates_due,consultant_name,
                    tenth_school,tenth_year,tenth_marks,twelfth_school,twelfth_year,twelfth_marks,
-                   diploma_college,diploma_year,diploma_marks,current_semester_id,hod_username)
-                   VALUES(?,?,?,NULLIF(?,''),?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   diploma_college,diploma_year,diploma_marks,batch,current_semester_id,hod_username)
+                   VALUES(?,?,?,NULLIF(?,''),?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (*[data[k] for k in STUDENT_DB_KEYS], body.current_semester_id, assigned_hod),
             )
             audit(c, user.username, "CREATE", "student", data["roll_no"])
@@ -634,12 +639,45 @@ IMPORT_FIELD_KEYS = [
     "twelfth_marks", "diploma_college", "diploma_year", "diploma_marks",
 ]
 
+# — Bulk Import Field Specs —
+# WHY: built from BULK_IMPORT_COLUMN_MAP so every alias anyone already
+# relied on keeps working as an exact match, while match_headers() (see
+# excel_import.py) adds a fuzzy fallback on top for header text that's
+# close-but-not-identical to any of these (e.g. "Rollnumber" with no
+# space). "match_roll_no" is included as a real field here — it's not a
+# student column, but the stable-key alias for changing a roll number —
+# so it goes through the same header-tolerance path as everything else.
+def _build_import_field_specs() -> list[FieldSpec]:
+    alias_groups: dict[str, set[str]] = {}
+    for alias_text, field_key in BULK_IMPORT_COLUMN_MAP.items():
+        alias_groups.setdefault(field_key, set()).add(normalize_header(alias_text))
+    required = {"roll_no", "name"}
+    return [
+        FieldSpec(key=field_key, aliases=aliases, required=field_key in required)
+        for field_key, aliases in alias_groups.items()
+    ]
+
+
+BULK_IMPORT_FIELD_SPECS = _build_import_field_specs()
+
 YEAR_TO_SEMESTER_CODES = {
     1: {1: "I-I", 2: "I-II"},
     2: {1: "II-I", 2: "II-II"},
     3: {1: "III-I", 2: "III-II"},
     4: {1: "IV-I", 2: "IV-II"},
 }
+
+
+@router.get("/bulk-import/template")
+async def student_bulk_import_template(user: CurrentUser = Depends(get_current_user)):
+    if user.role not in ("HOD", "ADMIN"):
+        raise ApiError("HOD/Admin access only", 403, "FORBIDDEN")
+    from sms_app.services.learning_service import build_students_template
+    return Response(
+        content=build_students_template(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="NextGen-students-template.xlsx"'},
+    )
 
 
 @router.get("/bulk-import/options")
@@ -664,10 +702,6 @@ async def student_bulk_import_options(user: CurrentUser = Depends(get_current_us
             for s in sems
         ],
     })
-
-
-def _normalize_header(h: Any) -> str:
-    return " ".join(str(h or "").split()).lower()
 
 
 def _row_to_import_data(row_map: dict[str, Any]) -> dict:
@@ -811,18 +845,19 @@ async def student_bulk_import(
 
     semester_id = resolved_semester_id
 
-    col_index_to_field: dict[int, str] = {}
-    for idx, header in enumerate(header_row):
-        field = BULK_IMPORT_COLUMN_MAP.get(_normalize_header(header))
-        if field:
-            col_index_to_field[idx] = field
+    header_report = match_headers(list(header_row), BULK_IMPORT_FIELD_SPECS)
+    col_index_to_field: dict[int, str] = {
+        idx: m.field for idx, m in enumerate(header_report.matches) if m.field
+    }
 
-    mapped_fields = set(col_index_to_field.values())
-    if "roll_no" not in mapped_fields or "name" not in mapped_fields:
-        raise ApiError(
-            "Excel must contain Roll Number (or HallTicket) and Name columns",
-            400, "VALIDATION_ERROR",
-        )
+    missing = header_report.missing_required(BULK_IMPORT_FIELD_SPECS)
+    if missing:
+        # WHY: name the actual missing field(s) rather than a fixed string —
+        # if only Name is missing (Roll No resolved fine, even via fuzzy),
+        # say so, don't repeat the old blanket message for every case.
+        readable = {"roll_no": "Roll Number (or HallTicket)", "name": "Name"}
+        wanted = ", ".join(readable.get(f, f) for f in missing)
+        raise ApiError(f"Excel must contain a {wanted} column", 400, "VALIDATION_ERROR")
 
     assigned_hod = _resolve_hod_for_student(user, None)
     created, updated, skipped, failed = [], [], [], []
@@ -907,18 +942,22 @@ async def student_bulk_import(
                     else:
                         merged["apaar_id"] = existing.get("apaar_id")
 
+                    # Login linkage follows roll number when it is deliberately changed.
+                    # Recompute the persisted cohort before the positional UPDATE tuple is built.
+                    if merged["roll_no"] != existing["roll_no"]:
+                        merged["batch"] = roll_prefix_to_batch(merged["roll_no"]) or _compute_year_and_batch({**merged, "current_semester_id": semester_id})[1].removesuffix(" Batch")
+
                     c.execute(
                         """UPDATE students SET roll_no=?,name=?,department=?,email=NULLIF(?,''),phone=?,parent_phone=?,dob=?,
                            address=?,father_name=?,category=?,gender=?,seat_category=?,apaar_id=?,aadhaar_number=?,
                            certificates_submitted=?,certificates_due=?,consultant_name=?,
                            tenth_school=?,tenth_year=?,tenth_marks=?,twelfth_school=?,twelfth_year=?,twelfth_marks=?,
-                           diploma_college=?,diploma_year=?,diploma_marks=?,current_semester_id=?,hod_username=?,
+                           diploma_college=?,diploma_year=?,diploma_marks=?,batch=?,current_semester_id=?,hod_username=?,
                            updated_at=CURRENT_TIMESTAMP WHERE id=?""",
                         tuple([merged[k] for k in STUDENT_DB_KEYS] + [semester_id, existing.get("hod_username") or assigned_hod, existing["id"]]),
                     )
                     audit(c, user.username, "IMPORT_UPDATE", "student", f"{existing['roll_no']} -> {merged['roll_no']}")
                     updated.append({"row": row_num, "roll_no": merged["roll_no"], "name": merged["name"]})
-                    # Login linkage follows roll number when it is deliberately changed.
                     if merged["roll_no"] != existing["roll_no"]:
                         linked = c.execute(
                             "SELECT id, username FROM users WHERE student_roll_no=%s AND role='STUDENT'",
@@ -956,14 +995,15 @@ async def student_bulk_import(
                 if data["dob"]:
                     datetime.strptime(data["dob"], "%Y-%m-%d")
                 enc_data = dict(data)
+                enc_data["batch"] = roll_prefix_to_batch(data["roll_no"]) or _compute_year_and_batch({**data, "current_semester_id": semester_id})[1].removesuffix(" Batch")
                 enc_data["aadhaar_number"] = encrypt_field(data["aadhaar_number"])
                 enc_data["apaar_id"] = encrypt_field(data["apaar_id"])
                 c.execute(
                     """INSERT INTO students(roll_no,name,department,email,phone,parent_phone,dob,address,father_name,
                        category,gender,seat_category,apaar_id,aadhaar_number,certificates_submitted,certificates_due,
                        consultant_name,tenth_school,tenth_year,tenth_marks,twelfth_school,twelfth_year,twelfth_marks,
-                       diploma_college,diploma_year,diploma_marks,current_semester_id,hod_username)
-                       VALUES(?,?,?,NULLIF(?,''),?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       diploma_college,diploma_year,diploma_marks,batch,current_semester_id,hod_username)
+                       VALUES(?,?,?,NULLIF(?,''),?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     tuple([enc_data[k] for k in STUDENT_DB_KEYS] + [semester_id, assigned_hod]),
                 )
                 audit(c, user.username, "IMPORT_CREATE", "student", data["roll_no"])
@@ -997,6 +1037,11 @@ async def student_bulk_import(
         "semester": semester,
         "semester_id": semester_id,
         "mode": mode,
+        # WHY: per Boss — the user must always be told which columns were
+        # recognized (and how) vs. ignored. A clean run with zero failed
+        # rows must not read as "everything in the sheet was used" when a
+        # column was actually silently skipped.
+        "column_mapping": header_report.as_dict(),
     })
 
 
@@ -1019,6 +1064,7 @@ async def student_update(student_id: int, body: StudentBody, user: CurrentUser =
         validate_student(data)
         if data["dob"]:
             datetime.strptime(data["dob"], "%Y-%m-%d")
+        data["batch"] = roll_prefix_to_batch(data["roll_no"]) or _compute_year_and_batch({**data, "current_semester_id": body.current_semester_id})[1].removesuffix(" Batch")
         # Encrypt AFTER validation — §4.4 ordering requirement
         data["aadhaar_number"] = encrypt_field(data["aadhaar_number"])
         data["apaar_id"] = encrypt_field(data["apaar_id"])
@@ -1028,7 +1074,7 @@ async def student_update(student_id: int, body: StudentBody, user: CurrentUser =
                    address=?,father_name=?,category=?,gender=?,seat_category=?,apaar_id=?,aadhaar_number=?,
                    certificates_submitted=?,certificates_due=?,consultant_name=?,
                    tenth_school=?,tenth_year=?,tenth_marks=?,twelfth_school=?,twelfth_year=?,twelfth_marks=?,
-                   diploma_college=?,diploma_year=?,diploma_marks=?,
+                   diploma_college=?,diploma_year=?,diploma_marks=?,batch=?,
                    current_semester_id=?,hod_username=?,updated_at=CURRENT_TIMESTAMP WHERE id=?""",
                 (*[data[k] for k in STUDENT_DB_KEYS], body.current_semester_id, assigned_hod, student_id),
             )

@@ -7,12 +7,13 @@ import {
   studentsPdfUrl,
   bulkImportStudents,
   getBulkImportOptions,
+  importFieldLabel,
   type StudentListRow,
   type SemesterOption,
   type BulkImportResult,
   type BulkImportOptions,
 } from "../../api/students";
-import { ApiClientError, formatPhotoUrl } from "../../api/client";
+import { ApiClientError, formatPhotoUrl, getAuthUrl } from "../../api/client";
 import { type CurrentUser } from "../../api/auth";
 import { AppShell } from "../../components/AppShell";
 import { ToastPopup } from "../../components/ToastPopup";
@@ -779,9 +780,18 @@ export function StudentsListPage({ user, onLoggedOut }: StudentsListPageProps) {
                       {importFile && <div style={{ marginTop: 9, fontSize: 12.5, fontWeight: 800, color: "var(--blue)" }}>{importFile.name}</div>}
                     </div>
 
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 14, padding: "10px 12px", border: "1px solid var(--border)", borderRadius: 10, background: "var(--card-glass)" }}>
+                      <div>
+                        <div style={{ fontSize: 12.5, fontWeight: 800, color: "var(--text)" }}>Need a zero-guesswork sheet?</div>
+                        <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2 }}>Download the pre-filled Excel template; custom header variants still work.</div>
+                      </div>
+                      <a className="btn btn-outline" href={getAuthUrl("/api/students/bulk-import/template")} download="NextGen-students-template.xlsx" style={{ whiteSpace: "nowrap", textDecoration: "none" }}>Download Template</a>
+                    </div>
+
                     <div style={{ fontSize: 12, color: "var(--muted)", lineHeight: 1.55, marginBottom: 14 }}>
                       Recognized columns include <strong>Roll Number, Name, Parent Phone, Student Phone, Email, Address</strong> and the other student fields.
-                      Existing data is preserved when a matching cell is blank. Unknown Excel columns are ignored.
+                      Column names don't need to match exactly — close variants (like "Rollnumber" or "Aadhaar No") are matched automatically.
+                      Existing data is preserved when a matching cell is blank. Any column that isn't recognized is listed after import, not silently dropped.
                     </div>
 
                     {importError && <div className="login-error" style={{ marginBottom: 16 }}>{importError}</div>}
@@ -807,6 +817,35 @@ export function StudentsListPage({ user, onLoggedOut }: StudentsListPageProps) {
                   <span className="chip" style={{ background: "#dbeafe", color: "#1d4ed8", fontWeight: 800, padding: "4px 10px" }}>↻ {importResult.updated_count} updated</span>
                   <span className="chip" style={{ background: "#fef9c3", color: "#854d0e", fontWeight: 800, padding: "4px 10px" }}>⏭️ {importResult.skipped_count} skipped</span>
                   <span className="chip" style={{ background: "#fee2e2", color: "#991b1b", fontWeight: 800, padding: "4px 10px" }}>❌ {importResult.failed_count} failed</span>
+                </div>
+
+                {/* WHY: per Boss — a clean run with zero failed rows must not
+                    read as "the whole sheet was used" when a column was
+                    actually ignored. This section is never hidden purely
+                    because ignored.length is 0 — an empty ignored list is
+                    itself the useful confirmation that nothing was skipped. */}
+                <div style={{ marginBottom: 16, border: "1px solid var(--border)", borderRadius: 8, padding: 12 }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 800, color: "var(--text)", marginBottom: 8 }}>Column Mapping</div>
+                  {importResult.column_mapping.mapped.length > 0 && (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: importResult.column_mapping.ignored.length > 0 ? 10 : 0 }}>
+                      {importResult.column_mapping.mapped.map((m) => (
+                        <span key={m.header} className="chip" style={{ background: "#dcfce7", color: "#166534", fontWeight: 700, padding: "3px 9px", fontSize: 11.5 }} title={m.matched_via === "fuzzy" ? "Matched by similarity" : "Exact match"}>
+                          "{m.header}" → {importFieldLabel(m.field)}{m.matched_via === "fuzzy" ? " ~" : ""}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {importResult.column_mapping.ignored.length > 0 ? (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                      {importResult.column_mapping.ignored.map((header) => (
+                        <span key={header} className="chip" style={{ background: "#f1f5f9", color: "var(--muted)", fontWeight: 700, padding: "3px 9px", fontSize: 11.5 }}>
+                          "{header}" ignored
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: 11.5, color: "var(--muted)" }}>Every column in the sheet was recognized — nothing was ignored.</div>
+                  )}
                 </div>
 
                 {importResult.created.length > 0 && (

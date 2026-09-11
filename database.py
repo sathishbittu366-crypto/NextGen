@@ -708,7 +708,9 @@ def init_db(db_name=None):
             tenth_marks VARCHAR(32),
             twelfth_marks VARCHAR(32),
             diploma_marks VARCHAR(32),
-            current_semester_id INT
+            current_semester_id INT,
+            batch VARCHAR(16),
+            INDEX idx_students_batch (department, batch)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """)
 
@@ -768,6 +770,18 @@ def init_db(db_name=None):
         existing_student_cols = {row["Field"] if "Field" in row else row["name"] for row in c.execute("SHOW COLUMNS FROM students").fetchall()}
         if "hod_username" not in existing_student_cols:
             c.execute("ALTER TABLE students ADD COLUMN hod_username VARCHAR(64) NULL")
+        if "batch" not in existing_student_cols:
+            c.execute("ALTER TABLE students ADD COLUMN batch VARCHAR(16) NULL")
+            c.execute("CREATE INDEX idx_students_batch ON students(department, batch)")
+            for student in c.execute("SELECT id, roll_no FROM students WHERE batch IS NULL").fetchall():
+                roll_no = str(student.get("roll_no") or "").strip().upper()
+                cohort_batch = None
+                if len(roll_no) >= 2 and roll_no[:2].isdigit():
+                    yy = int(roll_no[:2])
+                    if 18 <= yy <= 35:
+                        joining_year = 2000 + yy
+                        cohort_batch = f"{joining_year}-{joining_year + 4}"
+                c.execute("UPDATE students SET batch=? WHERE id=?", (cohort_batch, student["id"]))
 
         c.execute("""
         CREATE TABLE IF NOT EXISTS attendance(
@@ -888,6 +902,7 @@ def init_db(db_name=None):
         CREATE TABLE IF NOT EXISTS result_batches(
             id INT AUTO_INCREMENT PRIMARY KEY,
             department VARCHAR(64) NOT NULL DEFAULT 'CSD',
+            batch VARCHAR(16) NULL,
             semester_id INT NOT NULL,
             title VARCHAR(120) NOT NULL,
             uploaded_by VARCHAR(64) NOT NULL,
@@ -895,9 +910,16 @@ def init_db(db_name=None):
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY(semester_id) REFERENCES academic_semesters(id) ON DELETE CASCADE,
             FOREIGN KEY(uploaded_by) REFERENCES users(username) ON UPDATE CASCADE,
-            INDEX idx_result_batches_scope (department, semester_id, created_at)
+            INDEX idx_result_batches_scope (department, semester_id, created_at),
+            INDEX idx_result_batches_cohort (department, batch, semester_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """)
+
+        existing_result_batch_cols = {row["Field"] if "Field" in row else row["name"] for row in c.execute("SHOW COLUMNS FROM result_batches").fetchall()}
+        if "batch" not in existing_result_batch_cols:
+            # Historical uploads predate cohort targeting; their batch cannot be reconstructed safely.
+            c.execute("ALTER TABLE result_batches ADD COLUMN batch VARCHAR(16) NULL")
+            c.execute("CREATE INDEX idx_result_batches_cohort ON result_batches(department, batch, semester_id)")
 
         c.execute("""
         CREATE TABLE IF NOT EXISTS result_items(
@@ -908,6 +930,9 @@ def init_db(db_name=None):
             subject_name VARCHAR(255) NOT NULL,
             marks DECIMAL(10,2) NOT NULL,
             max_marks DECIMAL(10,2) NOT NULL DEFAULT 100,
+            internal_marks DECIMAL(10,2) NULL,
+            external_marks DECIMAL(10,2) NULL,
+            credits DECIMAL(5,2) NULL,
             grade VARCHAR(32),
             grade_point VARCHAR(32),
             result_status VARCHAR(64),
@@ -919,6 +944,15 @@ def init_db(db_name=None):
             INDEX idx_result_items_roll_batch (roll_no, batch_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """)
+
+        existing_result_item_cols = {row["Field"] if "Field" in row else row["name"] for row in c.execute("SHOW COLUMNS FROM result_items").fetchall()}
+        for column, sql_type in (
+            ("internal_marks", "DECIMAL(10,2) NULL"),
+            ("external_marks", "DECIMAL(10,2) NULL"),
+            ("credits", "DECIMAL(5,2) NULL"),
+        ):
+            if column not in existing_result_item_cols:
+                c.execute(f"ALTER TABLE result_items ADD COLUMN {column} {sql_type}")
 
         c.execute("""
         CREATE TABLE IF NOT EXISTS attendance_sessions(

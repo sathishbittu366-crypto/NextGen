@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from api.deps import CurrentUser, get_current_user
 from api.envelope import ApiError, ok
@@ -20,6 +20,7 @@ from sms_app.services.learning_service import (
     result_upload_options,
     save_note_bytes,
     upload_results_excel,
+    build_results_template,
 )
 from sms_app.services.attendance_service import list_subjects
 
@@ -124,9 +125,21 @@ async def results_options(user: CurrentUser = Depends(get_current_user)):
     return ok(result_upload_options())
 
 
+@router.get("/api/results/template")
+async def results_template(user: CurrentUser = Depends(get_current_user)):
+    if user.role != "ADMIN":
+        raise ApiError("Admin access only", 403, "FORBIDDEN")
+    return Response(
+        content=build_results_template(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="NextGen-results-template.xlsx"'},
+    )
+
+
 @router.post("/api/results/upload")
 async def results_upload(
     branch: str = Query(...),
+    batch: str = Query(...),
     semester_id: int = Query(...),
     title: str = Query("Semester Result"),
     file: UploadFile = File(...),
@@ -140,6 +153,7 @@ async def results_upload(
             raw=raw,
             filename=file.filename or "results.xlsx",
             department=branch,
+            batch=batch,
             semester_id=semester_id,
             title=title,
             admin_username=user.username,

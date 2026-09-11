@@ -53,6 +53,7 @@ export function getNoteDownloadUrl(noteId: number): string {
 export interface ResultsOptions {
   branches: { value: string; label: string }[];
   semesters: { id: number; code: string; name: string; active: boolean }[];
+  batches: string[];
 }
 
 export async function getResultsOptions(): Promise<ResultsOptions> {
@@ -61,11 +62,12 @@ export async function getResultsOptions(): Promise<ResultsOptions> {
 
 export async function uploadResults(
   branch: string,
+  batch: string,
   semesterId: number,
   title: string,
   file: File,
 ) {
-  const params = new URLSearchParams({ branch, semester_id: String(semesterId), title });
+  const params = new URLSearchParams({ branch, batch, semester_id: String(semesterId), title });
   return apiUpload<{
     batch_id: number;
     department: string;
@@ -74,11 +76,15 @@ export async function uploadResults(
     title: string;
     rows_imported: number;
     students_affected: number;
+    source_format: "wide" | "long";
+    column_mapping: {
+      mapped: { header: string; field: string; matched_via: "exact" | "fuzzy" }[];
+      ignored: string[];
+    };
   }>(`/api/results/upload?${params}`, file, "file");
 }
 
-export interface StudentResults {
-  student: { roll_no: string; name: string; department: string } | null;
+export interface StudentSemesterResult {
   batch: {
     id: number;
     title: string;
@@ -86,20 +92,30 @@ export interface StudentResults {
     source_filename: string | null;
     semester_code: string;
     semester_name: string;
-  } | null;
+  };
   subjects: {
     subject_code: string;
     subject_name: string;
     marks: number;
     max_marks: number;
+    internal_marks: number | null;
+    external_marks: number | null;
+    credits: number | null;
     grade: string;
     grade_point: string;
     result_status: string;
     sgpa: string;
     percentage: string;
   }[];
+  total_credits: number;
+  sgpa: string | null;
+  result_status: string | null;
 }
 
+export interface StudentResults {
+  student: { roll_no: string; name: string; department: string } | null;
+  results: StudentSemesterResult[];
+}
 export async function getMyResults(): Promise<StudentResults> {
   return apiFetch<StudentResults>("/api/results/me");
 }

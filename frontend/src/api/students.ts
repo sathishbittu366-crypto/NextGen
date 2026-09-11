@@ -25,6 +25,19 @@ export const EDUCATION_SPECS: Array<[label: string, key: string]> = [
   ["Diploma College Name (if applicable)", "diploma_college"], ["Diploma Year of Passing", "diploma_year"], ["Diploma Marks (%)", "diploma_marks"],
 ];
 
+// WHY: reuses FIELD_SPECS/EDUCATION_SPECS (single source of truth for
+// label<->key already established above) so the bulk-import mapping report
+// shows the same friendly labels as the manual add/edit student form,
+// instead of a second hardcoded label list drifting out of sync with it.
+const IMPORT_FIELD_LABELS: Record<string, string> = Object.fromEntries(
+  [...FIELD_SPECS, ...EDUCATION_SPECS].map(([label, key]) => [key, label])
+);
+IMPORT_FIELD_LABELS.match_roll_no = "Previous Roll Number";
+
+export function importFieldLabel(fieldKey: string): string {
+  return IMPORT_FIELD_LABELS[fieldKey] ?? fieldKey;
+}
+
 // ──────────────────────────────────────────────
 // Types
 // ──────────────────────────────────────────────
@@ -226,6 +239,18 @@ export interface BulkImportFailedRow {
 
 export interface BulkImportOption { value: string | number; label: string; }
 
+// WHY: mirrors excel_import.MatchReport.as_dict() (excel_import.py) — every
+// header from the sheet lands in exactly one of these two buckets so the UI
+// can show precisely what was recognized vs. ignored. Never omit rendering
+// this: an empty `ignored` array is a real, useful signal ("nothing was
+// skipped"), not a reason to hide the whole mapping section.
+export interface BulkImportMappedColumn { header: string; field: string; matched_via: "exact" | "fuzzy"; }
+
+export interface BulkImportColumnMapping {
+  mapped: BulkImportMappedColumn[];
+  ignored: string[];
+}
+
 export interface BulkImportOptions {
   branches: BulkImportOption[];
   years: BulkImportOption[];
@@ -250,6 +275,7 @@ export interface BulkImportResult {
   semester: number | null;
   semester_id: number;
   mode: "merge" | "create_only";
+  column_mapping: BulkImportColumnMapping;
 }
 
 // Multipart upload stays inside apiUpload(). Scope/mode are sent as query
