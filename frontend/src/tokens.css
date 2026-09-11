@@ -3876,3 +3876,389 @@ body:has(.animlogin-container) {
   .results-upload-metric + .results-upload-metric { border-left: 0; border-top: 1px solid var(--border); }
   .results-upload-summary-head { flex-direction: column; }
 }
+
+/* ============================================================
+   RESULTS — selector-first + mobile-first result detail
+   ============================================================ */
+.results-page-shell {
+  max-width: 1040px;
+  margin: 0 auto;
+  padding-bottom: 24px;
+}
+
+.results-selector-shell {
+  display: grid;
+  gap: 22px;
+}
+
+.results-selector-intro {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 4px 2px 0;
+}
+
+.results-selector-kicker,
+.results-detail-kicker {
+  color: var(--blue);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+.results-selector-intro h2 {
+  margin: 0;
+  font-size: 30px;
+  line-height: 1.05;
+}
+
+.results-selector-intro p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  max-width: 620px;
+  font-size: 13px;
+}
+
+.results-student-chip {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  padding: 11px 13px;
+  border: 1px solid var(--border);
+  background: var(--card-glass);
+  border-radius: 14px;
+  min-width: 165px;
+}
+
+.results-student-chip strong { font-size: 12.5px; }
+.results-student-chip span { color: var(--muted); font-size: 11px; }
+
+.results-semester-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.results-semester-card {
+  appearance: none;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--card-glass);
+  padding: 18px;
+  min-height: 164px;
+  color: var(--text);
+  box-shadow: 0 8px 24px rgba(30,58,95,.06);
+  transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease;
+}
+
+.results-semester-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--blue-border);
+  box-shadow: 0 12px 28px rgba(30,58,95,.10);
+}
+
+.results-semester-card:active { transform: scale(.985); }
+
+.results-semester-card-top,
+.results-semester-card-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.results-semester-year {
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--muted);
+}
+
+.results-semester-arrow {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: var(--blue-light);
+  color: var(--blue);
+  font-size: 17px;
+  font-weight: 800;
+}
+
+.results-semester-name {
+  margin-top: 30px;
+  font-family: 'Outfit', sans-serif;
+  font-size: 20px;
+  font-weight: 800;
+  line-height: 1.15;
+}
+
+.results-semester-card-bottom {
+  margin-top: 24px;
+  padding-top: 11px;
+  border-top: 1px solid var(--border-light);
+}
+
+.results-semester-card-bottom span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+
+.results-semester-card-bottom strong {
+  font-family: 'Outfit', sans-serif;
+  font-size: 22px;
+}
+
+.results-detail-shell { display: grid; gap: 12px; }
+
+.results-back-btn {
+  border: 0;
+  background: transparent;
+  color: var(--blue);
+  padding: 6px 2px;
+  width: fit-content;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.results-detail-card {
+  overflow: hidden;
+  padding: 0;
+}
+
+.results-detail-heading {
+  padding: 22px 22px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.results-detail-title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 20px;
+}
+
+.results-detail-title-block { min-width: 0; }
+
+.results-detail-title-block h2 {
+  margin: 0;
+  font-size: 28px;
+  line-height: 1.08;
+}
+
+.results-detail-title-block p {
+  margin: 12px 0 2px;
+  font-weight: 800;
+}
+
+.results-detail-title-block span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.results-sgpa-block {
+  flex: 0 0 auto;
+  text-align: right;
+}
+
+.results-sgpa-block span {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+
+.results-sgpa-block strong {
+  display: block;
+  margin-top: 2px;
+  font-family: 'Outfit', sans-serif;
+  font-size: 34px;
+  line-height: 1;
+}
+
+.results-roll-chip {
+  margin: 14px 22px 0;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--row-alt);
+  border: 1px solid var(--border-light);
+}
+
+.results-roll-chip span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.results-roll-chip strong { font-size: 11px; }
+
+.results-subject-table { margin: 14px 22px 0; }
+.results-subject-cards { display: none; }
+
+.results-summary-row {
+  margin-top: 14px;
+  padding: 15px 22px;
+  border-top: 1px solid var(--border);
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 18px;
+}
+
+.results-summary-row div { display: flex; align-items: baseline; gap: 8px; }
+.results-summary-row span { color: var(--muted); font-size: 11px; font-weight: 800; }
+.results-summary-row strong { font-size: 13px; }
+.results-generated-note { padding: 0 22px 16px; color: var(--muted); font-size: 11px; }
+
+@media (max-width: 860px) {
+  .results-page-shell { padding: 0 0 164px; }
+
+  .results-selector-intro {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .results-selector-intro h2 { font-size: 26px; }
+  .results-selector-intro p { margin-top: 7px; max-width: none; }
+
+  .results-student-chip {
+    align-items: flex-start;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .results-semester-grid { grid-template-columns: 1fr; gap: 12px; }
+
+  .results-semester-card {
+    min-height: 0;
+    padding: 16px;
+    border-radius: 16px;
+  }
+
+  .results-semester-name {
+    margin-top: 22px;
+    font-size: 19px;
+  }
+
+  .results-semester-card-bottom { margin-top: 17px; }
+
+  .results-detail-card { border-radius: 18px; }
+  .results-detail-heading { padding: 18px 16px 16px; }
+
+  .results-detail-title-row {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 15px;
+  }
+
+  .results-detail-title-block h2 {
+    font-size: 24px;
+    overflow-wrap: anywhere;
+  }
+
+  .results-sgpa-block {
+    text-align: left;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+
+  .results-sgpa-block strong { font-size: 30px; }
+
+  .results-roll-chip {
+    margin: 12px 16px 0;
+  }
+
+  .results-subject-table { display: none; }
+  .results-subject-cards {
+    display: grid;
+    gap: 10px;
+    padding: 12px 16px 0;
+  }
+
+  .results-subject-card {
+    border: 1px solid var(--border);
+    border-radius: 15px;
+    padding: 14px;
+    background: var(--bg-card);
+  }
+
+  .results-subject-name {
+    font-family: 'Outfit', sans-serif;
+    font-size: 15px;
+    font-weight: 800;
+    line-height: 1.25;
+  }
+
+  .results-subject-code {
+    margin-top: 3px;
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 700;
+  }
+
+  .results-mark-grid {
+    margin-top: 12px;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .results-mark-grid div {
+    min-width: 0;
+    padding: 8px 6px;
+    border-radius: 10px;
+    background: var(--row-alt);
+    text-align: center;
+  }
+
+  .results-mark-grid span {
+    display: block;
+    color: var(--muted);
+    font-size: 9px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+  }
+
+  .results-mark-grid strong {
+    display: block;
+    margin-top: 2px;
+    font-family: 'Outfit', sans-serif;
+    font-size: 13px;
+  }
+
+  .results-summary-row {
+    margin-top: 12px;
+    padding: 14px 16px;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .results-generated-note { padding: 0 16px 15px; }
+}
+
+@media (max-width: 420px) {
+  .results-mark-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .results-mark-grid div:nth-child(4),
+  .results-mark-grid div:nth-child(5) { grid-column: span 1; }
+  .results-summary-row { grid-template-columns: 1fr; gap: 8px; }
+}
