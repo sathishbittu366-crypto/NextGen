@@ -76,6 +76,8 @@ export async function uploadResults(
     title: string;
     rows_imported: number;
     students_affected: number;
+    skipped_count: number;
+    skipped_students: { row: number; roll_no: string; reason: string }[];
     source_format: "wide" | "long";
     column_mapping: {
       mapped: { header: string; field: string; matched_via: "exact" | "fuzzy" }[];

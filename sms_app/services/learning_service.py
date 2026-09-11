@@ -443,7 +443,7 @@ def _validate_wide_subheaders(subheaders: list[Any], start_col: int) -> MatchRep
     return report
 
 
-def _parse_long_results(*, ws, headers: list[Any], semester_id: int, department: str, batch: str, c, sem, max_source_rows: int) -> tuple[list[dict], MatchReport]:
+def _parse_long_results(*, ws, headers: list[Any], semester_id: int, department: str, batch: str, c, sem, max_source_rows: int, skipped_students: list[dict] | None = None) -> tuple[list[dict], MatchReport]:
     report = _header_matches_for_long(headers)
     cols = report.field_index()
     missing = report.missing_required(RESULT_LONG_FIELD_SPECS)
@@ -476,7 +476,13 @@ def _parse_long_results(*, ws, headers: list[Any], semester_id: int, department:
             (roll_no, department, batch),
         ).fetchone()
         if not student:
-            raise ValueError(f"Row {excel_row_no}: student {roll_no} does not belong to {department} / {sem['code']}")
+            if skipped_students is not None:
+                skipped_students.append({
+                    "row": excel_row_no,
+                    "roll_no": roll_no,
+                    "reason": "Student is not registered in the app for this branch/batch",
+                })
+            continue
         key = (roll_no.lower(), subject_code)
         if key in seen:
             raise ValueError(f"Row {excel_row_no}: duplicate subject result for {roll_no} / {subject_code}")
@@ -510,7 +516,7 @@ def _parse_long_results(*, ws, headers: list[Any], semester_id: int, department:
     return parsed, report
 
 
-def _parse_wide_results(*, ws, header_rows: list[list[Any]], semester_id: int, department: str, batch: str, c, sem, max_source_rows: int) -> tuple[list[dict], MatchReport]:
+def _parse_wide_results(*, ws, header_rows: list[list[Any]], semester_id: int, department: str, batch: str, c, sem, max_source_rows: int, skipped_students: list[dict] | None = None) -> tuple[list[dict], MatchReport]:
     row1, row2, row3 = header_rows[:3]
     report = match_headers(row3, RESULT_WIDE_SUBHEADER_SPECS)
     roll_report = match_headers(row1[:2], RESULT_ROLL_SPECS)
@@ -604,7 +610,13 @@ def _parse_wide_results(*, ws, header_rows: list[list[Any]], semester_id: int, d
             (roll_no, department, batch),
         ).fetchone()
         if not student:
-            raise ValueError(f"Row {excel_row_no}: student {roll_no} does not belong to {department} / {sem['code']}")
+            if skipped_students is not None:
+                skipped_students.append({
+                    "row": excel_row_no,
+                    "roll_no": roll_no,
+                    "reason": "Student is not registered in the app for this branch/batch",
+                })
+            continue
 
         # — WHY: SGPA is per-student, not per-subject, but result_items is
         # one row per (student, subject) — so the same row-level SGPA value
@@ -721,6 +733,7 @@ def upload_results_excel(*, raw: bytes, filename: str, department: str, batch: s
 
         max_source_rows = 5000
         with connect() as c:
+            skipped_students: list[dict] = []
             sem = c.execute("SELECT id,code,name FROM academic_semesters WHERE id=?", (semester_id,)).fetchone()
             if not sem:
                 raise ValueError("Selected semester does not exist")
@@ -735,6 +748,7 @@ def upload_results_excel(*, raw: bytes, filename: str, department: str, batch: s
                 parsed, mapping = _parse_wide_results(
                     ws=ws, header_rows=first_three, semester_id=semester_id,
                     department=department, batch=batch, c=c, sem=sem, max_source_rows=max_source_rows,
+                    skipped_students=skipped_students,
                 )
                 source_format = "wide"
             else:
@@ -742,8 +756,14 @@ def upload_results_excel(*, raw: bytes, filename: str, department: str, batch: s
                 parsed, mapping = _parse_long_results(
                     ws=ws, headers=headers, semester_id=semester_id,
                     department=department, batch=batch, c=c, sem=sem, max_source_rows=max_source_rows,
+                    skipped_students=skipped_students,
                 )
                 source_format = "long"
+
+            if not parsed:
+                if skipped_students:
+                    raise ValueError("No registered student result rows were found in the Excel file")
+                raise ValueError("No valid result rows were found in the Excel file")
 
             batch_cur = c.execute(
                 "INSERT INTO result_batches(department,batch,semester_id,title,uploaded_by,source_filename) VALUES(?,?,?,?,?,?)",
@@ -780,6 +800,8 @@ def upload_results_excel(*, raw: bytes, filename: str, department: str, batch: s
         "students_affected": len({x["roll_no"] for x in parsed}),
         "source_format": source_format,
         "column_mapping": mapping.as_dict(),
+        "skipped_students": skipped_students,
+        "skipped_count": len(skipped_students),
     }
 
 

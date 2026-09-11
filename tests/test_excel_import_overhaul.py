@@ -23,7 +23,7 @@ class FakeCursor:
         if normalized.startswith("select 1 from students where department=? and batch=? limit 1"):
             return self
         if normalized.startswith("select roll_no,name from students"):
-            return self if params[0] in self.students and len(params) == 3 and params[2] == "2024-2028" else None
+            return self
         if normalized.startswith("insert into result_batches"):
             return self
         if normalized.startswith("insert into result_items"):
@@ -33,8 +33,11 @@ class FakeCursor:
 
     def fetchone(self):
         sql = getattr(self, "_last_sql", "")
+        params = getattr(self, "_last_params", ())
         if sql.startswith("select 1 from students where department=? and batch=? limit 1"):
-            return {"1": 1} if getattr(self, "_last_params", (None, None))[1] == "2024-2028" else None
+            return {"1": 1} if len(params) == 2 and params[1] == "2024-2028" else None
+        if sql.startswith("select roll_no,name from students"):
+            return {"roll_no": params[0], "name": "Student"} if len(params) == 3 and params[0] in self.students and params[2] == "2024-2028" else None
         return {"id": 3, "code": "II-I", "name": "II B.Tech I Semester"}
 
 
@@ -423,3 +426,50 @@ def test_student_results_reads_all_semesters_by_cohort(monkeypatch):
     batch_lookup = next(params for sql, params in fake.calls if sql.startswith("select rb.id,rb.title,rb.created_at,rb.source_filename,rb.semester_id"))
     assert batch_lookup == ("CSD", "2024-2028")
     assert all("current_semester_id" not in sql for sql, _ in fake.calls)
+
+
+def test_unregistered_students_are_skipped_in_wide_upload(monkeypatch):
+    fake = FakeConnection({"24BT1A6701"})
+    monkeypatch.setattr(ls, "connect", lambda *args, **kwargs: fake)
+    monkeypatch.setattr(ls, "audit", lambda *args, **kwargs: None)
+    raw = workbook_bytes([
+        ["S NO", "H T NO", "24CS301PC", None, None, None, None],
+        [None, None, "Digital Electronics", None, None, None, None],
+        [None, None, "IM", "EM", "TM", "G", "GP", "C"],
+        [1, "24BT1A6701", 36, 48, 84, "A+", 9, 3],
+        [2, "24BT1A6721", 30, 40, 70, "B", 7, 3],
+    ])
+    result = ls.upload_results_excel(
+        raw=raw, filename="partial-wide.xlsx", department="CSD", batch="2024-2028",
+        semester_id=3, title="Result", admin_username="admin",
+    )
+
+    assert result["rows_imported"] == 1
+    assert result["students_affected"] == 1
+    assert result["skipped_count"] == 1
+    assert result["skipped_students"] == [{
+        "row": 5,
+        "roll_no": "24BT1A6721",
+        "reason": "Student is not registered in the app for this branch/batch",
+    }]
+    assert [item[1] for item in fake.cursor.items] == ["24BT1A6701"]
+
+
+def test_unregistered_students_are_skipped_in_long_upload(monkeypatch):
+    fake = FakeConnection({"24BT1A6701"})
+    monkeypatch.setattr(ls, "connect", lambda *args, **kwargs: fake)
+    monkeypatch.setattr(ls, "audit", lambda *args, **kwargs: None)
+    raw = workbook_bytes([
+        ["Roll Number", "Subject Code", "Subject Name", "Marks"],
+        ["24BT1A6701", "24CS301PC", "Digital Electronics", 84],
+        ["24BT1A6721", "24CS301PC", "Digital Electronics", 70],
+    ])
+    result = ls.upload_results_excel(
+        raw=raw, filename="partial-long.xlsx", department="CSD", batch="2024-2028",
+        semester_id=3, title="Result", admin_username="admin",
+    )
+
+    assert result["rows_imported"] == 1
+    assert result["skipped_count"] == 1
+    assert result["skipped_students"][0]["roll_no"] == "24BT1A6721"
+    assert [item[1] for item in fake.cursor.items] == ["24BT1A6701"]

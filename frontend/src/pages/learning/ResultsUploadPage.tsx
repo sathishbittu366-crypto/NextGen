@@ -107,6 +107,11 @@ export function ResultsUploadPage({ user, onLoggedOut }: Props) {
             <div className="success-banner" style={{ marginBottom: 12 }}>
               {result.rows_imported} result rows imported for {result.students_affected} students in {result.department} / {result.semester_code}. Detected format: {result.source_format}.
             </div>
+            {result.skipped_count > 0 && (
+              <div style={{ marginBottom: 12, padding: "10px 12px", border: "1px solid #fcd34d", borderRadius: 10, background: "#fffbeb", color: "#92400e", fontSize: 13 }}>
+                <strong>{result.skipped_count} student{result.skipped_count === 1 ? "" : "s"} skipped</strong> because they are not registered in the app for the selected branch/batch. Their Excel rows were not imported.
+              </div>
+            )}
             <div style={{ fontWeight: 800, marginBottom: 8 }}>Column Mapping</div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: result.column_mapping.ignored.length ? 10 : 0 }}>
               {result.column_mapping.mapped.map((m, i) => (
