@@ -180,7 +180,7 @@ export function ResultsUploadPage({ user, onLoggedOut }: Props) {
               </div>
             </details>
           </section>
-        )}}
+        )}
       </div>
     </AppShell>
   );
