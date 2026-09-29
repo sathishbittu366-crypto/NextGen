@@ -4262,3 +4262,348 @@ body:has(.animlogin-container) {
   .results-mark-grid div:nth-child(5) { grid-column: span 1; }
   .results-summary-row { grid-template-columns: 1fr; gap: 8px; }
 }
+
+/* ============================================================
+   RESULTS — mobile digital grade card refinement
+   Keep desktop marksheet/table experience unchanged.
+   ============================================================ */
+.results-mobile-detail { display: none; }
+
+@media (max-width: 640px) {
+  /* The app shell keeps navigation available, while the result page owns its
+     academic header to avoid repeating the student's identity. */
+  .ng-main:has(.results-page-shell) .ng-page-heading { display: none; }
+  .ng-main:has(.results-page-shell) .ng-topbar {
+    min-height: 56px !important;
+    padding: 8px 14px !important;
+  }
+}
+
+@media (max-width: 720px) {
+  .results-page-shell { padding-bottom: 118px; }
+  .results-detail-shell { gap: 0; }
+
+  .results-back-btn {
+    min-height: 36px;
+    padding: 4px 2px;
+    font-size: 12px;
+    font-weight: 800;
+  }
+
+  .results-detail-card {
+    margin-top: 6px;
+    background: #fff !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+  }
+
+  .results-detail-heading,
+  .results-roll-chip,
+  .results-subject-table,
+  .results-subject-cards,
+  .results-summary-row,
+  .results-generated-note {
+    display: none;
+  }
+
+  .results-mobile-detail {
+    display: block;
+  }
+
+  .results-mobile-header {
+    position: relative;
+    padding: 0 16px 20px;
+    border-bottom: 1px solid var(--border-light);
+  }
+
+  .results-mobile-semester-context {
+    margin-left: auto;
+    width: fit-content;
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: .07em;
+    line-height: 1.2;
+    text-transform: uppercase;
+    text-align: right;
+  }
+
+  .results-mobile-title { margin-top: 13px; }
+
+  .results-mobile-title h2 {
+    margin: 0;
+    color: var(--text);
+    font-size: 25px;
+    line-height: 1.08;
+    letter-spacing: -.025em;
+  }
+
+  .results-mobile-title p {
+    margin: 6px 0 0;
+    color: var(--muted);
+    font-size: 12.5px;
+    font-weight: 650;
+    line-height: 1.35;
+  }
+
+  .results-mobile-identity {
+    margin-top: 18px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border-light);
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 18px;
+  }
+
+  .results-mobile-student,
+  .results-mobile-status {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .results-mobile-student strong {
+    color: var(--text);
+    font-size: 17px;
+    line-height: 1.2;
+    overflow-wrap: anywhere;
+  }
+
+  .results-mobile-student span {
+    margin-top: 4px;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 650;
+    letter-spacing: .025em;
+  }
+
+  .results-mobile-status {
+    flex: 0 0 auto;
+    align-items: flex-end;
+    text-align: right;
+  }
+
+  .results-mobile-status strong {
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 900;
+    line-height: 1.2;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+  }
+
+  .results-mobile-status strong.is-fail { color: var(--red-dark); }
+
+  .results-mobile-status span {
+    margin-top: 4px;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+
+  .results-mobile-marksheet {
+    padding-top: 20px;
+  }
+
+  .results-mobile-section-label {
+    padding: 0 16px 9px;
+    color: var(--blue);
+    font-size: 10px;
+    font-weight: 900;
+    letter-spacing: .13em;
+    line-height: 1;
+  }
+
+  .results-mobile-table-head,
+  .results-mobile-subject summary {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 74px 42px 16px;
+    column-gap: 8px;
+    align-items: center;
+  }
+
+  .results-mobile-table-head {
+    min-height: 34px;
+    padding: 0 16px;
+    border-top: 1px solid var(--border-light);
+    border-bottom: 1px solid var(--border);
+    background: #fafbfc;
+    color: var(--muted);
+    font-size: 9px;
+    font-weight: 900;
+    letter-spacing: .08em;
+  }
+
+  .results-mobile-table-head span:nth-child(n+2) { text-align: right; }
+  .results-mobile-table-head span:nth-child(3) { text-align: center; }
+
+  .results-mobile-subject-list { border-bottom: 1px solid var(--border-light); }
+
+  .results-mobile-subject {
+    border-bottom: 1px solid var(--border-light);
+    background: #fff;
+  }
+
+  .results-mobile-subject:last-child { border-bottom: 0; }
+
+  .results-mobile-subject summary {
+    min-height: 64px;
+    padding: 10px 16px 10px 16px;
+    cursor: pointer;
+    list-style: none;
+    outline: none;
+  }
+
+  .results-mobile-subject summary::-webkit-details-marker { display: none; }
+  .results-mobile-subject summary::marker { content: ""; }
+
+  .results-mobile-subject summary:focus-visible {
+    outline: 2px solid var(--blue-border);
+    outline-offset: -2px;
+  }
+
+  .results-mobile-subject.is-failed {
+    background: var(--red-bg);
+    box-shadow: inset 3px 0 0 var(--red);
+  }
+
+  .results-mobile-subject-main {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .results-mobile-subject-main strong {
+    color: var(--text);
+    font-size: 12.5px;
+    font-weight: 750;
+    line-height: 1.28;
+    overflow-wrap: anywhere;
+  }
+
+  .results-mobile-subject-main small {
+    margin-top: 4px;
+    color: var(--muted);
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: .025em;
+    line-height: 1.2;
+  }
+
+  .results-mobile-total {
+    color: var(--text);
+    font-size: 11px;
+    font-weight: 750;
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  .results-mobile-grade {
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 900;
+    text-align: center;
+  }
+
+  .results-mobile-grade.is-failed { color: var(--red-dark); }
+
+  .results-mobile-chevron {
+    color: #8b98a5;
+    font-size: 20px;
+    font-weight: 400;
+    line-height: 1;
+    text-align: right;
+    transform: translateX(-1px);
+  }
+
+  .results-mobile-subject[open] .results-mobile-chevron {
+    transform: rotate(90deg) translateX(-1px);
+  }
+
+  .results-mobile-subject-detail {
+    margin: 0 16px 10px;
+    padding: 11px;
+    border-top: 1px solid var(--border-light);
+    background: var(--row-alt);
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 7px;
+  }
+
+  .results-mobile-subject-detail div {
+    min-width: 0;
+    padding: 8px 7px;
+    border: 1px solid var(--border-light);
+    background: #fff;
+  }
+
+  .results-mobile-subject-detail span {
+    display: block;
+    color: var(--muted);
+    font-size: 8.5px;
+    font-weight: 800;
+    letter-spacing: .025em;
+    line-height: 1.1;
+    text-transform: uppercase;
+  }
+
+  .results-mobile-subject-detail strong {
+    display: block;
+    margin-top: 4px;
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 800;
+    overflow-wrap: anywhere;
+  }
+
+  .results-mobile-outcome {
+    margin-top: 19px;
+    border-top: 1px solid var(--border);
+    padding-top: 18px;
+  }
+
+  .results-mobile-outcome-row {
+    min-height: 43px;
+    padding: 0 16px;
+    border-bottom: 1px solid var(--border-light);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+  }
+
+  .results-mobile-outcome-row span {
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 650;
+  }
+
+  .results-mobile-outcome-row strong {
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 850;
+    text-align: right;
+  }
+
+  .results-mobile-outcome-row strong.is-fail { color: var(--red-dark); }
+}
+
+@media (max-width: 380px) {
+  .results-mobile-table-head,
+  .results-mobile-subject summary {
+    grid-template-columns: minmax(0, 1fr) 67px 38px 14px;
+    column-gap: 6px;
+  }
+
+  .results-mobile-subject-detail { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+.results-back-mobile { display: none; }
+
+@media (max-width: 720px) {
+  .results-back-desktop { display: none; }
+  .results-back-mobile { display: inline; }
+}
