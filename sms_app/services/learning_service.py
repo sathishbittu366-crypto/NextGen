@@ -897,6 +897,274 @@ def build_results_template() -> bytes:
     wb.close()
     return out.getvalue()
 
+
+
+def _result_item_status(item: dict) -> str:
+    """Classify one imported subject result without inventing a pass mark.
+
+    The importer already preserves result_status/grade from the source where
+    available. A subject is failed when the explicit status contains FAIL or
+    its grade is F/FAIL/AB. A non-empty status containing PASS, or any other
+    non-failing non-empty grade, is treated as passed. Missing status + grade
+    stays unknown so the dashboard never silently treats missing data as a
+    pass.
+    """
+    status = str(item.get("result_status") or "").strip().upper()
+    grade = str(item.get("grade") or "").strip().upper()
+    if "FAIL" in status or grade in {"F", "FAIL", "AB"}:
+        return "FAIL"
+    if "PASS" in status:
+        return "PASS"
+    if status:
+        return "PASS"
+    if grade:
+        return "PASS"
+    return "UNKNOWN"
+
+
+def _result_number(value) -> float | None:
+    try:
+        if value in (None, ""):
+            return None
+        return float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _result_student_summary(rows: list[dict]) -> dict[str, dict]:
+    grouped: dict[str, dict] = {}
+    for row in rows:
+        roll = str(row.get("roll_no") or "").strip()
+        if not roll:
+            continue
+        student = grouped.setdefault(roll, {
+            "roll_no": roll,
+            "name": str(row.get("student_name") or roll),
+            "items": [],
+            "sgpa": None,
+        })
+        student["items"].append(row)
+        sgpa = _result_number(row.get("sgpa"))
+        if sgpa is not None and student["sgpa"] is None:
+            student["sgpa"] = sgpa
+
+    for student in grouped.values():
+        statuses = [_result_item_status(item) for item in student["items"]]
+        if any(status == "FAIL" for status in statuses):
+            student["status"] = "FAIL"
+        elif statuses and all(status == "PASS" for status in statuses):
+            student["status"] = "PASS"
+        else:
+            student["status"] = "UNKNOWN"
+        marks = sum(float(item.get("marks") or 0) for item in student["items"])
+        max_marks = sum(float(item.get("max_marks") or 0) for item in student["items"])
+        student["percentage"] = (marks / max_marks * 100.0) if max_marks > 0 else None
+        failed_subjects = []
+        for item in student["items"]:
+            if _result_item_status(item) == "FAIL":
+                failed_subjects.append(str(item.get("subject_name") or item.get("subject_code") or "Unknown subject"))
+        student["failed_subjects"] = failed_subjects
+    return grouped
+
+
+def _result_batch_summary(rows: list[dict]) -> dict:
+    students = _result_student_summary(rows)
+    passed = sum(1 for student in students.values() if student["status"] == "PASS")
+    failed = sum(1 for student in students.values() if student["status"] == "FAIL")
+    unknown = sum(1 for student in students.values() if student["status"] == "UNKNOWN")
+    denominator = passed + failed
+    return {
+        "students_count": len(students),
+        "passed_students": passed,
+        "failed_students": failed,
+        "unknown_students": unknown,
+        "pass_percentage": (passed / denominator * 100.0) if denominator else None,
+        "students": students,
+    }
+
+
+def get_admin_results_dashboard() -> dict:
+    """Return real upload history and summary data for the admin Results UI."""
+    with connect() as c:
+        batch_rows = c.execute(
+            """SELECT rb.id, rb.title, rb.department, rb.batch, rb.semester_id,
+                      rb.created_at, rb.source_filename,
+                      sem.code AS semester_code, sem.name AS semester_name
+               FROM result_batches rb
+               JOIN academic_semesters sem ON sem.id=rb.semester_id
+               ORDER BY rb.created_at DESC, rb.id DESC"""
+        ).fetchall()
+        item_rows = c.execute(
+            """SELECT ri.batch_id, ri.roll_no, s.name AS student_name,
+                      ri.subject_code, ri.subject_name, ri.marks, ri.max_marks,
+                      ri.grade, ri.grade_point, ri.result_status, ri.sgpa, ri.percentage
+               FROM result_items ri
+               LEFT JOIN students s ON s.roll_no=ri.roll_no
+               ORDER BY ri.batch_id DESC, ri.roll_no, ri.subject_code"""
+        ).fetchall()
+
+    by_batch: dict[int, list[dict]] = {}
+    for row in item_rows:
+        item = dict(row)
+        by_batch.setdefault(int(item["batch_id"]), []).append(item)
+
+    uploads = []
+    for batch in batch_rows:
+        item_rows_for_batch = by_batch.get(int(batch["id"]), [])
+        summary = _result_batch_summary(item_rows_for_batch)
+        uploads.append({
+            "id": int(batch["id"]),
+            "title": batch["title"],
+            "department": batch["department"],
+            "batch": batch.get("batch"),
+            "semester_id": int(batch["semester_id"]),
+            "semester_code": batch["semester_code"],
+            "semester_name": batch["semester_name"],
+            "created_at": batch["created_at"].isoformat(sep=" ") if hasattr(batch["created_at"], "isoformat") else str(batch["created_at"]),
+            "source_filename": batch.get("source_filename"),
+            "students_count": summary["students_count"],
+            "subject_count": len({str(row.get("subject_code") or row.get("subject_name") or "") for row in item_rows_for_batch if row.get("subject_code") or row.get("subject_name")}),
+            "pass_percentage": summary["pass_percentage"],
+            "passed_students": summary["passed_students"],
+            "failed_students": summary["failed_students"],
+            "unknown_students": summary["unknown_students"],
+        })
+
+    unique_batches = sorted({str(item["batch"]) for item in uploads if item.get("batch")}, reverse=True)
+    unique_semesters = []
+    seen_semesters: set[int] = set()
+    for item in uploads:
+        semester_id = int(item["semester_id"])
+        if semester_id not in seen_semesters:
+            seen_semesters.add(semester_id)
+            unique_semesters.append({"id": semester_id, "code": item["semester_code"], "name": item["semester_name"]})
+    titles = sorted({str(item["title"]) for item in uploads if item.get("title")})
+
+    return {
+        "total_uploads": len(uploads),
+        "uploads": uploads,
+        "filter_options": {
+            "batches": unique_batches,
+            "semesters": unique_semesters,
+            "titles": titles,
+        },
+    }
+
+
+def get_admin_result_detail(*, batch_id: int) -> dict | None:
+    with connect() as c:
+        batch = c.execute(
+            """SELECT rb.id, rb.title, rb.department, rb.batch, rb.semester_id,
+                      rb.created_at, rb.source_filename,
+                      sem.code AS semester_code, sem.name AS semester_name
+               FROM result_batches rb
+               JOIN academic_semesters sem ON sem.id=rb.semester_id
+               WHERE rb.id=?""",
+            (batch_id,),
+        ).fetchone()
+        if not batch:
+            return None
+        rows = c.execute(
+            """SELECT ri.roll_no, s.name AS student_name,
+                      ri.subject_code, ri.subject_name, ri.marks, ri.max_marks,
+                      ri.grade, ri.grade_point, ri.result_status, ri.sgpa, ri.percentage
+               FROM result_items ri
+               LEFT JOIN students s ON s.roll_no=ri.roll_no
+               WHERE ri.batch_id=?
+               ORDER BY ri.subject_name, ri.roll_no""",
+            (batch_id,),
+        ).fetchall()
+
+    source_rows = [dict(row) for row in rows]
+    summary = _result_batch_summary(source_rows)
+    students = summary["students"]
+
+    subjects: dict[str, dict] = {}
+    grade_counts: dict[str, int] = {}
+    for row in source_rows:
+        subject_key = str(row.get("subject_code") or row.get("subject_name") or "").strip()
+        if subject_key:
+            subject = subjects.setdefault(subject_key, {
+                "subject_code": str(row.get("subject_code") or "").strip(),
+                "subject_name": str(row.get("subject_name") or subject_key).strip(),
+                "students": 0,
+                "classified_students": 0,
+                "passed": 0,
+                "failed": 0,
+            })
+            subject["students"] += 1
+            status = _result_item_status(row)
+            if status != "UNKNOWN":
+                subject["classified_students"] += 1
+                subject["passed"] += 1 if status == "PASS" else 0
+                subject["failed"] += 1 if status == "FAIL" else 0
+        grade = str(row.get("grade") or "").strip().upper()
+        if grade:
+            grade_counts[grade] = grade_counts.get(grade, 0) + 1
+
+    subject_analysis = []
+    for subject in subjects.values():
+        denominator = subject["passed"] + subject["failed"]
+        subject_analysis.append({
+            **subject,
+            "pass_percentage": (subject["passed"] / denominator * 100.0) if denominator else None,
+        })
+    subject_analysis.sort(key=lambda item: (item["subject_name"], item["subject_code"]))
+
+    grade_distribution = []
+    ordered_grades = ["O", "A+", "A", "B+", "B", "C", "P", "F", "AB"]
+    for grade in ordered_grades:
+        if grade in grade_counts:
+            grade_distribution.append({"grade": grade, "count": grade_counts.pop(grade)})
+    grade_distribution.extend({"grade": grade, "count": count} for grade, count in sorted(grade_counts.items()))
+
+    student_values = list(students.values())
+    has_sgpa = any(student.get("sgpa") is not None for student in student_values)
+    metric = "SGPA" if has_sgpa else "Percentage"
+    if metric == "SGPA":
+        ranked = sorted(student_values, key=lambda item: (item.get("sgpa") is not None, item.get("sgpa") or -1, item.get("percentage") or -1), reverse=True)
+    else:
+        ranked = sorted(student_values, key=lambda item: (item.get("percentage") is not None, item.get("percentage") or -1), reverse=True)
+    top_performers = [
+        {"roll_no": student["roll_no"], "name": student["name"], "score": student.get("sgpa") if metric == "SGPA" else student.get("percentage")}
+        for student in ranked[:5]
+        if (student.get("sgpa") if metric == "SGPA" else student.get("percentage")) is not None
+    ]
+
+    at_risk_students = [
+        {"roll_no": student["roll_no"], "name": student["name"], "failed_subject_count": len(student["failed_subjects"])}
+        for student in student_values
+        if student["status"] == "FAIL"
+    ]
+    at_risk_students.sort(key=lambda item: (-item["failed_subject_count"], item["name"].lower()))
+
+    return {
+        "batch": {
+            "id": int(batch["id"]),
+            "title": batch["title"],
+            "department": batch["department"],
+            "batch": batch.get("batch"),
+            "semester_id": int(batch["semester_id"]),
+            "semester_code": batch["semester_code"],
+            "semester_name": batch["semester_name"],
+            "created_at": batch["created_at"].isoformat(sep=" ") if hasattr(batch["created_at"], "isoformat") else str(batch["created_at"]),
+            "source_filename": batch.get("source_filename"),
+        },
+        "overview": {
+            "total_students": summary["students_count"],
+            "passed_students": summary["passed_students"],
+            "failed_students": summary["failed_students"],
+            "unknown_students": summary["unknown_students"],
+            "pass_percentage": summary["pass_percentage"],
+            "total_subject_entries": len(source_rows),
+        },
+        "subject_analysis": subject_analysis,
+        "grade_distribution": grade_distribution,
+        "top_performers_metric": metric,
+        "top_performers": top_performers,
+        "at_risk_students": at_risk_students,
+    }
+
 def get_student_results(*, roll_no: str) -> dict:
     with connect() as c:
         student = c.execute(

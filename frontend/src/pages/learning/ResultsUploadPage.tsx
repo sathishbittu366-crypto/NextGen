@@ -4,9 +4,15 @@ import { ApiClientError, getAuthUrl } from "../../api/client";
 import { type CurrentUser } from "../../api/auth";
 import { getResultsOptions, uploadResults } from "../../api/learning";
 
-interface Props { user: CurrentUser; onLoggedOut: () => void; }
+interface Props {
+  user: CurrentUser;
+  onLoggedOut: () => void;
+  embedded?: boolean;
+  onClose?: () => void;
+  onUploaded?: (batchId: number) => void;
+}
 
-export function ResultsUploadPage({ user, onLoggedOut }: Props) {
+export function ResultsUploadPage({ user, onLoggedOut, embedded = false, onClose, onUploaded }: Props) {
   const [options, setOptions] = useState<Awaited<ReturnType<typeof getResultsOptions>> | null>(null);
   const [batch, setBatch] = useState("");
   const [branch, setBranch] = useState("CSD");
@@ -26,31 +32,49 @@ export function ResultsUploadPage({ user, onLoggedOut }: Props) {
         if (res.batches.length) setBatch(res.batches[0]);
         const first = res.semesters.find(s => s.active);
         if (first) setSemesterId(first.id);
-      } catch (err) { setError(err instanceof ApiClientError ? err.message : "Failed to load result upload options"); }
-      finally { setLoading(false); }
+      } catch (err) {
+        setError(err instanceof ApiClientError ? err.message : "Failed to load result upload options");
+      } finally {
+        setLoading(false);
+      }
     })();
   }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!batch || !branch || !semesterId || !title.trim() || !file) { setError("Choose batch, branch, semester, result title, and an Excel file."); return; }
-    setUploading(true); setError(null); setResult(null);
+    if (!batch || !branch || !semesterId || !title.trim() || !file) {
+      setError("Choose batch, branch, semester, result title, and an Excel file.");
+      return;
+    }
+    setUploading(true);
+    setError(null);
+    setResult(null);
     try {
       const res = await uploadResults(branch, batch, Number(semesterId), title.trim(), file);
       setResult(res);
+      onUploaded?.(res.batch_id);
       setFile(null);
       const input = document.getElementById("results-file") as HTMLInputElement | null;
       if (input) input.value = "";
-    } catch (err) { setError(err instanceof ApiClientError ? err.message : "Results upload failed"); }
-    finally { setUploading(false); }
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : "Results upload failed");
+    } finally {
+      setUploading(false);
+    }
   }
 
-  return (
-    <AppShell user={user} activeNav="results-admin" heading="Results Upload" onLoggedOut={onLoggedOut}>
+  const content = (
+    <>
       {error && <div className="error-banner">{error}</div>}
       <div className="detail-box">
-        <h2 style={{ marginBottom: 6 }}>Upload Student Results</h2>
-        <p className="subtitle-muted" style={{ maxWidth: 840, marginTop: 0 }}>Upload either the existing one-row-per-subject format or the official 3-row VR24 result-analysis format. The importer detects the shape automatically, validates every mapped value, and reports every recognized or ignored header.</p>
+        {!embedded && (
+          <>
+            <h2 style={{ marginBottom: 6 }}>Upload Student Results</h2>
+            <p className="subtitle-muted" style={{ maxWidth: 840, marginTop: 0 }}>
+              Upload either the existing one-row-per-subject format or the official 3-row VR24 result-analysis format. The importer detects the shape automatically, validates every mapped value, and reports every recognized or ignored header.
+            </p>
+          </>
+        )}
 
         {loading ? <p className="empty-note">Loading…</p> : (
           <form onSubmit={handleSubmit}>
@@ -85,8 +109,8 @@ export function ResultsUploadPage({ user, onLoggedOut }: Props) {
               </div>
             </div>
 
-            <div style={{ margin: "18px 0", padding: 14, border: "1px solid var(--border)", borderRadius: 12, background: "var(--card-glass)" }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+            <div className="results-upload-template-box">
+              <div className="results-upload-template-head">
                 <div>
                   <div style={{ fontWeight: 800, marginBottom: 4 }}>Excel template</div>
                   <div className="subtitle-muted" style={{ lineHeight: 1.55 }}>Includes the real 3-row wide-format header shape and sample subject blocks.</div>
@@ -108,43 +132,26 @@ export function ResultsUploadPage({ user, onLoggedOut }: Props) {
               <div>
                 <div className="results-upload-kicker">Upload complete</div>
                 <h3>Results imported successfully</h3>
-                <p>
-                  {result.title} · {result.department} / {result.semester_code}
-                </p>
+                <p>{result.title} · {result.department} / {result.semester_code}</p>
               </div>
               <span className="results-upload-format">{result.source_format === "wide" ? "Wide format" : "Long format"}</span>
             </div>
 
             <div className="results-upload-metrics">
-              <div className="results-upload-metric">
-                <strong>{result.students_affected}</strong>
-                <span>Students imported</span>
-              </div>
-              <div className="results-upload-metric">
-                <strong>{result.rows_imported}</strong>
-                <span>Result rows</span>
-              </div>
-              <div className={`results-upload-metric ${result.skipped_count > 0 ? "is-warning" : ""}`}>
-                <strong>{result.skipped_count}</strong>
-                <span>Not registered · skipped</span>
-              </div>
+              <div className="results-upload-metric"><strong>{result.students_affected}</strong><span>Students imported</span></div>
+              <div className="results-upload-metric"><strong>{result.rows_imported}</strong><span>Result rows</span></div>
+              <div className={`results-upload-metric ${result.skipped_count > 0 ? "is-warning" : ""}`}><strong>{result.skipped_count}</strong><span>Not registered · skipped</span></div>
             </div>
 
             {result.skipped_count > 0 && (
               <details className="results-upload-detail results-upload-warning" open={false}>
                 <summary>
-                  <span>
-                    <strong>{result.skipped_count} student{result.skipped_count === 1 ? " was" : "s were"} skipped</strong>
-                    <small>These roll numbers are not registered in NextGen for this batch/branch.</small>
-                  </span>
+                  <span><strong>{result.skipped_count} student{result.skipped_count === 1 ? " was" : "s were"} skipped</strong><small>These roll numbers are not registered in NextGen for this batch/branch.</small></span>
                   <span className="results-upload-summary-chevron" aria-hidden="true">⌄</span>
                 </summary>
                 <div className="results-upload-skipped-list">
                   {result.skipped_students.map((student, i) => (
-                    <div className="results-upload-skipped-row" key={`${student.roll_no}-${student.row}-${i}`}>
-                      <code>{student.roll_no}</code>
-                      <span>Excel row {student.row}</span>
-                    </div>
+                    <div className="results-upload-skipped-row" key={`${student.roll_no}-${student.row}-${i}`}><code>{student.roll_no}</code><span>Excel row {student.row}</span></div>
                   ))}
                 </div>
               </details>
@@ -152,10 +159,7 @@ export function ResultsUploadPage({ user, onLoggedOut }: Props) {
 
             <details className="results-upload-detail">
               <summary>
-                <span>
-                  <strong>Import details</strong>
-                  <small>Column matching and ignored headers</small>
-                </span>
+                <span><strong>Import details</strong><small>Column matching and ignored headers</small></span>
                 <span className="results-upload-summary-chevron" aria-hidden="true">⌄</span>
               </summary>
               <div className="results-upload-details-body">
@@ -171,9 +175,7 @@ export function ResultsUploadPage({ user, onLoggedOut }: Props) {
                   <>
                     <div className="results-upload-detail-title" style={{ marginTop: 14 }}>Ignored columns</div>
                     <div className="results-upload-chips">
-                      {result.column_mapping.ignored.map((header, i) => (
-                        <span key={`${header}-${i}`} className="results-upload-chip results-upload-chip-muted">{header}</span>
-                      ))}
+                      {result.column_mapping.ignored.map((header, i) => <span key={`${header}-${i}`} className="results-upload-chip results-upload-chip-muted">{header}</span>)}
                     </div>
                   </>
                 )}
@@ -182,6 +184,28 @@ export function ResultsUploadPage({ user, onLoggedOut }: Props) {
           </section>
         )}
       </div>
+    </>
+  );
+
+  if (embedded) {
+    return (
+      <div className="results-upload-embedded">
+        <div className="results-upload-embedded-head">
+          <div>
+            <div className="results-upload-embedded-kicker">Results</div>
+            <h2>Upload Student Results</h2>
+            <p>Import the workbook without leaving the Results workspace.</p>
+          </div>
+          {onClose && <button className="results-icon-btn" type="button" onClick={onClose} aria-label="Close upload form">×</button>}
+        </div>
+        {content}
+      </div>
+    );
+  }
+
+  return (
+    <AppShell user={user} activeNav="results" heading="Results Upload" onLoggedOut={onLoggedOut}>
+      {content}
     </AppShell>
   );
 }

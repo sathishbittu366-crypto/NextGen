@@ -231,7 +231,7 @@ export function App() {
       <Route
         path="/results"
         element={
-          <Guard user={user} reload={reload} condition={user?.role === "STUDENT"} fallback="/">
+          <Guard user={user} reload={reload} condition={user?.role === "STUDENT" || user?.role === "ADMIN"} fallback="/">
             <ResultsPage user={user!} onLoggedOut={handleLoggedOut} />
           </Guard>
         }

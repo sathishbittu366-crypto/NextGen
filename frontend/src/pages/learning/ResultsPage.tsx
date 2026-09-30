@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { AppShell } from "../../components/AppShell";
 import { ApiClientError } from "../../api/client";
 import { type CurrentUser } from "../../api/auth";
+import { ResultsAdminPage } from "./ResultsAdminPage";
 import { getMyResults, type StudentResults, type StudentSemesterResult } from "../../api/learning";
 
 interface Props { user: CurrentUser; onLoggedOut: () => void; }
@@ -37,6 +38,10 @@ function creditsSummary(subjects: StudentSemesterResult["subjects"]): { earned: 
 }
 
 export function ResultsPage({ user, onLoggedOut }: Props) {
+  if (user.role === "ADMIN") {
+    return <ResultsAdminPage user={user} onLoggedOut={onLoggedOut} />;
+  }
+
   const [data, setData] = useState<StudentResults | null>(null);
   const [selectedResultId, setSelectedResultId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);

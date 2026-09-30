@@ -16,6 +16,8 @@ from sms_app.services.learning_service import (
     delete_note,
     get_note_for_download,
     get_student_results,
+    get_admin_results_dashboard,
+    get_admin_result_detail,
     list_notes,
     result_upload_options,
     save_note_bytes,
@@ -161,6 +163,23 @@ async def results_upload(
         return ok(result)
     except ValueError as exc:
         raise ApiError(str(exc), 400, "VALIDATION_ERROR")
+
+
+@router.get("/api/results/admin")
+async def results_admin(user: CurrentUser = Depends(get_current_user)):
+    if user.role != "ADMIN":
+        raise ApiError("Admin access only", 403, "FORBIDDEN")
+    return ok(get_admin_results_dashboard())
+
+
+@router.get("/api/results/admin/{batch_id}")
+async def results_admin_detail(batch_id: int, user: CurrentUser = Depends(get_current_user)):
+    if user.role != "ADMIN":
+        raise ApiError("Admin access only", 403, "FORBIDDEN")
+    result = get_admin_result_detail(batch_id=batch_id)
+    if not result:
+        raise ApiError("Result upload not found", 404, "NOT_FOUND")
+    return ok(result)
 
 
 @router.get("/api/results/me")

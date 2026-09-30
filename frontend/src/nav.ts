@@ -139,7 +139,7 @@ export function navItemsFor(role: Role, options?: { smsGatewayAccess?: boolean }
       { href: "/students", icon: ICONS.students, label: "Students", key: "students" },
       { href: "/academic-calendar", icon: ICONS.calendar, label: "Academic Calendar", key: "academic-calendar" },
       { href: "/timetable", icon: ICONS.timetable, label: "Schedule", key: "timetable" },
-      { href: "/results-upload", icon: ICONS.results, label: "Results Upload", key: "results-admin" },
+      { href: "/results", icon: ICONS.results, label: "Results", key: "results" },
       { href: "/audit-log", icon: ICONS.audit, label: "Audit Log", key: "audit" },
       { href: "/sms-log", icon: ICONS.sms, label: "SMS Gateways", key: "sms-log" },
       { href: "/problem-reports", icon: ICONS.reports, label: "Problem Reports", key: "problem-reports" },

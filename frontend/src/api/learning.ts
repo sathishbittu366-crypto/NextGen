@@ -86,6 +86,78 @@ export async function uploadResults(
   }>(`/api/results/upload?${params}`, file, "file");
 }
 
+
+export interface ResultsAdminUpload {
+  id: number;
+  title: string;
+  department: string;
+  batch: string | null;
+  semester_id: number;
+  semester_code: string;
+  semester_name: string;
+  created_at: string;
+  source_filename: string | null;
+  students_count: number;
+  subject_count: number;
+  pass_percentage: number | null;
+  passed_students: number;
+  failed_students: number;
+  unknown_students: number;
+}
+
+export interface ResultsAdminDashboard {
+  total_uploads: number;
+  uploads: ResultsAdminUpload[];
+  filter_options: {
+    batches: string[];
+    semesters: { id: number; code: string; name: string }[];
+    titles: string[];
+  };
+}
+
+export interface ResultsAdminDetail {
+  batch: {
+    id: number;
+    title: string;
+    department: string;
+    batch: string | null;
+    semester_id: number;
+    semester_code: string;
+    semester_name: string;
+    created_at: string;
+    source_filename: string | null;
+  };
+  overview: {
+    total_students: number;
+    passed_students: number;
+    failed_students: number;
+    unknown_students: number;
+    pass_percentage: number | null;
+    total_subject_entries: number;
+  };
+  subject_analysis: {
+    subject_code: string;
+    subject_name: string;
+    students: number;
+    classified_students: number;
+    passed: number;
+    failed: number;
+    pass_percentage: number | null;
+  }[];
+  grade_distribution: { grade: string; count: number }[];
+  top_performers_metric: "SGPA" | "Percentage";
+  top_performers: { roll_no: string; name: string; score: number | null }[];
+  at_risk_students: { roll_no: string; name: string; failed_subject_count: number }[];
+}
+
+export async function getResultsAdminDashboard(): Promise<ResultsAdminDashboard> {
+  return apiFetch<ResultsAdminDashboard>("/api/results/admin");
+}
+
+export async function getResultsAdminDetail(batchId: number): Promise<ResultsAdminDetail> {
+  return apiFetch<ResultsAdminDetail>(`/api/results/admin/${batchId}`);
+}
+
 export interface StudentSemesterResult {
   batch: {
     id: number;
