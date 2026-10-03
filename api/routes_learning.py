@@ -22,6 +22,7 @@ from sms_app.services.learning_service import (
     result_upload_options,
     save_note_bytes,
     upload_results_excel,
+    delete_result_batch,
     build_results_template,
 )
 from sms_app.services.attendance_service import list_subjects
@@ -163,6 +164,16 @@ async def results_upload(
         return ok(result)
     except ValueError as exc:
         raise ApiError(str(exc), 400, "VALIDATION_ERROR")
+
+
+@router.delete("/api/results/admin/{batch_id}")
+async def results_admin_delete(batch_id: int, user: CurrentUser = Depends(get_current_user)):
+    if user.role != "ADMIN":
+        raise ApiError("Admin access only", 403, "FORBIDDEN")
+    result = delete_result_batch(batch_id=batch_id, admin_username=user.username)
+    if not result:
+        raise ApiError("Result upload not found", 404, "NOT_FOUND")
+    return ok(result)
 
 
 @router.get("/api/results/admin")

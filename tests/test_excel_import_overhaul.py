@@ -473,3 +473,71 @@ def test_unregistered_students_are_skipped_in_long_upload(monkeypatch):
     assert result["skipped_count"] == 1
     assert result["skipped_students"][0]["roll_no"] == "24BT1A6721"
     assert [item[1] for item in fake.cursor.items] == ["24BT1A6701"]
+
+
+def test_delete_result_batch_removes_only_the_uploaded_result_set(monkeypatch):
+    class DeleteCursor:
+        def __init__(self):
+            self.deleted_id = None
+            self.audit_calls = []
+            self.last_sql = ""
+
+        def execute(self, sql, params=()):
+            self.last_sql = " ".join(sql.lower().split())
+            self.params = params
+            return self
+
+        def fetchone(self):
+            if self.last_sql.startswith("select rb.id,rb.title,rb.department,rb.batch,rb.semester_id"):
+                return {
+                    "id": 41,
+                    "title": "Old Semester Result",
+                    "department": "CSD",
+                    "batch": "2024-2028",
+                    "semester_id": 5,
+                    "created_at": "2026-09-01 10:00:00",
+                    "source_filename": "old.xlsx",
+                    "semester_code": "V",
+                    "semester_name": "V Semester",
+                }
+            return None
+
+        def fetchall(self):
+            return []
+
+        @property
+        def rowcount(self):
+            return 1 if self.last_sql.startswith("delete from result_batches") else 0
+
+    class DeleteConnection:
+        def __init__(self):
+            self.cursor = DeleteCursor()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def execute(self, sql, params=()):
+            return self.cursor.execute(sql, params)
+
+    fake = DeleteConnection()
+    monkeypatch.setattr(ls, "connect", lambda *args, **kwargs: fake)
+    monkeypatch.setattr(ls, "audit", lambda *args, **kwargs: fake.cursor.audit_calls.append(args))
+
+    result = ls.delete_result_batch(batch_id=41, admin_username="admin")
+
+    assert result == {
+        "id": 41,
+        "title": "Old Semester Result",
+        "department": "CSD",
+        "batch": "2024-2028",
+        "semester_id": 5,
+        "semester_code": "V",
+        "semester_name": "V Semester",
+        "deleted": True,
+    }
+    assert fake.cursor.last_sql == "delete from result_batches where id=?"
+    assert fake.cursor.params == (41,)
+    assert fake.cursor.audit_calls

@@ -805,6 +805,54 @@ def upload_results_excel(*, raw: bytes, filename: str, department: str, batch: s
     }
 
 
+def delete_result_batch(*, batch_id: int, admin_username: str) -> dict | None:
+    """Delete one uploaded result set and all of its imported rows.
+
+    Only the API layer should expose this to ADMIN users. The foreign key on
+    result_items(batch_id) is ON DELETE CASCADE, so this removes the imported
+    result rows without touching students, subjects, or semester records.
+    """
+    try:
+        batch_id = int(batch_id)
+    except (TypeError, ValueError):
+        return None
+    if batch_id <= 0:
+        return None
+
+    with connect() as c:
+        batch = c.execute(
+            """SELECT rb.id,rb.title,rb.department,rb.batch,rb.semester_id,
+                      rb.created_at,rb.source_filename,
+                      sem.code AS semester_code, sem.name AS semester_name
+               FROM result_batches rb
+               JOIN academic_semesters sem ON sem.id=rb.semester_id
+               WHERE rb.id=?""",
+            (batch_id,),
+        ).fetchone()
+        if not batch:
+            return None
+
+        c.execute("DELETE FROM result_batches WHERE id=?", (batch_id,))
+        audit(
+            c,
+            admin_username,
+            "DELETE_UPLOAD",
+            "results",
+            f"target={batch['title']}; semester={batch['semester_code']}; batch_id={batch_id}",
+        )
+
+    return {
+        "id": batch_id,
+        "title": batch["title"],
+        "department": batch["department"],
+        "batch": batch.get("batch"),
+        "semester_id": int(batch["semester_id"]),
+        "semester_code": batch["semester_code"],
+        "semester_name": batch["semester_name"],
+        "deleted": True,
+    }
+
+
 def build_students_template() -> bytes:
     """Build the official student-import template from the existing alias map."""
     from api.routes_students import BULK_IMPORT_COLUMN_MAP

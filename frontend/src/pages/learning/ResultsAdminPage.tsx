@@ -5,6 +5,8 @@ import { type CurrentUser } from "../../api/auth";
 import {
   getResultsAdminDashboard,
   getResultsAdminDetail,
+  deleteResultsAdminBatch,
+  type ResultsAdminUpload,
   type ResultsAdminDashboard,
   type ResultsAdminDetail,
 } from "../../api/learning";
@@ -46,6 +48,7 @@ function Icon({
     | "filter"
     | "arrow"
     | "close"
+    | "trash"
     | "calendar"
     | "trend";
   size?: number;
@@ -78,6 +81,8 @@ function Icon({
       return <svg {...common}><path d="m9 18 6-6-6-6" /></svg>;
     case "close":
       return <svg {...common}><path d="m6 6 12 12" /><path d="m18 6-12 12" /></svg>;
+    case "trash":
+      return <svg {...common}><path d="M4 7h16" /><path d="M9 7V4h6v3" /><path d="M7 7l1 13h8l1-13" /><path d="M10 11v5M14 11v5" /></svg>;
     case "calendar":
       return <svg {...common}><rect x="3" y="4" width="18" height="17" rx="2" /><path d="M8 2v4M16 2v4M3 9h18" /></svg>;
     case "trend":
@@ -319,6 +324,7 @@ export function ResultsAdminPage({ user, onLoggedOut }: Props) {
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showUpload, setShowUpload] = useState(false);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
 
   const loadDashboard = async (selectId?: number | null) => {
     try {
@@ -355,6 +361,26 @@ export function ResultsAdminPage({ user, onLoggedOut }: Props) {
   };
 
   useEffect(() => { void loadDashboard(); }, []);
+
+  async function handleDeleteResult(item: ResultsAdminUpload) {
+    if (deletingId != null) return;
+    const confirmed = window.confirm(
+      `Delete “${item.title}” for ${item.batch || "this batch"} · ${item.semester_name}?\n\nThis permanently removes the uploaded result set and its imported marks. Student, subject, attendance, and semester records are not deleted.`,
+    );
+    if (!confirmed) return;
+
+    try {
+      setDeletingId(item.id);
+      setError(null);
+      await deleteResultsAdminBatch(item.id);
+      await loadDashboard(null);
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : "Failed to delete the uploaded result");
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
 
   const uploads = useMemo(() => {
     const source = data?.uploads ?? [];
@@ -534,7 +560,7 @@ export function ResultsAdminPage({ user, onLoggedOut }: Props) {
 
               <div className="results-table-wrap">
                 <table className="results-admin-table">
-                  <thead><tr><th>#</th><th>Title</th><th>Batch</th><th>Branch</th><th>Semester</th><th>Students</th><th>Subjects</th><th>Pass %</th><th>Uploaded</th><th aria-label="Action" /></tr></thead>
+                  <thead><tr><th>#</th><th>Title</th><th>Batch</th><th>Branch</th><th>Semester</th><th>Students</th><th>Subjects</th><th>Pass %</th><th>Uploaded</th><th aria-label="Actions" /></tr></thead>
                   <tbody>
                     {uploads.map((item, index) => (
                       <tr key={item.id} className={item.id === selectedId ? "is-selected" : ""} onClick={() => void selectResult(item.id)} tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void selectResult(item.id); } }}>
@@ -552,7 +578,24 @@ export function ResultsAdminPage({ user, onLoggedOut }: Props) {
                         <td>{number(item.subject_count)}</td>
                         <td><span className={`results-pass-pill ${item.pass_percentage != null && item.pass_percentage < 75 ? "warn" : ""}`}>{pct(item.pass_percentage)}</span></td>
                         <td>{shortDate(item.created_at)}</td>
-                        <td><button className="results-view-btn" type="button" onClick={(event) => { event.stopPropagation(); void selectResult(item.id); }}>View <Icon name="arrow" size={14} /></button></td>
+                        <td>
+                          <div className="results-row-actions">
+                            <button className="results-view-btn" type="button" onClick={(event) => { event.stopPropagation(); void selectResult(item.id); }}>View <Icon name="arrow" size={14} /></button>
+                            {user.role === "ADMIN" && (
+                              <button
+                                className="results-delete-btn"
+                                type="button"
+                                aria-label={`Delete ${item.title}`}
+                                title="Delete uploaded result"
+                                disabled={deletingId === item.id}
+                                onClick={(event) => { event.stopPropagation(); void handleDeleteResult(item); }}
+                              >
+                                <Icon name="trash" size={14} />
+                                <span>{deletingId === item.id ? "Deleting…" : "Delete"}</span>
+                              </button>
+                            )}
+                          </div>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -594,7 +637,37 @@ export function ResultsAdminPage({ user, onLoggedOut }: Props) {
                     <h2>{selectedDetail.batch.title}</h2>
                     <p>{selectedDetail.batch.batch || "Batch not recorded"} · {selectedDetail.batch.department} · {selectedDetail.batch.semester_name}</p>
                   </div>
-                  <div className="results-selected-meta"><span><Icon name="calendar" size={14} />{shortDate(selectedDetail.batch.created_at)}</span><strong>{pct(selectedDetail.overview.pass_percentage)}</strong></div>
+                  <div className="results-selected-meta">
+                    <span><Icon name="calendar" size={14} />{shortDate(selectedDetail.batch.created_at)}</span>
+                    <strong>{pct(selectedDetail.overview.pass_percentage)}</strong>
+                    {user.role === "ADMIN" && (
+                      <button
+                        className="results-delete-btn results-delete-btn-selected"
+                        type="button"
+                        disabled={deletingId === selectedDetail.batch.id}
+                        onClick={() => void handleDeleteResult({
+                          id: selectedDetail.batch.id,
+                          title: selectedDetail.batch.title,
+                          department: selectedDetail.batch.department,
+                          batch: selectedDetail.batch.batch,
+                          semester_id: selectedDetail.batch.semester_id,
+                          semester_code: selectedDetail.batch.semester_code,
+                          semester_name: selectedDetail.batch.semester_name,
+                          created_at: selectedDetail.batch.created_at,
+                          source_filename: selectedDetail.batch.source_filename,
+                          students_count: selectedDetail.overview.total_students,
+                          subject_count: selectedDetail.overview.total_subject_entries,
+                          pass_percentage: selectedDetail.overview.pass_percentage,
+                          passed_students: selectedDetail.overview.passed_students,
+                          failed_students: selectedDetail.overview.failed_students,
+                          unknown_students: selectedDetail.overview.unknown_students,
+                        })}
+                      >
+                        <Icon name="trash" size={14} />
+                        <span>{deletingId === selectedDetail.batch.id ? "Deleting…" : "Delete result"}</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
                 <div className="results-detail-support-grid">
                   <article className="results-detail-card-block">

@@ -158,6 +158,11 @@ export async function getResultsAdminDetail(batchId: number): Promise<ResultsAdm
   return apiFetch<ResultsAdminDetail>(`/api/results/admin/${batchId}`);
 }
 
+export async function deleteResultsAdminBatch(batchId: number): Promise<{ id: number; title: string; deleted: boolean }> {
+  return apiFetch<{ id: number; title: string; deleted: boolean }>(`/api/results/admin/${batchId}`, { method: "DELETE" });
+}
+
+
 export interface StudentSemesterResult {
   batch: {
     id: number;

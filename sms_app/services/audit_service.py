@@ -75,6 +75,9 @@ def format_audit_description(row: dict) -> str:
     if action == "UPDATE_PROBLEM_REPORT":
         return f"{actor} updated a problem report."
     if action in {"UPLOAD", "DELETE_UPLOAD"}:
+        if entity == "results":
+            target = _target_name(details)
+            return f"{actor} {'uploaded' if action == 'UPLOAD' else 'deleted'} an uploaded result set{f' ({target})' if target else ''}."
         verb = "uploaded" if action == "UPLOAD" else "removed"
         return f"{actor} {verb} academic calendar information."
     if action == "EXPORT":
