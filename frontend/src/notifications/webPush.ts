@@ -16,10 +16,18 @@ export function webPushSupported(): boolean {
     && "Notification" in window;
 }
 
+/**
+ * Return the push subscription for this origin, waiting for an active
+ * service worker first. A registration can exist while its worker is still
+ * installing; calling pushManager.subscribe() during that window can fail
+ * with: "Subscription failed - no active Service Worker".
+ */
 export async function getExistingPushSubscription(): Promise<PushSubscription | null> {
   if (!webPushSupported()) return null;
   const registration = await navigator.serviceWorker.getRegistration("/");
-  return registration?.pushManager.getSubscription() ?? null;
+  if (!registration) return null;
+  const activeRegistration = registration.active ? registration : await navigator.serviceWorker.ready;
+  return activeRegistration.pushManager.getSubscription() ?? null;
 }
 
 export async function enableWebPush(): Promise<void> {
@@ -40,8 +48,24 @@ export async function enableWebPush(): Promise<void> {
     throw new Error("Web push is not configured on this deployment yet.");
   }
 
-  const registration = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
-  const subscription = await registration.pushManager.subscribe({
+  // Register the worker, then explicitly wait until an ACTIVE worker exists
+  // before calling PushManager.subscribe(). This fixes the Chrome error:
+  // "Failed to execute 'subscribe' on 'PushManager': Subscription failed - no active Service Worker".
+  const registration = await navigator.serviceWorker.register("/sw.js", {
+    scope: "/",
+    updateViaCache: "none",
+  });
+  await registration.update().catch(() => undefined);
+
+  const activeRegistration = registration.active
+    ? registration
+    : await navigator.serviceWorker.ready;
+
+  if (!activeRegistration.active) {
+    throw new Error("The notification service worker could not become active. Reload the page and try again.");
+  }
+
+  const subscription = await activeRegistration.pushManager.subscribe({
     userVisibleOnly: true,
     applicationServerKey: urlBase64ToUint8Array(config.public_key),
   });

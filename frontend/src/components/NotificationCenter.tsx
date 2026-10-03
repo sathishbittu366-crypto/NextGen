@@ -37,6 +37,7 @@ export function NotificationCenter() {
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [unread, setUnread] = useState(0);
   const [preferences, setPreferences] = useState<NotificationPreferences | null>(null);
+  const [pushActive, setPushActive] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -47,6 +48,8 @@ export function NotificationCenter() {
       setNotifications(items.notifications);
       setUnread(items.unread_count);
       setPreferences(prefs);
+      const subscription = await getExistingPushSubscription();
+      setPushActive(Boolean(prefs.push_enabled && subscription));
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : "Could not load notifications");
     }
@@ -102,8 +105,13 @@ export function NotificationCenter() {
     setBusy(true);
     setError(null);
     try {
-      if (preferences?.push_enabled) await disableWebPush();
-      else await enableWebPush();
+      if (pushActive) {
+        await disableWebPush();
+        setPushActive(false);
+      } else {
+        await enableWebPush();
+        setPushActive(true);
+      }
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not change push notifications");
@@ -151,18 +159,20 @@ export function NotificationCenter() {
           <div className="ng-notification-push-row">
             <div>
               <strong>Browser notifications</strong>
-              <span>{pushAvailable ? "Receive timetable and class reminders even when this app is closed." : "Web push needs HTTPS and VAPID setup on the deployment."}</span>
+              <span>{pushAvailable
+                ? (pushActive ? "Enabled on this browser. You can disable it anytime." : "Receive timetable and class reminders even when this app is closed.")
+                : "Web push needs HTTPS and VAPID setup on the deployment."}</span>
             </div>
             <div className="ng-notification-push-actions">
               <button
                 type="button"
-                className={`ng-notification-action ${preferences?.push_enabled ? "active" : ""}`}
+                className={`ng-notification-action ${pushActive ? "active" : ""}`}
                 disabled={busy || !pushAvailable}
                 onClick={() => void togglePush()}
               >
-                {preferences?.push_enabled ? "On" : "Enable"}
+                {pushActive ? "Disable" : "Enable"}
               </button>
-              {preferences?.push_enabled && (
+              {pushActive && (
                 <button
                   type="button"
                   className="ng-notification-test"
