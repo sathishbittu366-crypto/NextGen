@@ -977,6 +977,69 @@ def init_db(db_name=None):
             pass
 
 
+        # ──────────────────────────────────────────────────────────────────────
+        # Reusable notification subsystem. Notifications are persistent records;
+        # browser subscriptions and category preferences are separate so future
+        # producers/channels can reuse the same infrastructure.
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS notification_preferences(
+            username VARCHAR(64) NOT NULL,
+            category VARCHAR(32) NOT NULL CHECK(category IN ('TIMETABLE','CLASS_REMINDER','SYSTEM')),
+            enabled TINYINT(1) NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+            reminder_minutes INT NULL,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY(username, category),
+            FOREIGN KEY(username) REFERENCES users(username) ON UPDATE CASCADE ON DELETE CASCADE,
+            INDEX idx_notification_preferences_category (category, enabled)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """)
+
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS push_subscriptions(
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            username VARCHAR(64) NOT NULL,
+            endpoint VARCHAR(768) NOT NULL UNIQUE,
+            p256dh VARCHAR(255) NOT NULL,
+            auth VARCHAR(255) NOT NULL,
+            expiration_time VARCHAR(64) NULL,
+            user_agent VARCHAR(512) NULL,
+            active TINYINT(1) NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            last_seen_at DATETIME NULL,
+            FOREIGN KEY(username) REFERENCES users(username) ON UPDATE CASCADE ON DELETE CASCADE,
+            INDEX idx_push_subscriptions_user (username, active)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """)
+
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS notifications(
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            username VARCHAR(64) NOT NULL,
+            category VARCHAR(32) NOT NULL CHECK(category IN ('TIMETABLE','CLASS_REMINDER','SYSTEM')),
+            title VARCHAR(180) NOT NULL,
+            body VARCHAR(600) NOT NULL,
+            url VARCHAR(768) NULL,
+            data_json LONGTEXT NULL,
+            channels_json TEXT NULL,
+            source_type VARCHAR(64) NULL,
+            source_id VARCHAR(128) NULL,
+            dedupe_key VARCHAR(255) NULL,
+            status VARCHAR(16) NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING','SENDING','SENT','FAILED','SKIPPED')),
+            attempt_count INT NOT NULL DEFAULT 0,
+            last_error VARCHAR(1200) NULL,
+            scheduled_for DATETIME NOT NULL,
+            sent_at DATETIME NULL,
+            read_at DATETIME NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            FOREIGN KEY(username) REFERENCES users(username) ON UPDATE CASCADE ON DELETE CASCADE,
+            UNIQUE KEY uq_notifications_user_dedupe (username, dedupe_key),
+            INDEX idx_notifications_due (status, scheduled_for),
+            INDEX idx_notifications_user_created (username, created_at),
+            INDEX idx_notifications_unread (username, read_at, created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """)
+
         c.execute("""
         CREATE TABLE IF NOT EXISTS faculty_class_notifications(
             id INT AUTO_INCREMENT PRIMARY KEY,

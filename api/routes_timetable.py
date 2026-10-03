@@ -16,6 +16,7 @@ from api.deps import CurrentUser, get_current_user
 from api.envelope import ApiError, ok
 from database import connect, audit
 from sms_app.services.timetable_service import create_override, delete_override, resolve_effective_schedule, list_effective_today_for_hod, local_now
+from sms_app.services.notification_service import notify_timetable_audience
 
 router = APIRouter(prefix="/api/timetables", tags=["timetable"])
 
@@ -290,6 +291,22 @@ async def timetable_override_create(body: TimetableOverrideBody, user: CurrentUs
         raise ApiError(str(exc), 400, "VALIDATION_ERROR")
     with connect() as c:
         audit(c, user.username, "CREATE", "timetable_override", f"id={row['id']}; entry={body.timetable_entry_id}; date={body.override_date.isoformat()}", actor_role=user.role)
+        entry_info = c.execute(
+            """SELECT e.faculty_username, t.semester_id, t.section_name, s.name AS subject_name
+               FROM timetable_entries e JOIN timetables t ON t.id=e.timetable_id
+               LEFT JOIN subjects s ON s.id=e.subject_id WHERE e.id=%s""",
+            (body.timetable_entry_id,),
+        ).fetchone()
+    if entry_info:
+        recipients = {str(x) for x in (entry_info.get("faculty_username"), row.get("substitute_faculty_username")) if x}
+        notify_timetable_audience(
+            semester_id=int(entry_info["semester_id"]),
+            title="Timetable change",
+            body=f"{entry_info.get('subject_name') or 'A class'} on {body.override_date.strftime('%a %d %b')} has a faculty change. Open Schedule to review the update.",
+            source_id=f"override:{row['id']}",
+            faculty_usernames=recipients,
+            include_students=True,
+        )
     return ok({"override": dict(row)}, status_code=201)
 
 
@@ -304,6 +321,22 @@ async def timetable_override_delete(override_id: int, user: CurrentUser = Depend
         raise ApiError(str(exc), 404, "NOT_FOUND")
     with connect() as c:
         audit(c, user.username, "DELETE", "timetable_override", f"id={override_id}", actor_role=user.role)
+        entry_info = c.execute(
+            """SELECT e.faculty_username, t.semester_id, t.section_name, s.name AS subject_name
+               FROM timetable_entries e JOIN timetables t ON t.id=e.timetable_id
+               LEFT JOIN subjects s ON s.id=e.subject_id WHERE e.id=%s""",
+            (row["timetable_entry_id"],),
+        ).fetchone()
+    if entry_info:
+        recipients = {str(x) for x in (entry_info.get("faculty_username"), row.get("substitute_faculty_username")) if x}
+        notify_timetable_audience(
+            semester_id=int(entry_info["semester_id"]),
+            title="Timetable change reversed",
+            body=f"The faculty change for {entry_info.get('subject_name') or 'a class'} on {row['override_date'].strftime('%a %d %b')} was removed. Open Schedule to review the update.",
+            source_id=f"override-delete:{row['id']}",
+            faculty_usernames=recipients,
+            include_students=True,
+        )
     return ok({"deleted": True, "id": int(row["id"])})
 
 
@@ -421,6 +454,8 @@ async def timetable_save(body: TimetableSaveBody, user: CurrentUser = Depends(ge
     if not body.section_name.strip():
         raise ApiError("Section is required", 400, "VALIDATION_ERROR")
 
+    previous_faculty: set[str] = set()
+    previous_status = None
     with connect() as c:
         normalized = _validate_entries(c, user, body.semester_id, periods, body.entries)
         hod_username = user.username
@@ -434,11 +469,14 @@ async def timetable_save(body: TimetableSaveBody, user: CurrentUser = Depends(ge
 
         existing = None
         if body.id:
-            existing = c.execute("SELECT id, hod_username FROM timetables WHERE id=%s", (body.id,)).fetchone()
+            existing = c.execute("SELECT id, hod_username, status FROM timetables WHERE id=%s", (body.id,)).fetchone()
             if not existing:
                 raise ApiError("Timetable not found", 404, "NOT_FOUND")
             if user.role == "HOD" and str(existing["hod_username"]).lower() != str(user.username).lower():
                 raise ApiError("You do not have access to this timetable", 403, "FORBIDDEN")
+            previous_status = existing.get("status")
+            old_entries = c.execute("SELECT DISTINCT faculty_username FROM timetable_entries WHERE timetable_id=%s AND faculty_username IS NOT NULL", (body.id,)).fetchall()
+            previous_faculty = {str(r["faculty_username"]) for r in old_entries if r.get("faculty_username")}
             c.execute(
                 "UPDATE timetables SET semester_id=%s, section_name=%s, academic_year=%s, period_config_json=%s, status=%s, updated_by=%s, published_at=%s WHERE id=%s",
                 (body.semester_id, body.section_name.strip(), body.academic_year.strip(), json.dumps(periods), body.status, user.username,
@@ -462,6 +500,7 @@ async def timetable_save(body: TimetableSaveBody, user: CurrentUser = Depends(ge
             # connection wrapper intentionally does not expose it.
             timetable_id = int(insert_cursor.lastrowid)
 
+        new_faculty = {str(entry.faculty_username).strip() for entry, _ in normalized if entry.faculty_username and str(entry.faculty_username).strip()}
         for entry, subject in normalized:
             c.execute(
                 """INSERT INTO timetable_entries(timetable_id,day_of_week,section,start_slot,duration,block_type,subject_id,custom_label,faculty_username,room)
@@ -483,7 +522,30 @@ async def timetable_save(body: TimetableSaveBody, user: CurrentUser = Depends(ge
                FROM timetables t JOIN academic_semesters s ON s.id=t.semester_id WHERE t.id=%s""",
             (timetable_id,),
         ).fetchone()
-        return ok({"timetable": _serialize_timetable(c, row)})
+        serialized = _serialize_timetable(c, row)
+
+    # Emit a single reusable notification event after the timetable transaction
+    # commits, so recipients never receive a message for a failed save.
+    if body.status == "PUBLISHED" or str(previous_status or "").upper() == "PUBLISHED":
+        semester_label = serialized.get("semester_code") or serialized.get("semester_name") or f"Semester {body.semester_id}"
+        section_label = serialized.get("section_name") or body.section_name.strip()
+        became_unpublished = body.status != "PUBLISHED"
+        title = "Timetable unpublished" if became_unpublished else ("Timetable published" if str(previous_status or "").upper() != "PUBLISHED" else "Timetable updated")
+        message = (
+            f"{semester_label} · Section {section_label} is no longer published. Open Schedule for the current timetable."
+            if became_unpublished else
+            f"{semester_label} · Section {section_label} has a timetable update. Open Schedule to review it."
+        )
+        student_and_faculty = previous_faculty | new_faculty
+        notify_timetable_audience(
+            semester_id=int(body.semester_id),
+            title=title,
+            body=message,
+            source_id=f"{timetable_id}:{datetime.now().isoformat(timespec='seconds')}",
+            faculty_usernames=student_and_faculty,
+            include_students=True,
+        )
+    return ok({"timetable": serialized})
 
 
 @router.delete("/{timetable_id}")

@@ -29,6 +29,7 @@ from api.routes_files import router as files_router
 from api.routes_reports import router as reports_router
 from api.routes_learning import router as learning_router
 from api.routes_timetable import router as timetable_router
+from api.routes_notifications import router as notifications_router
 
 app = FastAPI(
     title="SMS API",
@@ -126,6 +127,7 @@ if not _has_result_delete:
     app.include_router(result_delete_router)
     print("[*] Result DELETE compatibility route mounted.")
 app.include_router(timetable_router)       # Timetable builder + published viewer
+app.include_router(notifications_router)    # Reusable notification subsystem
 
 
 @app.get("/")
@@ -148,11 +150,18 @@ async def startup_db_init():
         raise RuntimeError(f"Database initialization failed: {exc}") from exc
     try:
         import asyncio
-        from webapp.sms_worker import run_forever
-        asyncio.create_task(run_forever())
+        from webapp.sms_worker import run_forever as run_sms_forever
+        asyncio.create_task(run_sms_forever())
         print("[*] SMS background worker scheduled successfully.")
     except Exception as e:
         print(f"[!] SMS background worker startup error: {e}")
+    try:
+        import asyncio
+        from webapp.notification_worker import run_forever as run_notification_forever
+        asyncio.create_task(run_notification_forever())
+        print("[*] Notification background worker scheduled successfully.")
+    except Exception as e:
+        print(f"[!] Notification background worker startup error: {e}")
 
 
 

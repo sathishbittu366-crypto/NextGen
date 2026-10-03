@@ -19,7 +19,7 @@ TASK_STATE
 # Build outputs
 frontend/dist/
 frontend/node_modules/
-
+vapid-private.pem
 USERMANUAL.txt
 load-tests
 

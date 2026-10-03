@@ -4,7 +4,7 @@ import { type CurrentUser, logout } from "../api/auth";
 import { navItemsFor } from "../nav";
 import { getMySmsAccess } from "../api/logs";
 import { ReportProblemModal } from "./ReportProblemModal";
-import { ClassReminders } from "./ClassReminders";
+import { NotificationCenter } from "./NotificationCenter";
 
 interface AppShellProps {
   user: CurrentUser;
@@ -119,8 +119,7 @@ export function AppShell({ user, activeNav, heading, whoami, onLoggedOut, childr
         </div>
       </aside>
 
-      {user.role === "FACULTY" && <ClassReminders />}
-      <main className="main-area ng-main">
+            <main className="main-area ng-main">
         <header className="main-top ng-topbar">
           <div className="ng-mobile-brand">
             <button
@@ -139,7 +138,10 @@ export function AppShell({ user, activeNav, heading, whoami, onLoggedOut, childr
             <h1>{heading}</h1>
             {whoami && <p>{whoami}</p>}
           </div>
-          <div className="ng-topbar-role">{role}</div>
+          <div className="ng-topbar-actions">
+            <NotificationCenter />
+            <div className="ng-topbar-role">{role}</div>
+          </div>
         </header>
         <div className="main-body ng-main-body">{children}</div>
       </main>
