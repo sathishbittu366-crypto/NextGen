@@ -158,8 +158,11 @@ export async function getResultsAdminDetail(batchId: number): Promise<ResultsAdm
   return apiFetch<ResultsAdminDetail>(`/api/results/admin/${batchId}`);
 }
 
-export async function deleteResultsAdminBatch(batchId: number): Promise<{ id: number; title: string; deleted: boolean }> {
-  return apiFetch<{ id: number; title: string; deleted: boolean }>(`/api/results/admin/${batchId}`, { method: "DELETE" });
+export async function deleteResultsAdminBatch(batchId: number, deleteKey: string): Promise<{ id: number; title: string; deleted: boolean }> {
+  return apiFetch<{ id: number; title: string; deleted: boolean }>(`/api/results/admin/${batchId}`, {
+    method: "DELETE",
+    headers: { "X-Result-Delete-Key": deleteKey },
+  });
 }
 
 

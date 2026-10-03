@@ -88,3 +88,17 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 ```
 
 New gateway `password` and `device_id` values are encrypted at rest. API responses never return the raw values. Existing plaintext gateway credentials are deliberately not auto-migrated in this pass; editing a legacy cloud gateway requires re-entering its device ID and password, which writes ciphertext before the gateway can send.
+
+## Published result deletion
+
+Deleting an uploaded result is restricted to `ADMIN` users and requires a second confirmation key. The frontend sends the key in the `X-Result-Delete-Key` request header; it is never placed in the URL or audit log.
+
+Set the backend environment variable before starting the API:
+
+```env
+RESULT_DELETE_KEY=choose-a-private-admin-delete-key
+```
+
+For local development, the backend falls back to `DELETE-RESULT` when the variable is not set. The permanent authorization boundary remains the `ADMIN` role check.
+
+After updating the codebase, fully restart the Uvicorn process. `run_api.py` now performs a startup check that the `DELETE /api/results/admin/{batch_id}` route is registered and launches the concrete FastAPI app object, which avoids accidentally loading a stale `api.app` module from another working directory.

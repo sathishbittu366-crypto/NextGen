@@ -110,6 +110,21 @@ app.include_router(me_router)             # Group 6 — Self-service
 app.include_router(files_router)          # Group 7 — Protected files
 app.include_router(reports_router)        # Problem Reports
 app.include_router(learning_router)       # Notes + Results
+
+# Compatibility guard for deployments where an older learning router is still
+# present: mount only the dedicated DELETE operation when the main app does
+# not already expose it. This never duplicates the endpoint in a current
+# checkout.
+_result_delete_path = "/api/results/admin/{batch_id}"
+_has_result_delete = any(
+    getattr(route, "path", "") == _result_delete_path
+    and "DELETE" in (getattr(route, "methods", set()) or set())
+    for route in app.routes
+)
+if not _has_result_delete:
+    from api.routes_result_delete import router as result_delete_router
+    app.include_router(result_delete_router)
+    print("[*] Result DELETE compatibility route mounted.")
 app.include_router(timetable_router)       # Timetable builder + published viewer
 
 

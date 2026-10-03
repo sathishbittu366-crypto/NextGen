@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Header, Query, UploadFile
 from fastapi.responses import FileResponse, Response
 
 from api.deps import CurrentUser, get_current_user
@@ -167,9 +167,27 @@ async def results_upload(
 
 
 @router.delete("/api/results/admin/{batch_id}")
-async def results_admin_delete(batch_id: int, user: CurrentUser = Depends(get_current_user)):
+async def results_admin_delete(
+    batch_id: int,
+    delete_key: str | None = Header(default=None, alias="X-Result-Delete-Key"),
+    user: CurrentUser = Depends(get_current_user),
+):
+    """Delete one published result set.
+
+    ADMIN RBAC is the security boundary. The delete key is a second, explicit
+    confirmation guard so an accidental click cannot remove an uploaded result.
+    The key is never placed in the URL, query string, or audit log.
+    """
     if user.role != "ADMIN":
         raise ApiError("Admin access only", 403, "FORBIDDEN")
+
+    import os
+    configured_key = os.environ.get("RESULT_DELETE_KEY", "DELETE-RESULT").strip()
+    if not configured_key:
+        raise ApiError("Result delete key is not configured", 503, "DELETE_KEY_NOT_CONFIGURED")
+    if not delete_key or delete_key.strip() != configured_key:
+        raise ApiError("Invalid result delete key", 403, "INVALID_DELETE_KEY")
+
     result = delete_result_batch(batch_id=batch_id, admin_username=user.username)
     if not result:
         raise ApiError("Result upload not found", 404, "NOT_FOUND")

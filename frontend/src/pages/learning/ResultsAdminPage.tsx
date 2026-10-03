@@ -325,6 +325,8 @@ export function ResultsAdminPage({ user, onLoggedOut }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [showUpload, setShowUpload] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ResultsAdminUpload | null>(null);
+  const [deleteKey, setDeleteKey] = useState("");
 
   const loadDashboard = async (selectId?: number | null) => {
     try {
@@ -362,17 +364,26 @@ export function ResultsAdminPage({ user, onLoggedOut }: Props) {
 
   useEffect(() => { void loadDashboard(); }, []);
 
-  async function handleDeleteResult(item: ResultsAdminUpload) {
-    if (deletingId != null) return;
-    const confirmed = window.confirm(
-      `Delete “${item.title}” for ${item.batch || "this batch"} · ${item.semester_name}?\n\nThis permanently removes the uploaded result set and its imported marks. Student, subject, attendance, and semester records are not deleted.`,
-    );
-    if (!confirmed) return;
+  function handleDeleteResult(item: ResultsAdminUpload) {
+    if (user.role !== "ADMIN" || deletingId != null) return;
+    setError(null);
+    setDeleteKey("");
+    setDeleteTarget(item);
+  }
+
+  async function confirmDeleteResult() {
+    if (!deleteTarget || deletingId != null) return;
+    if (!deleteKey.trim()) {
+      setError("Enter the result delete key to continue");
+      return;
+    }
 
     try {
-      setDeletingId(item.id);
+      setDeletingId(deleteTarget.id);
       setError(null);
-      await deleteResultsAdminBatch(item.id);
+      await deleteResultsAdminBatch(deleteTarget.id, deleteKey.trim());
+      setDeleteTarget(null);
+      setDeleteKey("");
       await loadDashboard(null);
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : "Failed to delete the uploaded result");
@@ -710,6 +721,75 @@ export function ResultsAdminPage({ user, onLoggedOut }: Props) {
       </div>
 
       {showUpload && <ResultsUploadDrawer user={user} onLoggedOut={onLoggedOut} onClose={() => setShowUpload(false)} onUploaded={(batchId) => { void loadDashboard(batchId); }} />}
+
+      {deleteTarget && user.role === "ADMIN" && (
+        <div className="results-delete-overlay" role="dialog" aria-modal="true" aria-labelledby="results-delete-title">
+          <button
+            className="results-delete-backdrop"
+            type="button"
+            aria-label="Cancel result deletion"
+            onClick={() => { if (deletingId == null) setDeleteTarget(null); }}
+          />
+          <section className="results-delete-dialog">
+            <div className="results-delete-dialog-head">
+              <div>
+                <span className="results-delete-kicker">Admin action</span>
+                <h2 id="results-delete-title">Delete uploaded result?</h2>
+              </div>
+              <button
+                className="results-icon-btn"
+                type="button"
+                aria-label="Close"
+                disabled={deletingId != null}
+                onClick={() => setDeleteTarget(null)}
+              >
+                <Icon name="close" size={18} />
+              </button>
+            </div>
+
+            <div className="results-delete-dialog-body">
+              <div className="results-delete-summary">
+                <strong>{deleteTarget.title}</strong>
+                <span>{deleteTarget.batch || "Batch not recorded"} · {deleteTarget.department} · {deleteTarget.semester_name}</span>
+              </div>
+              <p>This permanently removes this uploaded result set and its imported marks. Student, subject, attendance, and semester records remain untouched.</p>
+              <label className="results-delete-key-label" htmlFor="result-delete-key">Delete key</label>
+              <input
+                id="result-delete-key"
+                className="results-delete-key-input"
+                type="password"
+                autoComplete="off"
+                value={deleteKey}
+                onChange={(event) => setDeleteKey(event.target.value)}
+                onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void confirmDeleteResult(); } }}
+                placeholder="Enter admin delete key"
+                disabled={deletingId != null}
+              />
+              <small className="results-delete-key-hint">The key is checked by the server and is never sent in the URL.</small>
+            </div>
+
+            <div className="results-delete-dialog-actions">
+              <button
+                className="results-delete-cancel"
+                type="button"
+                disabled={deletingId != null}
+                onClick={() => setDeleteTarget(null)}
+              >
+                Cancel
+              </button>
+              <button
+                className="results-delete-confirm"
+                type="button"
+                disabled={deletingId != null || !deleteKey.trim()}
+                onClick={() => void confirmDeleteResult()}
+              >
+                <Icon name="trash" size={14} />
+                {deletingId === deleteTarget.id ? "Deleting…" : "Delete result"}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </AppShell>
   );
 }

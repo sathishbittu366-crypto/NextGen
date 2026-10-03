@@ -47,5 +47,34 @@ if __name__ == "__main__":
     else:
         print("[*] SMS worker autostart disabled (SMS_WORKER_AUTOSTART=0).")
 
+    # Always resolve imports from the directory containing this launcher.
+    # This avoids accidentally loading an installed/stale `api` package when
+    # the project is launched from PowerShell, VS Code, or another directory.
+    from pathlib import Path
+    project_root = Path(__file__).resolve().parent
+    project_root_str = str(project_root)
+    if sys.path[0] != project_root_str:
+        sys.path.insert(0, project_root_str)
+
+    from api.app import app
+
+    result_delete_routes = [
+        route for route in app.routes
+        if getattr(route, "path", "") == "/api/results/admin/{batch_id}"
+        and "DELETE" in (getattr(route, "methods", set()) or set())
+    ]
+    if result_delete_routes:
+        route = result_delete_routes[0]
+        module_name = getattr(getattr(route, "endpoint", None), "__module__", "unknown")
+        print("[*] Admin result deletion route: DELETE /api/results/admin/{batch_id}")
+        print(f"[*] Result DELETE handler module: {module_name}")
+    else:
+        # api.app normally mounts the current route or its compatibility
+        # fallback. Keep this diagnostic non-fatal so the server can still
+        # boot and report its complete route table instead of crashing before
+        # Uvicorn starts.
+        print("[!] WARNING: admin result DELETE route is not registered.")
+        print("[!] Verify that this folder contains api/routes_learning.py and api/routes_result_delete.py.")
+
     print(f"[*] Starting VCET CSD SMS Backend on http://0.0.0.0:{port} ...")
-    uvicorn.run("api.app:app", host="0.0.0.0", port=port, reload=False)
+    uvicorn.run(app, host="0.0.0.0", port=port, reload=False)
