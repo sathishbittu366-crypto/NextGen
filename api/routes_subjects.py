@@ -45,9 +45,23 @@ async def subjects_list(user: CurrentUser = Depends(get_current_user)):
             subj_rows.append(subj_dict)
         grouped[sem_code] = subj_rows
     with connect() as c:
-        faculty = c.execute(
-            "SELECT username, full_name FROM users WHERE role='FACULTY' AND active=1 ORDER BY full_name"
-        ).fetchall()
+        if user.role == "ADMIN":
+            faculty = c.execute(
+                "SELECT username, full_name FROM users WHERE role='FACULTY' AND active=1 ORDER BY full_name, username"
+            ).fetchall()
+        else:
+            # HOD-facing assignment options use the same HOD ownership boundary
+            # as /api/faculty. This prevents another HOD's Faculty account from
+            # appearing merely because that account is active.
+            faculty = c.execute(
+                """SELECT username, full_name
+                     FROM users
+                    WHERE role='FACULTY'
+                      AND active=1
+                      AND LOWER(TRIM(COALESCE(hod_username,'')))=LOWER(TRIM(%s))
+                    ORDER BY full_name, username""",
+                (user.username,),
+            ).fetchall()
     return ok({
         "semesters": semesters,
         "all_semesters": all_semesters,
@@ -130,7 +144,7 @@ class AssignFacultyBody(BaseModel):
 async def assign_faculty(subject_id: int, body: AssignFacultyBody, user: CurrentUser = Depends(get_current_user)):
     _require_hod(user)
     try:
-        set_subject_faculty(subject_id=subject_id, faculty_usernames=body.faculty_usernames, actor=user.username)
+        set_subject_faculty(subject_id=subject_id, faculty_usernames=body.faculty_usernames, actor=user.username, scope_hod_username=user.username if user.role == "HOD" else None)
         return ok({"ok": True})
     except ValueError as e:
         raise ApiError(str(e), 400, "VALIDATION_ERROR")

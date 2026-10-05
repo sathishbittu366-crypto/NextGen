@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   getMonthlyRegister,
-  getSetup,
+  getMonthlyRegisterSetup,
   getSubjectsForSemester,
   monthlyRegisterPdfUrl,
   type MonthlyAttendanceDay,
@@ -93,7 +93,7 @@ export function MonthlyAttendancePage({ user, onLoggedOut }: MonthlyAttendancePa
     let alive = true;
     (async () => {
       try {
-        const setup = await getSetup();
+        const setup = await getMonthlyRegisterSetup();
         if (!alive) return;
         setSemesters(setup.semesters);
         const initial = setup.default_semester_id ?? setup.semesters[0]?.id ?? null;
@@ -115,7 +115,7 @@ export function MonthlyAttendancePage({ user, onLoggedOut }: MonthlyAttendancePa
       try {
         setLoadingSubjects(true);
         setError(null);
-        const result = await getSubjectsForSemester(semesterId);
+        const result = await getSubjectsForSemester(semesterId, { includeHistorical: true });
         if (!alive) return;
         setSubjects(result.subjects ?? []);
         setSubjectId((current) => (current && result.subjects.some((s) => s.id === current) ? current : result.subjects[0]?.id ?? null));

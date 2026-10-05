@@ -10,8 +10,8 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from database import (
-    audit, connect, create_user, reset_student_password,
-    get_all_role_permissions, update_role_permissions,
+    audit, connect, create_user, recreate_faculty_account, reset_student_password,
+    get_all_role_permissions, update_role_permissions, reconcile_hod_scopes,
     get_user_permissions, update_user_permissions, IntegrityError
 )
 from sms_app.services.attendance_service import faculty_teaching_hours, subject_faculty_map
@@ -34,10 +34,23 @@ def _can_manage_target(user: CurrentUser, row) -> bool:
     if user.role == "ADMIN":
         return row["role"] != "ADMIN" and row["username"] != user.username
     if row["role"] == "FACULTY":
-        return (row["hod_username"] or "").lower() == user.username.lower()
+        return (row["hod_username"] or "").strip().lower() == user.username.strip().lower()
     if row["role"] == "STUDENT":
-        return (row["hod_username"] or "").lower() == user.username.lower()
+        return (row["hod_username"] or "").strip().lower() == user.username.strip().lower()
     return False
+
+
+def _repair_orphan_faculty_scope(c, user: CurrentUser) -> None:
+    """Run the centralized, fail-closed legacy HOD scope reconciliation.
+
+    The old implementation guessed the HOD only when the live HOD row itself
+    happened to have ``department='CSD'``. That made a valid HOD account with a
+    missing department unable to recover an orphan Faculty account. Keep the
+    recovery policy in one place so startup and the Faculty management page use
+    identical rules.
+    """
+    if user.role == "HOD":
+        reconcile_hod_scopes(c)
 
 
 @router.get("")
@@ -57,8 +70,18 @@ async def faculty_page(user: CurrentUser = Depends(get_current_user)):
                 "SELECT id, username, full_name, role, department, hod_username, designation, email, phone, active, must_change_password, student_roll_no FROM users WHERE role IN ('HOD','FACULTY') ORDER BY (role='HOD') DESC, username ASC"
             ).fetchall()
         else:
+            # The listing endpoint is also a repair/recovery surface. Fix
+            # legacy orphan Faculty rows first, then use the HOD owner as the
+            # authoritative scope for the final result. Department is normalized
+            # during account repair, but HOD ownership is the security boundary.
+            _repair_orphan_faculty_scope(c, user)
             accounts = c.execute(
-                "SELECT id, username, full_name, role, department, hod_username, designation, email, phone, active, must_change_password, student_roll_no FROM users WHERE role='FACULTY' AND LOWER(COALESCE(hod_username,''))=LOWER(%s) ORDER BY username ASC",
+                """SELECT id, username, full_name, role, department, hod_username,
+                          designation, email, phone, active, must_change_password, student_roll_no
+                     FROM users
+                    WHERE role='FACULTY'
+                      AND LOWER(TRIM(COALESCE(hod_username,'')))=LOWER(TRIM(%s))
+                    ORDER BY username ASC""",
                 (user.username,),
             ).fetchall()
             scoped_usernames = {a["username"].lower() for a in accounts}
@@ -174,6 +197,27 @@ async def create_account(body: CreateAccountBody, user: CurrentUser = Depends(ge
             new_row = c.execute("SELECT id FROM users WHERE username=?", (body.username.strip(),)).fetchone()
         return ok({"id": new_row["id"] if new_row else None, "username": body.username.strip()})
     except (ValueError, IntegrityError) as e:
+        raise ApiError(str(e), 400, "VALIDATION_ERROR")
+
+
+class RecreateFacultyBody(BaseModel):
+    password: str
+    full_name: str | None = None
+
+
+@router.post("/accounts/{account_id}/recreate")
+async def recreate_account(account_id: int, body: RecreateFacultyBody, user: CurrentUser = Depends(get_current_user)):
+    _require_hod_or_admin(user)
+    with connect() as c:
+        row = c.execute("SELECT id, username, role, hod_username, department, full_name FROM users WHERE id=%s", (account_id,)).fetchone()
+    if not row:
+        raise ApiError("Account not found", 404, "NOT_FOUND")
+    if row["role"] != "FACULTY":
+        raise ApiError("Only Faculty accounts can be recreated", 400, "VALIDATION_ERROR")
+    try:
+        result = recreate_faculty_account(row["username"], body.password, user.username, body.full_name)
+        return ok({"recreated": True, **result})
+    except ValueError as e:
         raise ApiError(str(e), 400, "VALIDATION_ERROR")
 
 

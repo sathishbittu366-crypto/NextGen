@@ -56,6 +56,7 @@ from sms_app.services.attendance_service import (
     list_all_semesters,
     upload_attendance_excel,
     build_attendance_template,
+    faculty_proxy_hod_username,
 )
 from sms_app.services.attendance_pdf import build_attendance_pdf
 from sms_app.services.sms_service import queue_absentees_for_session
@@ -90,14 +91,18 @@ def _load_session_or_404(session_id: int):
 
 
 def _require_owner_or_hod(user: CurrentUser, session) -> None:
-    # Faculty own their own sessions. A HOD may only access sessions belonging
-    # to that HOD's organizational scope. ADMIN remains the cross-scope role.
-    # Physical college location is never used for authorization.
+    # Faculty own their own sessions. A dedicated HOD Faculty proxy may also
+    # operate on historical sessions imported/created under the HOD account,
+    # but only when the session explicitly belongs to that same HOD scope.
+    # ADMIN remains the cross-scope role.
     if user.role == "ADMIN" or user.username == "admin":
         return
     if user.role == "FACULTY" and session["faculty_username"] != user.username:
-        raise ApiError("You do not have access to this session", status_code=403, code="FORBIDDEN")
-    if user.role == "HOD" and session.get("hod_username") != user.username:
+        with connect() as c:
+            proxy_hod = faculty_proxy_hod_username(c, user.username)
+        if not proxy_hod or str(session.get("faculty_username") or "").casefold() != proxy_hod.casefold() or str(session.get("hod_username") or "").casefold() != proxy_hod.casefold():
+            raise ApiError("You do not have access to this session", status_code=403, code="FORBIDDEN")
+    if user.role == "HOD" and str(session.get("hod_username") or "").casefold() != str(user.username).casefold():
         raise ApiError("This session belongs to another HOD scope", status_code=403, code="FORBIDDEN")
     if user.role == "HOD" and not session.get("hod_username"):
         raise ApiError("This session has no HOD ownership assigned", status_code=403, code="FORBIDDEN")
@@ -197,12 +202,13 @@ async def setup(user: CurrentUser = Depends(get_current_user)):
 @router.get("/subjects")
 async def subjects_for_semester(
     semester_id: int = Query(...),
+    include_historical: bool = Query(default=False),
     user: CurrentUser = Depends(get_current_user),
 ):
     """Subject list refresh when the semester picker changes — JSON
     equivalent of the old HTMX partial /attendance/subjects-for-semester."""
     _require_staff(user)
-    subjects = list_subjects(semester_id, user.username, user.role)
+    subjects = list_subjects(semester_id, user.username, user.role, include_historical=include_historical)
     return ok({
         "subjects": [
             {"id": s["id"], "code": s["code"], "name": s["name"], "has_lab": bool(s["has_lab"])}
@@ -214,6 +220,63 @@ async def subjects_for_semester(
 # ──────────────────────────────────────────────
 # GET /api/attendance/register — monthly staff register
 # ──────────────────────────────────────────────
+
+@router.get("/register/setup")
+async def monthly_register_setup(user: CurrentUser = Depends(get_current_user)):
+    """Monthly-register-only context. Unlike Mark Attendance setup, this
+    includes historical subjects for an HOD's dedicated Faculty proxy and
+    chooses the latest semester containing real attendance data as the
+    default. This keeps historical/imported registers discoverable without
+    broadening the normal Mark Attendance subject permissions.
+    """
+    _require_staff(user)
+    semesters = list_semesters()
+    if not semesters:
+        return ok({"semesters": [], "subjects": [], "default_semester_id": None, "today": date.today().isoformat()})
+
+    with connect() as c:
+        target_username = user.username
+        proxy_hod = faculty_proxy_hod_username(c, user.username) if user.role == "FACULTY" else None
+
+        default_semester_id = None
+        if user.role == "FACULTY" and proxy_hod:
+            latest = c.execute(
+                """SELECT semester_id FROM attendance_sessions
+                   WHERE saved_at IS NOT NULL
+                     AND ((faculty_username=%s) OR (faculty_username=%s AND LOWER(COALESCE(hod_username,''))=LOWER(%s)))
+                   ORDER BY attendance_date DESC, id DESC LIMIT 1""",
+                (target_username, proxy_hod, proxy_hod),
+            ).fetchone()
+            default_semester_id = int(latest["semester_id"]) if latest else None
+        elif user.role == "FACULTY":
+            latest = c.execute(
+                "SELECT semester_id FROM attendance_sessions WHERE faculty_username=%s AND saved_at IS NOT NULL ORDER BY attendance_date DESC, id DESC LIMIT 1",
+                (target_username,),
+            ).fetchone()
+            default_semester_id = int(latest["semester_id"]) if latest else None
+
+        if default_semester_id is None:
+            # Fall back to the first semester that has at least one visible
+            # subject for the caller; HOD/ADMIN retain their all-subject view.
+            for sem in semesters:
+                visible = list_subjects(sem["id"], user.username, user.role, include_historical=(user.role == "FACULTY"))
+                if visible:
+                    default_semester_id = int(sem["id"])
+                    break
+            if default_semester_id is None:
+                default_semester_id = int(semesters[0]["id"])
+
+    subjects = list_subjects(
+        default_semester_id, user.username, user.role,
+        include_historical=(user.role == "FACULTY"),
+    )
+    return ok({
+        "semesters": [{"id": s["id"], "code": s["code"], "name": s["name"]} for s in semesters],
+        "subjects": [{"id": s["id"], "code": s["code"], "name": s["name"], "has_lab": bool(s["has_lab"])} for s in subjects],
+        "default_semester_id": default_semester_id,
+        "today": date.today().isoformat(),
+    })
+
 
 @router.get("/register")
 async def monthly_register(
@@ -230,19 +293,15 @@ async def monthly_register(
     # impersonate another faculty account through a query parameter. HODs are
     # also scoped to their own organizational faculty accounts.
     if user.role == "HOD":
-        from database import connect
         with connect() as c:
             target = c.execute(
                 "SELECT username, role, hod_username, department, active FROM users WHERE username=%s",
                 (target_faculty,),
             ).fetchone()
-        if not target or not target["active"] or (
-            target["username"] != user.username
-            and target["role"] != "FACULTY"
-            and target.get("hod_username") != user.username
-        ):
-            if target and target.get("department") != getattr(user, "department", "CSD") and target.get("hod_username") != user.username and target["username"] != user.username:
-                raise ApiError("Faculty account is outside your HOD scope", 403, "FORBIDDEN")
+        same_hod_account = target and str(target["username"]).casefold() == str(user.username).casefold() and target["role"] == "HOD"
+        in_hod_faculty_scope = target and target["role"] == "FACULTY" and str(target.get("hod_username") or "").casefold() == str(user.username).casefold()
+        if not target or not target["active"] or not (same_hod_account or in_hod_faculty_scope):
+            raise ApiError("Faculty account is outside your HOD scope", 403, "FORBIDDEN")
     try:
         data = month_register(
             faculty_username=target_faculty,
@@ -265,19 +324,15 @@ async def monthly_register_pdf(
     _require_staff(user)
     target_faculty = user.username if user.role == "FACULTY" else (faculty_username or user.username)
     if user.role == "HOD":
-        from database import connect
         with connect() as c:
             target = c.execute(
                 "SELECT username, role, hod_username, department, active FROM users WHERE username=%s",
                 (target_faculty,),
             ).fetchone()
-        if not target or not target["active"] or (
-            target["username"] != user.username
-            and target["role"] != "FACULTY"
-            and target.get("hod_username") != user.username
-        ):
-            if target and target.get("department") != getattr(user, "department", "CSD") and target.get("hod_username") != user.username and target["username"] != user.username:
-                raise ApiError("Faculty account is outside your HOD scope", 403, "FORBIDDEN")
+        same_hod_account = target and str(target["username"]).casefold() == str(user.username).casefold() and target["role"] == "HOD"
+        in_hod_faculty_scope = target and target["role"] == "FACULTY" and str(target.get("hod_username") or "").casefold() == str(user.username).casefold()
+        if not target or not target["active"] or not (same_hod_account or in_hod_faculty_scope):
+            raise ApiError("Faculty account is outside your HOD scope", 403, "FORBIDDEN")
     try:
         data = month_register(
             faculty_username=target_faculty,
@@ -523,15 +578,26 @@ async def student_subject_attendance_dates(
                 "SELECT 1 FROM subject_faculty WHERE subject_id=%s AND faculty_username=%s",
                 (subject_id, user.username),
             ).fetchone()
-            if not assigned:
-                raise ApiError("This subject is not assigned to the selected faculty account", status_code=403, code="FORBIDDEN")
-            faculty = c.execute(
+            faculty_hod = str((c.execute(
                 "SELECT hod_username FROM users WHERE username=%s AND role='FACULTY' AND active=1",
                 (user.username,),
-            ).fetchone()
-            faculty_hod = str((faculty or {}).get("hod_username") or "").casefold()
-            if not faculty_hod or str(student.get("hod_username") or "").casefold() != faculty_hod:
+            ).fetchone() or {}).get("hod_username") or "").casefold()
+            proxy_hod = faculty_proxy_hod_username(c, user.username)
+            if not assigned and not proxy_hod:
+                raise ApiError("This subject is not assigned to the selected faculty account", status_code=403, code="FORBIDDEN")
+            expected_scope = (proxy_hod or faculty_hod).casefold()
+            if not expected_scope or str(student.get("hod_username") or "").casefold() != expected_scope:
                 raise ApiError("Student is outside your faculty scope", status_code=403, code="FORBIDDEN")
+            if proxy_hod and not assigned:
+                visible_session = c.execute(
+                    """SELECT 1 FROM attendance_sessions
+                       WHERE subject_id=%s AND semester_id=%s
+                         AND (faculty_username=%s AND LOWER(COALESCE(hod_username,''))=LOWER(%s))
+                       LIMIT 1""",
+                    (subject_id, semester_id, proxy_hod, proxy_hod),
+                ).fetchone()
+                if not visible_session:
+                    raise ApiError("This subject has no attendance history in your HOD Faculty scope", status_code=403, code="FORBIDDEN")
 
         rows = c.execute(
             """

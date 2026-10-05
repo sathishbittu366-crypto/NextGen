@@ -108,8 +108,14 @@ export async function getSetup(): Promise<SetupData> {
   return apiFetch<SetupData>("/api/attendance/setup");
 }
 
-export async function getSubjectsForSemester(semesterId: number): Promise<SubjectsData> {
-  return apiFetch<SubjectsData>(`/api/attendance/subjects?semester_id=${semesterId}`);
+export async function getMonthlyRegisterSetup(): Promise<SetupData> {
+  return apiFetch<SetupData>("/api/attendance/register/setup");
+}
+
+export async function getSubjectsForSemester(semesterId: number, options?: { includeHistorical?: boolean }): Promise<SubjectsData> {
+  const qs = new URLSearchParams({ semester_id: String(semesterId) });
+  if (options?.includeHistorical) qs.set("include_historical", "true");
+  return apiFetch<SubjectsData>(`/api/attendance/subjects?${qs.toString()}`);
 }
 
 export async function openSession(body: OpenSessionBody): Promise<AttendanceSession> {

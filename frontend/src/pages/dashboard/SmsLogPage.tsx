@@ -324,7 +324,7 @@ export function SmsLogPage({ user, onLoggedOut }: Props) {
     <AppShell user={user as any} activeNav="sms-log" heading={isFaculty ? "SMS Gateway" : "Absentee SMS"} onLoggedOut={onLoggedOut}>
       <ErrorPopup message={error} onClose={() => setError(null)} />
       <ToastPopup message={success} onClose={() => setSuccess(null)} />
-      <div style={{ display: "grid", gap: 18, maxWidth: 1100, margin: "0 auto" }}>
+      <div className="sms-log-page" style={{ display: "grid", gap: 14, maxWidth: 1100, margin: "0 auto" }}>
 
         {isHod && (
           <section style={cardStyle}>
@@ -420,28 +420,30 @@ export function SmsLogPage({ user, onLoggedOut }: Props) {
 
           {isFaculty && !currentGateway && <div style={{ ...emptyStyle, textAlign: "left", marginBottom: 14 }}><strong style={{ color: "var(--text)" }}>No gateway configured yet.</strong><div style={{ marginTop: 4 }}>Add your own gateway below. Other Faculty gateway credentials are never exposed to this account.</div></div>}
 
-          <div style={gridStyle}>
+          <div className="sms-log-gateway-meta">
             <Field label="Gateway name"><input style={inputStyle} value={gateway.gateway_name} onChange={(e) => setGateway({ ...gateway, gateway_name: e.target.value })} /></Field>
             <Field label="Mode"><select style={inputStyle} value={gateway.gateway_mode} onChange={(e) => setGateway({ ...gateway, gateway_mode: e.target.value as GatewayForm["gateway_mode"] })}><option value="cloud">Cloud Server</option><option value="local">Local Server</option><option value="modem">USB / Serial Modem</option></select></Field>
           </div>
-          {gateway.gateway_mode === "cloud" && <div style={gridStyle}>
+          {gateway.gateway_mode === "cloud" && <div className="sms-log-gateway-fields">
             <Field label="Device ID"><input style={inputStyle} value={gateway.device_id} onChange={(e) => setGateway({ ...gateway, device_id: e.target.value })} placeholder={currentGateway?.device_id_masked || "Enter device ID"} /></Field>
             <Field label="Cloud username"><input style={inputStyle} value={gateway.username} onChange={(e) => setGateway({ ...gateway, username: e.target.value })} /></Field>
             <Field label={`Cloud password${currentGateway?.password_set ? " (leave blank to keep)" : ""}`}><input type="password" style={inputStyle} value={gateway.password} onChange={(e) => setGateway({ ...gateway, password: e.target.value })} /></Field>
             <Field label="SIM slot (optional)"><input type="number" min={1} max={3} style={inputStyle} value={gateway.sim_number} onChange={(e) => setGateway({ ...gateway, sim_number: e.target.value })} /></Field>
           </div>}
-          {gateway.gateway_mode === "local" && <div style={gridStyle}>
+          {gateway.gateway_mode === "local" && <div className="sms-log-gateway-fields sms-log-gateway-fields--local">
             <Field label="Local server URL"><input style={inputStyle} value={gateway.local_url} onChange={(e) => setGateway({ ...gateway, local_url: e.target.value })} placeholder="http://phone-ip:8080" /></Field>
             <Field label="Username"><input style={inputStyle} value={gateway.username} onChange={(e) => setGateway({ ...gateway, username: e.target.value })} /></Field>
             <Field label="Password"><input type="password" style={inputStyle} value={gateway.password} onChange={(e) => setGateway({ ...gateway, password: e.target.value })} /></Field>
           </div>}
-          {gateway.gateway_mode === "modem" && <div style={gridStyle}>
+          {gateway.gateway_mode === "modem" && <div className="sms-log-gateway-fields sms-log-gateway-fields--modem">
             <Field label="Serial port"><input style={inputStyle} value={gateway.modem_port} onChange={(e) => setGateway({ ...gateway, modem_port: e.target.value })} placeholder="COM3 or /dev/ttyUSB0" /></Field>
             <Field label="Baud rate"><input style={inputStyle} value={gateway.modem_baud} onChange={(e) => setGateway({ ...gateway, modem_baud: e.target.value })} /></Field>
           </div>}
-          <label style={checkStyle}><input type="checkbox" checked={gateway.active} onChange={(e) => setGateway({ ...gateway, active: e.target.checked })} /> Gateway enabled</label>
-          {currentGateway && !isAdmin && <label style={checkStyle}><input type="checkbox" checked={Boolean(currentGateway.auto_send)} onChange={async (e) => { try { const res = await setSmsGatewayAutoSend(currentGateway.id, e.target.checked); setGateways(old => old.map(g => g.id === currentGateway.id ? { ...g, auto_send: res.auto_send } : g)); setSuccess(res.auto_send ? "Auto-send enabled for your gateway." : "Auto-send disabled."); } catch (err) { setError(err instanceof ApiClientError ? err.message : "Could not change auto-send setting"); } }} /> Auto-send approved SMS</label>}
-          <div style={actionsStyle}><button className="btn btn-primary" onClick={() => void saveGateway()} disabled={busy !== null || (isFaculty && !facultyAccess?.enabled)}>{busy === "gateway" ? "Saving…" : "Save gateway"}</button>{currentGateway && <button className="btn btn-outline" onClick={() => void testConnection()} disabled={busy !== null}>{busy === "connection" ? "Testing…" : "Test connection"}</button>}</div>
+          <div className="sms-log-gateway-options">
+            <label className="sms-log-check"><input type="checkbox" checked={gateway.active} onChange={(e) => setGateway({ ...gateway, active: e.target.checked })} /> <span>Gateway enabled</span></label>
+            {currentGateway && !isAdmin && <label className="sms-log-check"><input type="checkbox" checked={Boolean(currentGateway.auto_send)} onChange={async (e) => { try { const res = await setSmsGatewayAutoSend(currentGateway.id, e.target.checked); setGateways(old => old.map(g => g.id === currentGateway.id ? { ...g, auto_send: res.auto_send } : g)); setSuccess(res.auto_send ? "Auto-send enabled for your gateway." : "Auto-send disabled."); } catch (err) { setError(err instanceof ApiClientError ? err.message : "Could not change auto-send setting"); } }} /> <span>Auto-send approved SMS</span></label>}
+          </div>
+          <div className="sms-log-gateway-actions"><button className="btn btn-primary" onClick={() => void saveGateway()} disabled={busy !== null || (isFaculty && !facultyAccess?.enabled)}>{busy === "gateway" ? "Saving…" : "Save gateway"}</button>{currentGateway && <button className="btn btn-outline" onClick={() => void testConnection()} disabled={busy !== null}>{busy === "connection" ? "Testing…" : "Test connection"}</button>}</div>
         </section>
 
         {isFaculty ? (
@@ -516,6 +518,7 @@ function SmsActivityPanel({ activities, loading }: { activities: SmsActivityRow[
   const [to, setTo] = useState("");
   const [page, setPage] = useState(1);
   const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const pageSize = 25;
 
   const actions = useMemo(() => Array.from(new Set(activities.map((a) => a.action))).sort(), [activities]);
@@ -533,64 +536,98 @@ function SmsActivityPanel({ activities, loading }: { activities: SmsActivityRow[
   }), [activities, search, role, action, status, from, to]);
   const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
   const visible = filtered.slice((page - 1) * pageSize, page * pageSize);
+  const rangeStart = filtered.length ? (page - 1) * pageSize + 1 : 0;
+  const rangeEnd = Math.min(page * pageSize, filtered.length);
+  const filtersActive = Boolean(search || role !== "ALL" || action !== "ALL" || status !== "ALL" || from || to);
 
   useEffect(() => { setPage(1); }, [search, role, action, status, from, to]);
 
+  const clearFilters = () => {
+    setSearch(""); setRole("ALL"); setAction("ALL"); setStatus("ALL"); setFrom(""); setTo("");
+  };
+
   return (
     <section style={cardStyle}>
-      <div style={headerStyle}>
+      <div className="sms-log-activity-header">
         <div>
           <div style={eyebrow}>SMS ACTIVITY / HISTORY</div>
-          <h2 style={titleStyle}>Audit Log</h2>
-          <p style={muted}>Structured gateway and SMS events with filtering and pagination.</p>
+          <div className="sms-log-activity-title-row"><h2 style={titleStyle}>SMS activity</h2><span className="sms-log-count" aria-label={`${filtered.length} records`}>{filtered.length}</span></div>
+          <p style={muted}>Gateway tests, approvals, and sends.</p>
         </div>
-        <span style={pill("muted")}>{filtered.length} RECORDS</span>
+        <button className="sms-log-filter-toggle" type="button" aria-expanded={filtersOpen} onClick={() => setFiltersOpen((open) => !open)}>
+          {filtersOpen ? "Hide filters" : "Filters"}{filtersActive ? ` · ${[role !== "ALL", action !== "ALL", status !== "ALL", Boolean(from || to), Boolean(search)].filter(Boolean).length}` : ""}
+        </button>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(190px,2fr) repeat(3,minmax(120px,1fr)) minmax(125px,1fr) minmax(125px,1fr)", gap: 8, marginBottom: 14 }}>
-        <input style={inputStyle} value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search actor, gateway, batch…" />
-        <select style={inputStyle} value={role} onChange={(e) => setRole(e.target.value)}>
-          <option value="ALL">All roles</option>
-          {roles.map((r) => <option key={r} value={r}>{r}</option>)}
-        </select>
-        <select style={inputStyle} value={action} onChange={(e) => setAction(e.target.value)}>
-          <option value="ALL">All actions</option>
-          {actions.map((a) => <option key={a} value={a}>{a}</option>)}
-        </select>
-        <select style={inputStyle} value={status} onChange={(e) => setStatus(e.target.value)}>
-          <option value="ALL">All status</option>
-          {statuses.map((s) => <option key={s} value={s}>{s}</option>)}
-        </select>
-        <input type="date" style={inputStyle} value={from} onChange={(e) => setFrom(e.target.value)} />
-        <input type="date" style={inputStyle} value={to} onChange={(e) => setTo(e.target.value)} />
+
+      <div className={`sms-log-activity-filters${filtersOpen ? " is-open" : ""}`}>
+        <div className="sms-log-activity-search-row">
+          <input className="sms-log-search" style={inputStyle} value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search actor, gateway, batch…" />
+          {filtersActive && <button className="sms-log-clear-filters" type="button" onClick={clearFilters}>Clear</button>}
+        </div>
+        <div className="sms-log-activity-filter-grid">
+          <select style={inputStyle} value={role} onChange={(e) => setRole(e.target.value)}>
+            <option value="ALL">All roles</option>
+            {roles.map((r) => <option key={r} value={r}>{r}</option>)}
+          </select>
+          <select style={inputStyle} value={action} onChange={(e) => setAction(e.target.value)}>
+            <option value="ALL">All actions</option>
+            {actions.map((a) => <option key={a} value={a}>{a}</option>)}
+          </select>
+          <select style={inputStyle} value={status} onChange={(e) => setStatus(e.target.value)}>
+            <option value="ALL">All status</option>
+            {statuses.map((s) => <option key={s} value={s}>{s}</option>)}
+          </select>
+          <div className="sms-log-date-range">
+            <input type="date" aria-label="From date" style={inputStyle} value={from} onChange={(e) => setFrom(e.target.value)} />
+            <span>to</span>
+            <input type="date" aria-label="To date" style={inputStyle} value={to} onChange={(e) => setTo(e.target.value)} />
+          </div>
+        </div>
       </div>
+
+      <div className="sms-log-activity-summary">
+        <span>{rangeStart ? `${rangeStart}–${rangeEnd} of ${filtered.length}` : "0 records"}</span>
+        {filtersActive && <span className="sms-log-filter-state">Filtered</span>}
+      </div>
+
       {loading ? <div style={emptyStyle}>Loading activity…</div> : visible.length === 0 ? <div style={emptyStyle}>No activity matches these filters.</div> : (
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", color: "var(--text)" }}>
-            <thead><tr>{["Timestamp", "Actor", "Role", "Action", "Gateway", "Batch", "SMS Count", "Status"].map((h) => <th key={h} style={thStyle}>{h}</th>)}</tr></thead>
-            <tbody>{visible.map((a) => (
-              <Fragment key={a.id}>
-                <tr onClick={() => setExpandedId((id) => id === a.id ? null : a.id)} style={{ cursor: "pointer" }}>
-                  <td style={tdStyle}>{a.timestamp}</td><td style={tdStyle}>{a.actor}</td><td style={tdStyle}>{a.role}</td>
-                  <td style={tdStyle}><strong>{a.action}</strong></td><td style={tdStyle}>{a.gateway}</td><td style={tdStyle}>{a.batch}</td>
-                  <td style={{ ...tdStyle, textAlign: "center" }}>{a.sms_count}</td><td style={tdStyle}><span style={pill(activityPill(a.status))}>{a.status}</span></td>
-                </tr>
-                {expandedId === a.id && <tr>
-                  <td colSpan={8} style={{ ...tdStyle, background: "var(--chip-bg-muted)" }}>
-                    <strong style={{ color: "var(--text)" }}>Activity details</strong>
-                    <div style={{ ...muted, marginTop: 6, wordBreak: "break-word" }}>{a.details || "No additional details recorded."}</div>
-                  </td>
-                </tr>}
-              </Fragment>
-            ))}</tbody>
-          </table>
-        </div>
+        <>
+          <div className="sms-log-activity-table-wrap">
+            <table className="sms-log-activity-table">
+              <thead><tr>{["Timestamp", "Actor", "Role", "Action", "Gateway", "Batch", "SMS", "Status"].map((h) => <th key={h} style={thStyle}>{h}</th>)}</tr></thead>
+              <tbody>{visible.map((a) => (
+                <Fragment key={a.id}>
+                  <tr onClick={() => setExpandedId((id) => id === a.id ? null : a.id)} className="sms-log-activity-row" tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpandedId((id) => id === a.id ? null : a.id); } }}>
+                    <td style={tdStyle}><span className="sms-log-time">{a.timestamp}</span></td>
+                    <td style={tdStyle}><strong>{a.actor}</strong></td>
+                    <td style={tdStyle}><span className="sms-log-role">{a.role}</span></td>
+                    <td style={tdStyle}><strong>{a.action}</strong></td>
+                    <td style={tdStyle}>{a.gateway}</td>
+                    <td style={tdStyle}>{a.batch || "—"}</td>
+                    <td style={{ ...tdStyle, textAlign: "center" }}>{a.sms_count}</td>
+                    <td style={tdStyle}><span style={pill(activityPill(a.status))}>{a.status}</span></td>
+                  </tr>
+                  {expandedId === a.id && <tr className="sms-log-activity-detail-row"><td colSpan={8} style={{ ...tdStyle, background: "var(--chip-bg-muted)" }}><strong style={{ color: "var(--text)" }}>Activity details</strong><div style={{ ...muted, marginTop: 6, wordBreak: "break-word" }}>{a.details || "No additional details recorded."}</div></td></tr>}
+                </Fragment>
+              ))}</tbody>
+            </table>
+          </div>
+          <div className="sms-log-activity-cards">
+            {visible.map((a) => (
+              <article key={a.id} className={`sms-log-activity-card${expandedId === a.id ? " is-expanded" : ""}`} onClick={() => setExpandedId((id) => id === a.id ? null : a.id)}>
+                <div className="sms-log-activity-card-top"><div><strong>{a.action}</strong><span>{a.actor} · {a.role}</span></div><span style={pill(activityPill(a.status))}>{a.status}</span></div>
+                <div className="sms-log-activity-card-meta"><span>{a.gateway}</span><span>{a.batch || "No batch"}</span><span>{a.sms_count} SMS</span></div>
+                <time dateTime={String(a.timestamp)}>{a.timestamp}</time>
+                {expandedId === a.id && <div className="sms-log-activity-card-detail"><strong>Activity details</strong><span>{a.details || "No additional details recorded."}</span></div>}
+              </article>
+            ))}
+          </div>
+        </>
       )}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12 }}>
-        <span style={muted}>Page {page} of {pageCount}</span>
-        <div style={{ display: "flex", gap: 8 }}>
-          <button className="btn btn-sm btn-outline" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1}>Previous</button>
-          <button className="btn btn-sm btn-outline" onClick={() => setPage((p) => Math.min(pageCount, p + 1))} disabled={page >= pageCount}>Next</button>
-        </div>
+
+      <div className="sms-log-activity-pagination">
+        <span>Page {page} of {pageCount}</span>
+        <div><button className="btn btn-sm btn-outline" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1}>Previous</button><button className="btn btn-sm btn-outline" onClick={() => setPage((p) => Math.min(pageCount, p + 1))} disabled={page >= pageCount}>Next</button></div>
       </div>
     </section>
   );
@@ -607,12 +644,11 @@ const eyebrow: CSSProperties = { color: "var(--heading-accent)", fontSize: 11, f
 const fieldLabel: CSSProperties = { display: "grid", gap: 7, color: "var(--text)", fontSize: 13, fontWeight: 700 };
 const gridStyle: CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 14 };
 const inputStyle: CSSProperties = { width: "100%", boxSizing: "border-box", padding: "10px 12px", borderRadius: 10, border: "1px solid var(--input-border)", background: "var(--input-bg)", color: "var(--text)" };
-const actionsStyle: CSSProperties = { display: "flex", gap: 10, flexWrap: "wrap", marginTop: 16 };
+const actionsStyle: CSSProperties = { display: "flex", gap: 10, flexWrap: "wrap", marginTop: 14 };
 const emptyStyle: CSSProperties = { padding: 18, borderRadius: 12, background: "var(--chip-bg-muted)", color: "var(--muted)", textAlign: "center" };
 const rowStyle: CSSProperties = { display: "flex", alignItems: "center", gap: 14, padding: 12, border: "1px solid var(--border)", borderRadius: 12, flexWrap: "wrap" };
 const handlerRowStyle: CSSProperties = { display: "flex", alignItems: "center", gap: 16, padding: 14, border: "1px solid var(--border)", borderRadius: 12, flexWrap: "wrap", background: "var(--input-bg)" };
 const thStyle: CSSProperties = { textAlign: "left", padding: "9px 8px", borderBottom: "1px solid var(--border)", fontSize: 11, color: "var(--muted)", textTransform: "uppercase" };
 const tdStyle: CSSProperties = { padding: "10px 8px", borderBottom: "1px solid var(--border)", fontSize: 12, verticalAlign: "top" };
-const checkStyle: CSSProperties = { display: "flex", gap: 10, alignItems: "center", marginTop: 12, color: "var(--text)", fontWeight: 700 };
 const batchPillStyle: CSSProperties = { display: "inline-flex", alignItems: "center", padding: "8px 10px", borderRadius: 999, background: "var(--chip-bg-muted)", border: "1px solid var(--border)", color: "var(--text)", fontSize: 12, fontWeight: 800 };
 function pill(kind: "good" | "bad" | "muted"): CSSProperties { return { display: "inline-flex", padding: "4px 8px", borderRadius: 999, fontSize: 10, fontWeight: 900, letterSpacing: .5, background: kind === "good" ? "rgba(16,185,129,.12)" : kind === "bad" ? "rgba(239,68,68,.12)" : "var(--chip-bg-muted)", color: kind === "good" ? "#059669" : kind === "bad" ? "#dc2626" : "var(--muted)" }; }

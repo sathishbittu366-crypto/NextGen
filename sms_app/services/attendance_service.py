@@ -613,14 +613,116 @@ def delete_calendar_upload(*, semester_id, kind, actor):
         audit(c, actor, "DELETE_UPLOAD", "academic_calendar", f"{sem['code']} ({kind})")
 
 
-def list_subjects(semester_id, username=None, role=None):
+def faculty_proxy_hod_username(c, faculty_username: str) -> str | None:
+    """Resolve the explicit HOD scope represented by a Faculty login.
+
+    ``users.faculty_proxy_hod_username`` is authoritative.  A tightly-scoped
+    legacy fallback exists only for databases that have not yet materialized
+    the relationship: the Faculty must already have a valid HOD owner, and the
+    Faculty/HOD names must match uniquely within that HOD scope.
+    """
+    row = c.execute(
+        "SELECT username, role, hod_username, faculty_proxy_hod_username, full_name, department FROM users WHERE username=%s AND active=1",
+        (faculty_username,),
+    ).fetchone()
+    if not row or row.get("role") != "FACULTY":
+        return None
+
+    faculty_department = str(row.get("department") or "CSD").strip().casefold() or "csd"
+    explicit = str(row.get("faculty_proxy_hod_username") or "").strip()
+    if explicit:
+        hod = c.execute(
+            "SELECT username, full_name, department FROM users WHERE username=%s AND role='HOD' AND active=1",
+            (explicit,),
+        ).fetchone()
+        if not hod:
+            return None
+        hod_department = str(hod.get("department") or "CSD").strip().casefold() or "csd"
+        return hod["username"] if hod_department == faculty_department else None
+
+    hod_username = str(row.get("hod_username") or "").strip()
+    if hod_username:
+        hod = c.execute(
+            "SELECT username, full_name, department FROM users WHERE username=%s AND role='HOD' AND active=1",
+            (hod_username,),
+        ).fetchone()
+    else:
+        hod_candidates = c.execute(
+            """SELECT username, full_name, department
+               FROM users
+               WHERE role='HOD' AND active=1
+                 AND LOWER(TRIM(COALESCE(department,'')))=LOWER(TRIM(%s))
+               ORDER BY id ASC""",
+            (row.get("department") or "CSD",),
+        ).fetchall()
+        hod = hod_candidates[0] if len(hod_candidates) == 1 else None
+
+    if not hod:
+        return None
+    hod_department = str(hod.get("department") or "CSD").strip().casefold() or "csd"
+    if hod_department != faculty_department:
+        return None
+
+    import re
+    key = lambda value: re.sub(r"[^a-z0-9]+", "", str(value or "").casefold())
+    faculty_key = key(row.get("full_name"))
+    hod_key = key(hod.get("full_name"))
+    if not faculty_key or faculty_key != hod_key:
+        return None
+
+    candidates = c.execute(
+        """SELECT username FROM users
+           WHERE role='FACULTY' AND active=1
+             AND LOWER(COALESCE(hod_username,''))=LOWER(%s)
+             AND LOWER(COALESCE(department,''))=LOWER(%s)
+             AND LOWER(COALESCE(full_name,''))=LOWER(%s)""",
+        (hod["username"], hod.get("department") or row.get("department") or "CSD", row.get("full_name") or ""),
+    ).fetchall()
+    if len(candidates) != 1 or candidates[0]["username"].casefold() != str(faculty_username).casefold():
+        return None
+    return hod["username"]
+
+
+def list_subjects(semester_id, username=None, role=None, include_historical=False):
     with connect() as c:
         if role == "FACULTY":
-            # SECURITY/LOGIC: faculty must see only subjects explicitly
-            # assigned to them. Never fall back to the semester-wide subject
-            # list when their assignment set is empty. That fallback made a
-            # faculty member appear able to mark attendance for another
-            # faculty's subject.
+            proxy_hod = faculty_proxy_hod_username(c, username or "")
+            # A dedicated HOD Faculty proxy is intentionally a full Faculty-
+            # surface account: the HOD created it specifically because the HOD
+            # dashboard has no Mark Attendance page. It therefore sees the
+            # active subjects in the HOD's department/semester, while ordinary
+            # Faculty accounts remain assignment-scoped.
+            if proxy_hod and not include_historical:
+                return c.execute(
+                    "SELECT id,code,name,has_lab FROM subjects WHERE semester_id=%s AND active=1 ORDER BY name",
+                    (semester_id,),
+                ).fetchall()
+
+            # Ordinary Faculty: explicit assignment is always required. A HOD
+            # proxy may additionally discover historical HOD-owned sessions.
+            if not include_historical:
+                return c.execute("""
+                    SELECT s.id,s.code,s.name,s.has_lab
+                    FROM subjects s
+                    JOIN subject_faculty sf ON sf.subject_id=s.id
+                    WHERE s.semester_id=%s AND s.active=1 AND sf.faculty_username=%s
+                    ORDER BY s.name
+                """, (semester_id, username)).fetchall()
+
+            if proxy_hod:
+                return c.execute("""
+                    SELECT DISTINCT s.id,s.code,s.name,s.has_lab
+                    FROM subjects s
+                    LEFT JOIN subject_faculty sf
+                      ON sf.subject_id=s.id AND sf.faculty_username=%s
+                    LEFT JOIN attendance_sessions a
+                      ON a.subject_id=s.id AND a.semester_id=%s
+                     AND (a.faculty_username=%s OR (a.faculty_username=%s AND LOWER(COALESCE(a.hod_username,''))=LOWER(%s)))
+                    WHERE s.semester_id=%s AND s.active=1
+                      AND (sf.subject_id IS NOT NULL OR a.id IS NOT NULL)
+                    ORDER BY s.name
+                """, (username, semester_id, username, proxy_hod, proxy_hod, semester_id)).fetchall()
+
             return c.execute("""
                 SELECT s.id,s.code,s.name,s.has_lab
                 FROM subjects s
@@ -777,20 +879,33 @@ def delete_subject(*, subject_id, actor):
 
 
 
-def set_subject_faculty(*, subject_id, faculty_usernames, actor):
-    """Replaces the full assigned-faculty set for a subject with
-    faculty_usernames (a list of active FACULTY usernames). Editable by
-    HOD any time — each subject can be given its own distinct faculty.
+def set_subject_faculty(*, subject_id, faculty_usernames, actor, scope_hod_username=None):
+    """Replace a subject's Faculty assignment set without crossing HOD scopes.
+
+    HOD callers provide ``scope_hod_username``; Admin callers may leave it
+    unset for college-wide management. Existing attendance/history is untouched.
     """
     with connect() as c:
         subject = c.execute("SELECT * FROM subjects WHERE id=%s", (subject_id,)).fetchone()
         if not subject:
             raise ValueError("Subject was not found")
-        valid = {
-            r["username"] for r in c.execute(
+        if scope_hod_username:
+            valid_rows = c.execute(
+                """SELECT username
+                     FROM users
+                    WHERE role='FACULTY'
+                      AND active=1
+                      AND LOWER(TRIM(COALESCE(hod_username,'')))=LOWER(TRIM(%s))""",
+                (scope_hod_username,),
+            ).fetchall()
+        else:
+            valid_rows = c.execute(
                 "SELECT username FROM users WHERE role='FACULTY' AND active=1"
             ).fetchall()
-        }
+        valid = {r["username"] for r in valid_rows}
+        invalid = [u for u in dict.fromkeys(faculty_usernames or []) if u not in valid]
+        if invalid and scope_hod_username:
+            raise ValueError("One or more selected Faculty accounts are outside your HOD scope")
         chosen = [u for u in dict.fromkeys(faculty_usernames or []) if u in valid]
         c.execute("DELETE FROM subject_faculty WHERE subject_id=%s", (subject_id,))
         for username in chosen:
@@ -823,18 +938,30 @@ def get_or_create_session(*, attendance_date, semester_id, subject_id, faculty_u
                 hod_username = dept_hod
         if not hod_username:
             raise ValueError("This faculty account is not assigned to a HOD scope")
+        faculty_proxy_hod = faculty_proxy_hod_username(c, faculty_username) if faculty["role"] == "FACULTY" else None
         if faculty["role"] == "FACULTY":
             assigned = c.execute(
                 "SELECT 1 FROM subject_faculty WHERE subject_id=%s AND faculty_username=%s",
                 (subject_id, faculty_username),
             ).fetchone()
-            if not assigned:
+            if not assigned and not faculty_proxy_hod:
                 raise ValueError("This subject is not assigned to the selected faculty account")
 
         row = c.execute("""
             SELECT * FROM attendance_sessions
             WHERE attendance_date=%s AND subject_id=%s AND faculty_username=%s AND session_type=%s
         """, (attendance_date, subject_id, faculty_username, session_type)).fetchone()
+        if not row and faculty_proxy_hod:
+            # Historical HOD imports are owned by the HOD account. When the
+            # same HOD later uses the dedicated Faculty proxy, adopt the
+            # existing session instead of creating a duplicate class.
+            row = c.execute("""
+                SELECT * FROM attendance_sessions
+                WHERE attendance_date=%s AND semester_id=%s AND subject_id=%s
+                  AND session_type=%s AND faculty_username=%s
+                  AND LOWER(COALESCE(hod_username,''))=LOWER(%s)
+                LIMIT 1
+            """, (attendance_date, semester_id, subject_id, session_type, faculty_proxy_hod, faculty_proxy_hod)).fetchone()
         if row:
             # Legacy sessions without an owner are repaired only from the
             # authenticated faculty's current HOD scope. Never guess from
@@ -1019,23 +1146,38 @@ def month_register(*, faculty_username, semester_id, subject_id, year, month):
 
         is_hod_or_admin = faculty["role"] in ("HOD", "ADMIN")
 
+        faculty_proxy_hod = faculty_proxy_hod_username(c, faculty_username) if faculty["role"] == "FACULTY" else None
+
         if faculty["role"] == "FACULTY":
             assigned = c.execute(
                 "SELECT 1 FROM subject_faculty WHERE subject_id=%s AND faculty_username=%s",
                 (subject_id, faculty_username),
             ).fetchone()
             if not assigned:
-                has_sess = c.execute(
-                    "SELECT 1 FROM attendance_sessions WHERE subject_id=%s AND faculty_username=%s LIMIT 1",
-                    (subject_id, faculty_username),
-                ).fetchone()
+                if not faculty_proxy_hod:
+                    has_sess = c.execute(
+                        "SELECT 1 FROM attendance_sessions WHERE subject_id=%s AND faculty_username=%s LIMIT 1",
+                        (subject_id, faculty_username),
+                    ).fetchone()
+                else:
+                    has_sess = c.execute(
+                        """SELECT 1 FROM attendance_sessions
+                           WHERE subject_id=%s AND semester_id=%s
+                             AND ((faculty_username=%s) OR (faculty_username=%s AND LOWER(COALESCE(hod_username,''))=LOWER(%s)))
+                           LIMIT 1""",
+                        (subject_id, semester_id, faculty_username, faculty_proxy_hod, faculty_proxy_hod),
+                    ).fetchone()
                 if not has_sess:
                     raise ValueError("This subject is not assigned to the faculty account")
 
         subject = c.execute(
             """SELECT s.id,s.code,s.name,s.semester_id,sem.code AS semester_code,sem.name AS semester_name
                FROM subjects s JOIN academic_semesters sem ON sem.id=s.semester_id
-               WHERE s.id=%s AND s.active=1""", (subject_id,)
+               WHERE s.id=%s
+                 AND (s.active=1 OR EXISTS (
+                     SELECT 1 FROM attendance_sessions ah
+                     WHERE ah.subject_id=s.id AND ah.semester_id=s.semester_id
+                 ))""", (subject_id,)
         ).fetchone()
         if not subject or int(subject["semester_id"]) != int(semester_id):
             raise ValueError("Subject does not belong to the selected semester")
@@ -1060,14 +1202,25 @@ def month_register(*, faculty_username, semester_id, subject_id, year, month):
                 (semester_id, subject_id, first_day.isoformat(), last_day.isoformat(), faculty_username, hod_scope, faculty_username),
             ).fetchall()
         else:
-            sessions = c.execute(
-                """SELECT id,attendance_date,session_type,duration_hours,topic,created_at,faculty_username
-                   FROM attendance_sessions
-                   WHERE faculty_username=%s AND semester_id=%s AND subject_id=%s
-                     AND attendance_date BETWEEN %s AND %s
-                   ORDER BY attendance_date""",
-                (faculty_username, semester_id, subject_id, first_day.isoformat(), last_day.isoformat()),
-            ).fetchall()
+            if faculty_proxy_hod:
+                sessions = c.execute(
+                    """SELECT id,attendance_date,session_type,duration_hours,topic,created_at,faculty_username
+                       FROM attendance_sessions
+                       WHERE semester_id=%s AND subject_id=%s
+                         AND attendance_date BETWEEN %s AND %s
+                         AND ((faculty_username=%s) OR (faculty_username=%s AND LOWER(COALESCE(hod_username,''))=LOWER(%s)))
+                       ORDER BY attendance_date""",
+                    (semester_id, subject_id, first_day.isoformat(), last_day.isoformat(), faculty_username, faculty_proxy_hod, faculty_proxy_hod),
+                ).fetchall()
+            else:
+                sessions = c.execute(
+                    """SELECT id,attendance_date,session_type,duration_hours,topic,created_at,faculty_username
+                       FROM attendance_sessions
+                       WHERE faculty_username=%s AND semester_id=%s AND subject_id=%s
+                         AND attendance_date BETWEEN %s AND %s
+                       ORDER BY attendance_date""",
+                    (faculty_username, semester_id, subject_id, first_day.isoformat(), last_day.isoformat()),
+                ).fetchall()
 
         sessions_by_date: dict[str, list[dict]] = {}
         for row in sessions:
@@ -1095,10 +1248,17 @@ def month_register(*, faculty_username, semester_id, subject_id, year, month):
             WHERE st.department='CSD'
               AND (LOWER(COALESCE(st.hod_username,''))=LOWER(%s) OR %s='admin')
               AND st.active=1
-              AND st.current_semester_id=%s
+              AND (st.current_semester_id=%s OR EXISTS (
+                    SELECT 1
+                    FROM attendance_records ar
+                    JOIN attendance_sessions ah ON ah.id=ar.session_id
+                    WHERE ar.roll_no=st.roll_no
+                      AND ah.semester_id=%s
+                      AND ah.subject_id=%s
+              ))
             ORDER BY st.roll_no
             """,
-            (hod_scope, faculty_username, semester_id),
+            (hod_scope, faculty_username, semester_id, semester_id, subject_id),
         ).fetchall()
 
         records = {}
@@ -1275,8 +1435,13 @@ def saved_sessions_for_user(*, role, username, limit=30):
         where = ["a.saved_at IS NOT NULL"]
         params = []
         if role == "FACULTY":
-            where.append("a.faculty_username=%s")
-            params.append(username)
+            proxy_hod = faculty_proxy_hod_username(c, username)
+            if proxy_hod:
+                where.append("((a.faculty_username=%s) OR (a.faculty_username=%s AND LOWER(COALESCE(a.hod_username,''))=LOWER(%s)))")
+                params.extend([username, proxy_hod, proxy_hod])
+            else:
+                where.append("a.faculty_username=%s")
+                params.append(username)
         elif role == "HOD":
             where.append("a.hod_username=%s")
             params.append(username)

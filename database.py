@@ -601,6 +601,181 @@ def resolve_hod_for_department(c, dept="CSD") -> str | None:
     return None
 
 
+def resolve_unique_hod_for_department(c, dept="CSD") -> str | None:
+    """Return an active departmental HOD only when ownership is unambiguous."""
+    department = str(dept or "CSD").strip() or "CSD"
+    rows = c.execute(
+        """SELECT username FROM users
+           WHERE role='HOD' AND active=1
+             AND LOWER(TRIM(COALESCE(department,'')))=LOWER(TRIM(%s))
+           ORDER BY id ASC""",
+        (department,),
+    ).fetchall()
+    return rows[0]["username"] if len(rows) == 1 else None
+
+
+def _identity_key(value) -> str:
+    """Normalize human names/usernames for a conservative same-person check."""
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").casefold())
+
+
+def _is_same_person_faculty_proxy(faculty_row, hod_row) -> bool:
+    """Return True only for a deliberately explicit HOD->Faculty proxy relationship.
+
+    We do not infer proxy status from username prefixes/suffixes.  The account
+    must have a different login username, live in the same department, and carry
+    the same normalized display name as the active HOD.
+    """
+    if not faculty_row or not hod_row:
+        return False
+    if str(faculty_row.get("role") or "") != "FACULTY":
+        return False
+    if str(hod_row.get("role") or "") != "HOD":
+        return False
+    # Some callers already enforce active=1 in the SELECT and therefore do
+    # not return the active column. Treat an omitted active flag as already
+    # validated; an explicit false value still fails closed.
+    if "active" in faculty_row and not faculty_row.get("active"):
+        return False
+    if "active" in hod_row and not hod_row.get("active"):
+        return False
+    if str(faculty_row.get("username") or "").casefold() == str(hod_row.get("username") or "").casefold():
+        return False
+    faculty_dept = str(faculty_row.get("department") or "CSD").strip().casefold()
+    hod_dept = str(hod_row.get("department") or "CSD").strip().casefold()
+    if faculty_dept != hod_dept:
+        return False
+    faculty_name = _identity_key(faculty_row.get("full_name"))
+    hod_name = _identity_key(hod_row.get("full_name"))
+    return bool(faculty_name) and faculty_name == hod_name
+
+
+def reconcile_hod_scopes(c) -> None:
+    """Safely reconcile legacy HOD ownership and explicit Faculty proxies.
+
+    This is intentionally fail-closed.  A department is auto-reconciled only
+    when it has exactly one active HOD.  Existing non-empty HOD ownership is
+    never reassigned.  A Faculty row is marked as the HOD's dedicated proxy
+    only when its username/full-name/department identify the same person.
+    """
+    c.execute(
+        """UPDATE users
+              SET hod_username=CASE
+                    WHEN hod_username IS NULL OR TRIM(hod_username)='' THEN username
+                    ELSE hod_username
+                  END,
+                  department=COALESCE(NULLIF(TRIM(department),''),'CSD')
+            WHERE role='HOD' AND active=1"""
+    )
+    hod_rows = c.execute(
+        """SELECT username, role, active, full_name, department
+           FROM users
+           WHERE role='HOD' AND active=1"""
+    ).fetchall()
+    active_hods = {str(r["username"]).casefold(): dict(r) for r in hod_rows}
+    by_department = {}
+    by_identity_department = {}
+    for row in hod_rows:
+        dept = str(row.get("department") or "CSD").strip().casefold() or "csd"
+        normalized = dict(row)
+        by_department.setdefault(dept, []).append(normalized)
+        identity = (_identity_key(row.get("full_name")), dept)
+        if identity[0]:
+            by_identity_department.setdefault(identity, []).append(normalized)
+
+    # First establish ownership for genuinely unscoped legacy rows, but only
+    # where there is exactly one active HOD for the row's department.
+    for dept_key, department_hods in by_department.items():
+        if len(department_hods) != 1:
+            continue
+        hod = department_hods[0]
+        hod_username = hod["username"]
+        department = str(hod.get("department") or "CSD").strip() or "CSD"
+        c.execute(
+            """UPDATE users
+                  SET hod_username=%s,
+                      department=COALESCE(NULLIF(TRIM(department),''), %s)
+                WHERE role='FACULTY'
+                  AND (hod_username IS NULL OR TRIM(hod_username)='')
+                  AND (department IS NULL OR TRIM(department)=''
+                       OR LOWER(TRIM(department))=LOWER(TRIM(%s)))""",
+            (hod_username, department, department),
+        )
+        c.execute(
+            """UPDATE students
+                  SET hod_username=%s
+                WHERE department=%s
+                  AND (hod_username IS NULL OR TRIM(hod_username)='')""",
+            (hod_username, department),
+        )
+        c.execute(
+            """UPDATE attendance_sessions a
+                LEFT JOIN users u ON u.username=a.faculty_username
+                   SET a.hod_username=%s
+                 WHERE (a.hod_username IS NULL OR TRIM(a.hod_username)='')
+                   AND (
+                       LOWER(a.faculty_username)=LOWER(%s)
+                       OR (u.role='FACULTY' AND LOWER(COALESCE(u.hod_username,''))=LOWER(%s))
+                   )""",
+            (hod_username, hod_username, hod_username),
+        )
+
+    # Materialize the explicit proxy relationship after ownership is repaired.
+    faculty_rows = c.execute(
+        """SELECT id, username, role, active, full_name, department,
+                  hod_username, faculty_proxy_hod_username
+           FROM users
+           WHERE role='FACULTY'"""
+    ).fetchall()
+    for raw_row in faculty_rows:
+        row = dict(raw_row)
+        explicit = str(row.get("faculty_proxy_hod_username") or "").strip()
+        if explicit:
+            hod = active_hods.get(explicit.casefold())
+            if hod:
+                continue
+            # Never leave a dangling proxy which could later be interpreted as
+            # a valid scope if an account with that username is recreated.
+            c.execute("UPDATE users SET faculty_proxy_hod_username=NULL WHERE id=%s", (row["id"],))
+            row["faculty_proxy_hod_username"] = None
+
+        hod_username = str(row.get("hod_username") or "").strip()
+        hod = active_hods.get(hod_username.casefold()) if hod_username else None
+
+        # Existing ownership is authoritative. We only materialize the proxy
+        # flag when that owner is the same person; never reassign an account
+        # from one active HOD to another during reconciliation.
+        if hod:
+            if _is_same_person_faculty_proxy(row, hod):
+                c.execute(
+                    "UPDATE users SET department=COALESCE(NULLIF(TRIM(department),''), %s), faculty_proxy_hod_username=%s WHERE id=%s",
+                    (hod.get("department") or "CSD", hod["username"], row["id"]),
+                )
+            continue
+
+        dept = str(row.get("department") or "CSD").strip().casefold() or "csd"
+        candidates = by_department.get(dept, [])
+        if len(candidates) == 1:
+            hod = candidates[0]
+        else:
+            # Dedicated HOD Faculty credentials can still be recovered safely
+            # when multiple HODs share a department, but only when exactly one
+            # active HOD has the same normalized identity and department.
+            identity_candidates = by_identity_department.get((_identity_key(row.get("full_name")), dept), [])
+            if len(identity_candidates) == 1 and _is_same_person_faculty_proxy(row, identity_candidates[0]):
+                hod = identity_candidates[0]
+            else:
+                hod = None
+
+        # This branch only handles unowned/dangling Faculty rows.
+        if not hod:
+            continue
+        c.execute(
+            "UPDATE users SET hod_username=%s, department=COALESCE(NULLIF(TRIM(department),''), %s), faculty_proxy_hod_username=%s WHERE id=%s",
+            (hod["username"], hod.get("department") or "CSD", hod["username"], row["id"]),
+        )
+
+
 def get_setting(key, default=None):
     with connect() as c:
         row = c.execute("SELECT `value` FROM settings WHERE `key`=%s", (key,)).fetchone()
@@ -725,6 +900,7 @@ def init_db(db_name=None):
             photo_path VARCHAR(512),
             department VARCHAR(64),
             hod_username VARCHAR(64),
+            faculty_proxy_hod_username VARCHAR(64),
             designation VARCHAR(128),
             employee_id VARCHAR(64),
             email VARCHAR(255),
@@ -752,6 +928,8 @@ def init_db(db_name=None):
             c.execute("ALTER TABLE users ADD COLUMN email_verified TINYINT(1) NOT NULL DEFAULT 0 CHECK(email_verified IN (0,1))")
         if "hod_username" not in existing_user_cols:
             c.execute("ALTER TABLE users ADD COLUMN hod_username VARCHAR(64) NULL")
+        if "faculty_proxy_hod_username" not in existing_user_cols:
+            c.execute("ALTER TABLE users ADD COLUMN faculty_proxy_hod_username VARCHAR(64) NULL")
         if "auth_version" not in existing_user_cols:
             c.execute("ALTER TABLE users ADD COLUMN auth_version INT NOT NULL DEFAULT 0")
 
@@ -1159,19 +1337,10 @@ def init_db(db_name=None):
         if "saved_at" not in existing_session_cols:
             c.execute("ALTER TABLE attendance_sessions ADD COLUMN saved_at DATETIME NULL")
 
-        # Backfill ownership on users and students.
-        active_hods = c.execute("SELECT username, department FROM users WHERE role='HOD' AND active=1 ORDER BY (username != 'admin') DESC, id ASC").fetchall()
-        dept_hod_map = {}
-        for h in active_hods:
-            dept = (h["department"] or "").strip()
-            if dept and (dept not in dept_hod_map or dept_hod_map[dept] == "admin"):
-                dept_hod_map[dept] = h["username"]
-        for dept, hod_username in dept_hod_map.items():
-            if hod_username:
-                c.execute("UPDATE users SET hod_username=%s WHERE department=%s AND role<>'HOD' AND (hod_username IS NULL OR hod_username='')", (hod_username, dept))
-                c.execute("UPDATE users SET hod_username=username WHERE department=%s AND role='HOD' AND username=%s", (dept, hod_username))
-                c.execute("UPDATE students SET hod_username=%s WHERE department=%s AND (hod_username IS NULL OR hod_username='')", (hod_username, dept))
-                c.execute("UPDATE attendance_sessions a JOIN users u ON u.username=a.faculty_username SET a.hod_username=%s WHERE u.department=%s AND a.hod_username IS NULL", (hod_username, dept))
+        # Reconcile only unambiguous legacy HOD ownership. A department with
+        # multiple active HODs is deliberately left unresolved rather than
+        # assigning its orphan rows to an arbitrary account.
+        reconcile_hod_scopes(c)
 
         c.execute("""
         CREATE TABLE IF NOT EXISTS attendance_records(
@@ -1430,13 +1599,20 @@ def init_db(db_name=None):
         if "fk_students_hod_username" not in fk_names:
             c.execute("ALTER TABLE students ADD CONSTRAINT fk_students_hod_username FOREIGN KEY(hod_username) REFERENCES users(username) ON UPDATE CASCADE ON DELETE SET NULL")
         user_fk_rows = c.execute("""
-            SELECT CONSTRAINT_NAME FROM information_schema.KEY_COLUMN_USAGE
+            SELECT CONSTRAINT_NAME, COLUMN_NAME FROM information_schema.KEY_COLUMN_USAGE
             WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='users'
-              AND COLUMN_NAME='hod_username' AND REFERENCED_TABLE_NAME='users'
+              AND COLUMN_NAME IN ('hod_username','faculty_proxy_hod_username')
+              AND REFERENCED_TABLE_NAME='users'
         """).fetchall()
-        if not user_fk_rows:
+        user_fk_columns = {r.get("COLUMN_NAME") for r in user_fk_rows}
+        if "hod_username" not in user_fk_columns:
             try:
                 c.execute("ALTER TABLE users ADD CONSTRAINT fk_users_hod_username FOREIGN KEY(hod_username) REFERENCES users(username) ON UPDATE CASCADE ON DELETE SET NULL")
+            except Exception:
+                pass
+        if "faculty_proxy_hod_username" not in user_fk_columns:
+            try:
+                c.execute("ALTER TABLE users ADD CONSTRAINT fk_users_faculty_proxy_hod FOREIGN KEY(faculty_proxy_hod_username) REFERENCES users(username) ON UPDATE CASCADE ON DELETE SET NULL")
             except Exception:
                 pass
         if "fk_sms_queue_gateway" not in fk_names:
@@ -1457,6 +1633,7 @@ def init_db(db_name=None):
         for idx_name, idx_sql in [
             ("idx_students_hod", "CREATE INDEX idx_students_hod ON students(hod_username)"),
             ("idx_users_hod", "CREATE INDEX idx_users_hod ON users(hod_username)"),
+            ("idx_users_faculty_proxy_hod", "CREATE INDEX idx_users_faculty_proxy_hod ON users(faculty_proxy_hod_username)"),
             ("idx_attendance_sessions_hod", "CREATE INDEX idx_attendance_sessions_hod ON attendance_sessions(hod_username)"),
             ("idx_sms_queue_gateway", "CREATE INDEX idx_sms_queue_gateway ON sms_queue(gateway_id)"),
             ("idx_sms_queue_hod", "CREATE INDEX idx_sms_queue_hod ON sms_queue(hod_username,send_date)"),
@@ -1467,12 +1644,20 @@ def init_db(db_name=None):
             except Exception:
                 pass
 
-        # Backfill legacy CSD students.
-        hod_username = resolve_hod_for_department(c, "CSD")
-        if hod_username:
-            c.execute("UPDATE students SET hod_username=%s WHERE department='CSD' AND (hod_username IS NULL OR hod_username='')", (hod_username,))
+        # Ownership/proxy reconciliation is deliberately fail-closed. Do not
+        # assign a CSD student to an arbitrary HOD when the department has
+        # multiple active HODs. A unique HOD is the only automatic default.
+        reconcile_hod_scopes(c)
+        unique_hods = c.execute(
+            """SELECT username FROM users
+               WHERE role='HOD' AND active=1
+                 AND LOWER(TRIM(COALESCE(department,'')))='csd'
+               ORDER BY id ASC"""
+        ).fetchall()
+        hod_username = unique_hods[0]["username"] if len(unique_hods) == 1 else None
 
-        # Create one cloud gateway placeholder for the HOD if none exists.
+        # Create one cloud gateway placeholder only when the CSD ownership is
+        # unambiguous; never silently bind it to an arbitrary HOD.
         if hod_username:
             c.execute("""
                 INSERT IGNORE INTO sms_gateways(hod_username,owner_username,gateway_name,gateway_mode,active)
@@ -1608,8 +1793,9 @@ def init_db(db_name=None):
         _restore_custom_users(c)
         _ensure_bootstrap_account(c)
 
-        # Re-resolve ownership after possible first-run bootstrap.
-        hod_username = resolve_hod_for_department(c, "CSD")
+        # Bootstrap/restore can add accounts after the first reconciliation, so
+        # run the same safe reconciliation once more before finishing startup.
+        reconcile_hod_scopes(c)
 
         c.execute("UPDATE users SET department='CSD', designation='System Administrator' WHERE username='admin' AND (designation IS NULL OR designation='Head of Department')")
         for row in c.execute("SELECT id,password FROM users").fetchall():
@@ -1680,13 +1866,14 @@ def init_db(db_name=None):
                 """, (iii_i_sem, rel_path))
             c.execute("INSERT IGNORE INTO settings(`key`,`value`) VALUES('migrated_iii_i_calendar_doc','1')")
 
-        # Final ownership backfill after all default users and student rows have been created.
+        # Final ownership reconciliation runs after bootstrap/default rows exist.
+        reconcile_hod_scopes(c)
+
+        # The SMS gateway itself remains owned by the resolved CSD HOD. This
+        # block does not assign any Faculty ownership and therefore cannot
+        # widen attendance scope.
         hod_username = resolve_hod_for_department(c, "CSD")
         if hod_username:
-            c.execute("UPDATE users SET hod_username=%s WHERE department='CSD' AND role='HOD' AND username=%s", (hod_username, hod_username))
-            c.execute("UPDATE users SET hod_username=%s WHERE department='CSD' AND role='FACULTY' AND (hod_username IS NULL OR hod_username='')", (hod_username,))
-            c.execute("UPDATE students SET hod_username=%s WHERE department='CSD' AND (hod_username IS NULL OR hod_username='')", (hod_username,))
-            c.execute("UPDATE attendance_sessions a JOIN users u ON u.username=a.faculty_username SET a.hod_username=%s WHERE u.department='CSD' AND a.hod_username IS NULL", (hod_username,))
             c.execute("""
                 INSERT IGNORE INTO sms_gateways(hod_username,owner_username,gateway_name,gateway_mode,active)
                 VALUES(%s,%s,%s,'cloud',1)
@@ -1778,7 +1965,9 @@ def create_user(username,password,role,full_name="",student_roll_no=None,actor="
             full_name=s["name"]
         pw_hash = _hash_password(password)
         hod_username = None
+        faculty_proxy_hod_username = None
         dept = None
+        actor_row = None
         if role == "ADMIN":
             dept = "CSD"
         elif role == "HOD":
@@ -1786,18 +1975,142 @@ def create_user(username,password,role,full_name="",student_roll_no=None,actor="
             dept = "CSD"
         elif role == "FACULTY":
             dept = "CSD"
-            actor_row = c.execute("SELECT role,hod_username,department FROM users WHERE username=%s", (actor,)).fetchone()
+            actor_row = c.execute(
+                "SELECT username,role,hod_username,department,full_name,active FROM users WHERE username=%s AND active=1",
+                (actor,),
+            ).fetchone()
             if actor_row and actor_row["role"] == "HOD":
                 hod_username = actor
+                actor_dept = str(actor_row.get("department") or dept).strip() or dept
+                dept = actor_dept
+                # Creating a Faculty login for the same HOD is an explicit
+                # second credential for the same person. Store the relationship
+                # rather than re-inferring it later from names/usernames.
+                candidate = {
+                    "username": username, "role": "FACULTY", "active": 1,
+                    "full_name": full_name.strip(), "department": dept,
+                }
+                if _is_same_person_faculty_proxy(candidate, actor_row):
+                    faculty_proxy_hod_username = actor
             elif actor_row and actor_row.get("hod_username"):
                 hod_username = actor_row["hod_username"]
             elif actor_row and actor_row.get("department"):
-                hod_username = resolve_hod_for_department(c, actor_row["department"])
+                hod_username = resolve_unique_hod_for_department(c, actor_row["department"])
             else:
-                hod_username = resolve_hod_for_department(c, "CSD")
-        c.execute("INSERT INTO users(username,password,role,student_roll_no,full_name,hod_username,department) VALUES(%s,%s,%s,%s,%s,%s,%s)",(username,pw_hash,role,student_roll_no,full_name.strip(),hod_username,dept))
+                hod_username = resolve_unique_hod_for_department(c, "CSD")
+        c.execute(
+            """INSERT INTO users(
+                    username,password,role,student_roll_no,full_name,hod_username,
+                    faculty_proxy_hod_username,department
+                ) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)""",
+            (username,pw_hash,role,student_roll_no,full_name.strip(),hod_username,
+             faculty_proxy_hod_username,dept),
+        )
         _save_custom_user_backup(username, pw_hash, role, full_name.strip(), student_roll_no)
         audit(c,actor,"CREATE","user",f"{username} ({role})")
+
+
+def recreate_faculty_account(username, password, actor, full_name=None):
+    """Repair/recreate a Faculty login without destroying its academic history.
+
+    This intentionally keeps the existing users row and all FK-backed mappings
+    (subject_faculty, user_permissions, timetable references, SMS delegation,
+    etc.).  The operation only repairs mutable account/auth scope fields.
+    It is the safe replacement for delete-then-create when a Faculty account
+    has lost its HOD scope or has unusable credentials.
+    """
+    username = str(username or "").strip()
+    password = str(password or "")
+    actor = str(actor or "").strip()
+    if len(password) < 8:
+        raise ValueError("Password must be at least 8 characters")
+    if not username or not actor:
+        raise ValueError("Username and actor are required")
+
+    with connect() as c:
+        actor_row = c.execute(
+            "SELECT username,role,department,full_name FROM users WHERE username=%s AND active=1",
+            (actor,),
+        ).fetchone()
+        if not actor_row or actor_row["role"] not in ("HOD", "ADMIN"):
+            raise ValueError("Only an active HOD or Admin can recreate a Faculty account")
+
+        row = c.execute(
+            "SELECT * FROM users WHERE username=%s", (username,)
+        ).fetchone()
+        if not row:
+            raise ValueError("Faculty account not found")
+        if row["role"] != "FACULTY":
+            raise ValueError("Only FACULTY accounts can be recreated")
+        if row["username"].lower() == actor.lower():
+            raise ValueError("You cannot recreate your own account from Faculty management")
+
+        # Scope check: an HOD may repair a Faculty already in their scope, or
+        # an unscoped Faculty in the same department.  The latter is exactly
+        # the legacy/orphaned-account case this operation is designed to fix.
+        if actor_row["role"] == "HOD":
+            actor_department = str(actor_row.get("department") or "CSD").strip() or "CSD"
+            row_department = str(row.get("department") or actor_department).strip() or actor_department
+            same_scope = (str(row.get("hod_username") or "").casefold() == actor.casefold())
+            unscoped_same_dept = (
+                not row.get("hod_username")
+                and row_department.casefold() == actor_department.casefold()
+            )
+            if not (same_scope or unscoped_same_dept):
+                raise ValueError("You cannot recreate a Faculty account outside your HOD scope")
+            hod_username = actor
+            department = actor_department
+        else:
+            # Admin can repair the account while preserving an existing valid
+            # HOD owner; only fill a missing owner from the department.
+            hod_username = row.get("hod_username")
+            department = row.get("department") or "CSD"
+            if not hod_username:
+                hod_username = resolve_unique_hod_for_department(c, department)
+
+        new_name = (str(full_name).strip() if full_name is not None else str(row.get("full_name") or "").strip())
+        if not new_name:
+            new_name = username
+
+        existing_proxy = str(row.get("faculty_proxy_hod_username") or "").strip() or None
+        faculty_proxy_hod_username = existing_proxy
+        if actor_row["role"] == "HOD":
+            candidate = {
+                "username": username, "role": "FACULTY", "active": 1,
+                "full_name": new_name, "department": department,
+            }
+            if _is_same_person_faculty_proxy(candidate, actor_row):
+                faculty_proxy_hod_username = actor
+        if faculty_proxy_hod_username:
+            proxy_row = c.execute(
+                "SELECT username FROM users WHERE username=%s AND role='HOD' AND active=1",
+                (faculty_proxy_hod_username,),
+            ).fetchone()
+            if not proxy_row:
+                faculty_proxy_hod_username = None
+
+        c.execute(
+            """UPDATE users
+               SET password=%s, full_name=%s, department=%s, hod_username=%s,
+                   faculty_proxy_hod_username=%s, active=1, must_change_password=0,
+                   auth_version=auth_version+1
+             WHERE id=%s""",
+            (_hash_password(password), new_name, department, hod_username,
+             faculty_proxy_hod_username, row["id"]),
+        )
+
+        audit(
+            c, actor, "RECREATE", "user",
+            f"{username} (FACULTY) -> HOD {hod_username}; preserved academic mappings",
+        )
+        return {
+            "id": row["id"],
+            "username": username,
+            "full_name": new_name,
+            "hod_username": hod_username,
+            "faculty_proxy_hod_username": faculty_proxy_hod_username,
+            "department": department,
+        }
 
 
 def ensure_student_login(roll_no, actor="system"):

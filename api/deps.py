@@ -20,11 +20,25 @@ from database import connect
 class CurrentUser:
     """Mirrors webapp/auth_session.py's CurrentUser exactly."""
 
-    def __init__(self, username: str, role: str, student_roll_no: str | None, must_change_password: bool = False):
+    def __init__(
+        self,
+        username: str,
+        role: str,
+        student_roll_no: str | None,
+        must_change_password: bool = False,
+        department: str | None = None,
+        hod_username: str | None = None,
+    ):
         self.username = username
         self.role = role
         self.student_roll_no = student_roll_no
         self.must_change_password = must_change_password
+        # Keep mutable organizational scope available to API routes. These
+        # values come from the live users row (not the signed token) so HOD
+        # scope changes take effect immediately without requiring token data
+        # migrations.
+        self.department = department
+        self.hod_username = hod_username
 
 
 def _extract_user_payload(
@@ -66,7 +80,8 @@ def _validate_live_user(data: dict) -> CurrentUser:
 
     with connect() as c:
         row = c.execute(
-            """SELECT username, role, student_roll_no, active, must_change_password, auth_version
+            """SELECT username, role, student_roll_no, department, hod_username,
+                      active, must_change_password, auth_version
                FROM users WHERE username=%s""",
             (username,),
         ).fetchone()
@@ -85,6 +100,8 @@ def _validate_live_user(data: dict) -> CurrentUser:
         role=row["role"],
         student_roll_no=row["student_roll_no"],
         must_change_password=bool(row["must_change_password"]),
+        department=row.get("department"),
+        hod_username=row.get("hod_username"),
     )
 
 

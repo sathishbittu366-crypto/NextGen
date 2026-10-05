@@ -7,7 +7,7 @@ import { AppShell } from "../../components/AppShell";
 import { ErrorPopup } from "../../components/ErrorPopup";
 import { ToastPopup } from "../../components/ToastPopup";
 import {
-  getFacultyPage, createAccount, toggleAccountStatus, resetStudentPassword, deleteAccount,
+  getFacultyPage, createAccount, toggleAccountStatus, resetStudentPassword, deleteAccount, recreateFacultyAccount,
   saveRolePermissions, getUserPermissions, saveUserPermissions,
   type FacultyPageData, type UserAccount, type RolePermission, type UserPermission,
   getSmsAccessControl, saveSmsAccess, saveSmsBatchHandler,
@@ -54,6 +54,11 @@ export function FacultyPage({ user, onLoggedOut }: Props) {
   const [accountToDelete, setAccountToDelete] = useState<UserAccount | null>(null);
   const [deletingAccount, setDeletingAccount] = useState(false);
   const [deleteKeyInput, setDeleteKeyInput] = useState("");
+  const [accountToRecreate, setAccountToRecreate] = useState<UserAccount | null>(null);
+  const [recreatePassword, setRecreatePassword] = useState("");
+  const [showRecreatePassword, setShowRecreatePassword] = useState(false);
+  const [recreateFullName, setRecreateFullName] = useState("");
+  const [recreatingAccount, setRecreatingAccount] = useState(false);
 
   // Create form state
   const [formUsername, setFormUsername] = useState("");
@@ -221,6 +226,32 @@ export function FacultyPage({ user, onLoggedOut }: Props) {
       setRevealedCreds({ username: res.username, password: res.password });
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : "Failed to reset password");
+    }
+  }
+
+  async function handleRecreateAccount() {
+    if (!accountToRecreate) return;
+    if (recreatePassword.length < 8) {
+      setError("New password must be at least 8 characters");
+      return;
+    }
+    setRecreatingAccount(true);
+    setError(null);
+    try {
+      const result = await recreateFacultyAccount(accountToRecreate.id, {
+        password: recreatePassword,
+        full_name: recreateFullName.trim() || accountToRecreate.full_name,
+      });
+      setNotice(`${result.username} was repaired/recreated. Attendance, subjects and Faculty mappings were preserved.`);
+      setAccountToRecreate(null);
+      setRecreatePassword("");
+      setShowRecreatePassword(false);
+      setRecreateFullName("");
+      await reload();
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : "Failed to recreate Faculty account");
+    } finally {
+      setRecreatingAccount(false);
     }
   }
 
@@ -568,6 +599,21 @@ export function FacultyPage({ user, onLoggedOut }: Props) {
                         onClick={() => handleToggle(acc)}>
                         {acc.active ? "Deactivate" : "Activate"}
                       </button>
+                      {acc.role === "FACULTY" && (
+                        <button
+                          className="btn btn-sm btn-outline"
+                          style={{ marginLeft: 6, fontWeight: 700 }}
+                          onClick={() => {
+                            setAccountToRecreate(acc);
+                            setRecreateFullName(acc.full_name || "");
+                            setRecreatePassword("");
+                            setShowRecreatePassword(false);
+                          }}
+                          title="Repair credentials and HOD scope while preserving Faculty data"
+                        >
+                          Recreate / Repair
+                        </button>
+                      )}
                       <button
                         className="btn btn-sm btn-red"
                         style={{ marginLeft: 6, fontWeight: 700 }}
@@ -825,6 +871,56 @@ export function FacultyPage({ user, onLoggedOut }: Props) {
               {revealedCreds.password}
             </div>
             <button className="btn btn-block" onClick={() => setRevealedCreds(null)}>Done</button>
+          </div>
+        </div>
+      )}
+
+      {accountToRecreate && (
+        <div className="modal-overlay" onClick={() => { if (!recreatingAccount) { setAccountToRecreate(null); setShowRecreatePassword(false); } }}>
+          <div className="modal-box modal3dPopIn" style={{ maxWidth: 560, width: "94%", background: "var(--bg-card)" }} onClick={e => e.stopPropagation()}>
+            <h3 style={{ marginTop: 0, color: "var(--text)" }}>Repair Faculty Account</h3>
+            <p style={{ color: "var(--muted)", lineHeight: 1.55, fontSize: 13 }}>
+              This does <strong>not</strong> delete the account. It repairs its login credentials and restores the HOD scope while preserving attendance sessions, subject assignments, permissions, timetable references and SMS delegation.
+            </p>
+            <div className="field" style={{ marginTop: 16 }}>
+              <label style={{ fontWeight: 700, fontSize: 12, display: "block", marginBottom: 6 }}>Username</label>
+              <input className="input-field" value={accountToRecreate.username} disabled style={{ width: "100%" }} />
+            </div>
+            <div className="field" style={{ marginTop: 12 }}>
+              <label style={{ fontWeight: 700, fontSize: 12, display: "block", marginBottom: 6 }}>Full Name</label>
+              <input className="input-field" value={recreateFullName} onChange={e => setRecreateFullName(e.target.value)} style={{ width: "100%" }} />
+            </div>
+            <div className="field" style={{ marginTop: 12 }}>
+              <label style={{ fontWeight: 700, fontSize: 12, display: "block", marginBottom: 6 }}>New Password *</label>
+              <div style={{ display: "flex", gap: 8, alignItems: "stretch" }}>
+                <input
+                  type={showRecreatePassword ? "text" : "password"}
+                  className="input-field"
+                  value={recreatePassword}
+                  onChange={e => setRecreatePassword(e.target.value)}
+                  placeholder="Minimum 8 characters"
+                  style={{ width: "100%", flex: 1, minWidth: 0 }}
+                  autoFocus
+                  autoComplete="new-password"
+                />
+                <button
+                  type="button"
+                  className="btn btn-outline"
+                  onClick={() => setShowRecreatePassword(v => !v)}
+                  aria-label={showRecreatePassword ? "Hide password" : "View password"}
+                  aria-pressed={showRecreatePassword}
+                  style={{ minWidth: 86, padding: "0 14px", whiteSpace: "nowrap" }}
+                >
+                  {showRecreatePassword ? "Hide Pass" : "View Pass"}
+                </button>
+              </div>
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 20 }}>
+              <button className="btn btn-outline" onClick={() => { if (!recreatingAccount) { setAccountToRecreate(null); setShowRecreatePassword(false); } }} disabled={recreatingAccount}>Cancel</button>
+              <button className="btn btn-primary" onClick={() => void handleRecreateAccount()} disabled={recreatingAccount || recreatePassword.length < 8}>
+                {recreatingAccount ? "Repairing…" : "Repair & Restore Account"}
+              </button>
+            </div>
           </div>
         </div>
       )}

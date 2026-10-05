@@ -55,6 +55,10 @@ export async function createAccount(body: CreateAccountBody): Promise<{ id: numb
   return apiFetch("/api/faculty/create-account", { method: "POST", body });
 }
 
+export async function recreateFacultyAccount(accountId: number, body: { password: string; full_name?: string }): Promise<{ recreated: boolean; id: number; username: string; hod_username: string | null }> {
+  return apiFetch(`/api/faculty/accounts/${accountId}/recreate`, { method: "POST", body });
+}
+
 export async function toggleAccountStatus(accountId: number): Promise<{ active: boolean }> {
   return apiFetch(`/api/faculty/accounts/${accountId}/toggle-status`, { method: "POST" });
 }

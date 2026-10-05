@@ -303,3 +303,28 @@ def test_effective_schedule_uses_end_of_spanning_block(monkeypatch):
     assert len(rows) == 1
     assert rows[0]["start_time"] == "09:00"
     assert rows[0]["end_time"] == "10:40"
+
+
+def test_hod_faculty_proxy_is_explicit_or_unambiguous_legacy_mapping():
+    class ProxyConnection:
+        def execute(self, sql, params=()):
+            normalized = " ".join(str(sql).split()).lower()
+            if normalized.startswith("select username, role, hod_username, faculty_proxy_hod_username"):
+                return FakeResult([{
+                    "role": "FACULTY",
+                    "hod_username": "srikanthhod",
+                    "faculty_proxy_hod_username": None,
+                    "full_name": "Srikanth",
+                    "department": "CSD",
+                }])
+            if normalized.startswith("select username, full_name, department from users where username="):
+                return FakeResult([{
+                    "username": "srikanthhod",
+                    "full_name": "Srikanth",
+                    "department": "CSD",
+                }])
+            if normalized.startswith("select username from users where role='faculty'"):
+                return FakeResult([{"username": "srikanth"}])
+            return FakeResult([])
+
+    assert ats.faculty_proxy_hod_username(ProxyConnection(), "srikanth") == "srikanthhod"

@@ -214,3 +214,44 @@ class TestStrictAdminHierarchy:
         r = client.get("/api/faculty", headers=hod_headers)
         assert r.status_code == 200
         assert all(a["role"] == "FACULTY" for a in r.json()["data"]["accounts"])
+
+
+class TestFacultyOrphanScopeRepair:
+    def test_single_hod_department_claims_orphan_faculty(self):
+        from api.routes_faculty import _repair_orphan_faculty_scope
+        from api.deps import CurrentUser
+
+        class FakeCursor:
+            def __init__(self):
+                self.calls = []
+            def execute(self, sql, params=()):
+                self.calls.append((sql, params))
+                if "SELECT username FROM users" in sql:
+                    return self
+                return self
+            def fetchall(self):
+                return [{"username": "Srikanthhod"}]
+
+        c = FakeCursor()
+        user = CurrentUser("Srikanthhod", "HOD", None, department="CSD")
+        _repair_orphan_faculty_scope(c, user)
+        assert any("UPDATE users" in sql and "hod_username=%s" in sql for sql, _ in c.calls)
+        update = next(params for sql, params in c.calls if "UPDATE users" in sql)
+        assert update == ("Srikanthhod", "CSD", "CSD")
+
+    def test_multiple_hods_do_not_auto_claim_orphans(self):
+        from api.routes_faculty import _repair_orphan_faculty_scope
+        from api.deps import CurrentUser
+
+        class FakeCursor:
+            def __init__(self):
+                self.calls = []
+            def execute(self, sql, params=()):
+                self.calls.append((sql, params))
+                return self
+            def fetchall(self):
+                return [{"username": "HodOne"}, {"username": "HodTwo"}]
+
+        c = FakeCursor()
+        _repair_orphan_faculty_scope(c, CurrentUser("HodOne", "HOD", None, department="CSD"))
+        assert not any("UPDATE users" in sql for sql, _ in c.calls)
