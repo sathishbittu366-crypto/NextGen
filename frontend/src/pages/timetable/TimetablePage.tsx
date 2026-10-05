@@ -32,6 +32,10 @@ type DraftEntry = TimetableEntryInput & {
   faculty_name?: string | null;
 };
 
+type AdminSectionFilter = "ALL" | string;
+
+type BlockPaletteState = "closed" | "open";
+
 const DAYS = [
   ["MON", "Mon"], ["TUE", "Tue"], ["WED", "Wed"], ["THU", "Thu"], ["FRI", "Fri"], ["SAT", "Sat"],
 ] as const;
@@ -68,23 +72,52 @@ function canPlace(entries: DraftEntry[], candidate: Pick<DraftEntry, "day" | "se
   });
 }
 
+function recordLabel(record: TimetableRecord) {
+  return `${record.semester_code} · Section ${record.section_name}`;
+}
+
+function statusLabel(status: TimetableRecord["status"]) {
+  return status === "PUBLISHED" ? "Published" : "Draft";
+}
+
+function formatBlockTitle(entry: Pick<DraftEntry, "subject_code" | "subject_name" | "custom_label" | "block_type">) {
+  if (entry.subject_code && entry.subject_name) return `${entry.subject_code} · ${entry.subject_name}`;
+  return entry.custom_label || BLOCK_LABELS[entry.block_type];
+}
+
 export function TimetablePage({ user, onLoggedOut }: Props) {
-  const isBuilder = user.role === "HOD" || user.role === "ADMIN";
+  const isBuilderRole = user.role === "HOD" || user.role === "ADMIN";
+  const isAdmin = user.role === "ADMIN";
+
   const [data, setData] = useState<TimetablePageData | null>(null);
-  const [showBuilder, setShowBuilder] = useState(user.role === "ADMIN");
+  const [showBuilder, setShowBuilder] = useState(false);
+  const [builderReady, setBuilderReady] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+
+  // Selected timetable for the read-only Admin experience.
+  const [selectedRecordId, setSelectedRecordId] = useState<number | null>(null);
+  const [adminSemesterFilter, setAdminSemesterFilter] = useState<number | "ALL">("ALL");
+  const [adminSectionFilter, setAdminSectionFilter] = useState<AdminSectionFilter>("ALL");
+  const [adminMenuOpen, setAdminMenuOpen] = useState(false);
+  const [viewEntry, setViewEntry] = useState<TimetableEntry | null>(null);
+
+  // Builder state.
   const [semesterId, setSemesterId] = useState<number | "">("");
   const [sectionName, setSectionName] = useState("A");
   const [academicYear, setAcademicYear] = useState("2026-27");
-  const [selectedRecordId, setSelectedRecordId] = useState<number | null>(null);
   const [periods, setPeriods] = useState<TimetablePeriod[]>([]);
   const [entries, setEntries] = useState<DraftEntry[]>([]);
   const [editing, setEditing] = useState<DraftEntry | null>(null);
   const [dragType, setDragType] = useState<TimetableBlockType | null>(null);
   const [dragEntryId, setDragEntryId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [editorSubjects, setEditorSubjects] = useState<TimetableSubject[]>([]);
+  const [editorFaculty, setEditorFaculty] = useState<TimetableFaculty[]>([]);
+  const [paletteOpen, setPaletteOpen] = useState<BlockPaletteState>("closed");
+  const [builderMenuOpen, setBuilderMenuOpen] = useState(false);
+
   const [viewerSemesterId, setViewerSemesterId] = useState<number | "">("");
   const [viewerSection, setViewerSection] = useState("ALL");
 
@@ -100,89 +133,172 @@ export function TimetablePage({ user, onLoggedOut }: Props) {
   const activePeriods = periods.length ? periods : (data?.periods_default || []);
   const morningPeriods = useMemo(() => periodBySection(activePeriods, "MORNING"), [activePeriods]);
   const afternoonPeriods = useMemo(() => periodBySection(activePeriods, "AFTERNOON"), [activePeriods]);
-  const selectedRecord = useMemo(() => data?.timetables.find(t => t.id === selectedRecordId) || null, [data, selectedRecordId]);
-  const filteredViewer = useMemo(() => (data?.timetables || []).filter(t => viewerSection === "ALL" || t.section_name === viewerSection), [data, viewerSection]);
-  const viewerRecord = filteredViewer[0] || null;
 
-  useEffect(() => {
-    if (!data || !isBuilder) return;
-    const firstSemester = data.semesters.find(s => s.active) || data.semesters[0];
-    if (!semesterId && firstSemester) setSemesterId(firstSemester.id);
-    if (!periods.length) setPeriods(data.periods_default);
-  }, [data, isBuilder, semesterId, periods.length]);
+  const builderSelectedRecord = useMemo(
+    () => data?.timetables.find(t => t.id === selectedRecordId) || null,
+    [data, selectedRecordId],
+  );
 
+  const adminRecords = useMemo(() => {
+    const records = data?.timetables || [];
+    return records.filter(record => {
+      const semesterMatch = adminSemesterFilter === "ALL" || record.semester_id === adminSemesterFilter;
+      const sectionMatch = adminSectionFilter === "ALL" || record.section_name === adminSectionFilter;
+      return semesterMatch && sectionMatch;
+    });
+  }, [adminSectionFilter, adminSemesterFilter, data]);
+
+  const selectedAdminRecord = useMemo(() => {
+    if (!adminRecords.length) return null;
+    const exact = selectedRecordId ? adminRecords.find(record => record.id === selectedRecordId) : null;
+    return exact || adminRecords.find(record => record.status === "PUBLISHED") || adminRecords[0];
+  }, [adminRecords, selectedRecordId]);
+
+  const adminSections = useMemo(
+    () => Array.from(new Set((data?.timetables || []).map(record => record.section_name))).sort(),
+    [data],
+  );
+
+  // Admin should land directly in the most useful existing timetable. Prefer a
+  // published schedule, then any remaining timetable. Never default to the builder.
   useEffect(() => {
-    if (!isBuilder || !semesterId) return;
-    void (async () => {
-      try {
-        const fresh = await getTimetables({ semester_id: Number(semesterId) });
-        setData(fresh);
-        if (!periods.length) setPeriods(fresh.periods_default);
-      } catch (err) {
-        setError(err instanceof ApiClientError ? err.message : "Failed to load semester data");
-      }
-    })();
-  // Load subjects/faculty for the selected semester.
+    if (!isAdmin || !data?.timetables.length || showBuilder) return;
+    const candidate = selectedAdminRecord || data.timetables.find(record => record.status === "PUBLISHED") || data.timetables[0];
+    if (candidate && candidate.id !== selectedRecordId) setSelectedRecordId(candidate.id);
+  }, [data, isAdmin, selectedAdminRecord, selectedRecordId, showBuilder]);
+
+  // HOD builder and Admin edit mode need the subject/faculty catalog for the selected semester.
+  useEffect(() => {
+    if (!isBuilderRole || !showBuilder || !semesterId) return;
+    let cancelled = false;
+    void getTimetables({ semester_id: Number(semesterId) }).then((fresh) => {
+      if (cancelled) return;
+      setEditorSubjects(fresh.subjects || []);
+      setEditorFaculty(fresh.faculty || []);
+      if (!periods.length) setPeriods(fresh.periods_default || []);
+    }).catch((err) => {
+      if (!cancelled) setError(err instanceof ApiClientError ? err.message : "Failed to load timetable options");
+    });
+    return () => { cancelled = true; };
+  // We intentionally only refresh the editor catalog when the active semester changes.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [semesterId, isBuilder]);
+  }, [isBuilderRole, showBuilder, semesterId]);
 
   useEffect(() => {
-    if (!data || !isBuilder || !selectedRecordId) return;
-    const match = data.timetables.find(t => t.id === selectedRecordId);
-    if (match) {
-      setSemesterId(match.semester_id); setSectionName(match.section_name); setAcademicYear(match.academic_year); setPeriods(match.periods); setEntries(match.entries.map(toDraft));
+    if (!showBuilder || !builderSelectedRecord) return;
+    setSemesterId(builderSelectedRecord.semester_id);
+    setSectionName(builderSelectedRecord.section_name);
+    setAcademicYear(builderSelectedRecord.academic_year);
+    setPeriods(builderSelectedRecord.periods);
+    setEntries(builderSelectedRecord.entries.map(toDraft));
+    setEditing(null);
+    setPaletteOpen("closed");
+  }, [builderSelectedRecord, showBuilder]);
+
+  useEffect(() => {
+    if (!showBuilder || builderSelectedRecord) return;
+    if (!semesterId && data?.semesters?.length) {
+      const first = data.semesters.find(s => s.active) || data.semesters[0];
+      setSemesterId(first.id);
     }
-  }, [data, isBuilder, selectedRecordId]);
+    if (!periods.length && data?.periods_default) setPeriods(data.periods_default);
+  }, [builderSelectedRecord, data, periods.length, semesterId, showBuilder]);
 
   useEffect(() => {
-    if (!data || isBuilder) return;
+    if (!data || isBuilderRole) return;
     const first = data.timetables[0];
     if (first && !viewerSemesterId) setViewerSemesterId(first.semester_id);
-  }, [data, isBuilder, viewerSemesterId]);
+  }, [data, isBuilderRole, viewerSemesterId]);
+
+  useEffect(() => {
+    if (!adminSemesterFilter) setAdminSectionFilter("ALL");
+  }, [adminSemesterFilter]);
+
+  function enterEdit(record: TimetableRecord | null) {
+    setAdminMenuOpen(false);
+    setViewEntry(null);
+    setShowBuilder(true);
+    setBuilderReady(false);
+    setPaletteOpen("closed");
+    setEditing(null);
+    setDragType(null);
+    setDragEntryId(null);
+    setBuilderMenuOpen(false);
+
+    if (record) {
+      setSelectedRecordId(record.id);
+      setSemesterId(record.semester_id);
+      setSectionName(record.section_name);
+      setAcademicYear(record.academic_year);
+      setPeriods(record.periods);
+      setEntries(record.entries.map(toDraft));
+    } else {
+      setSelectedRecordId(null);
+      setEntries([]);
+      setPeriods(data?.periods_default || []);
+      setSectionName("A");
+      setAcademicYear("2026-27");
+      setSemesterId("");
+    }
+    window.requestAnimationFrame(() => setBuilderReady(true));
+  }
+
+  function exitEdit() {
+    setShowBuilder(false);
+    setBuilderReady(false);
+    setEditing(null);
+    setPaletteOpen("closed");
+    setDragType(null);
+    setDragEntryId(null);
+    setBuilderMenuOpen(false);
+  }
 
   async function newDraftForSemester(nextSemester: number) {
-    setSemesterId(nextSemester); setSelectedRecordId(null); setEntries([]); setPeriods(data?.periods_default || []); setSectionName("A"); setEditing(null);
-    try { setData(await getTimetables({ semester_id: nextSemester })); }
-    catch (err) { setError(err instanceof ApiClientError ? err.message : "Failed to load semester data"); }
+    setSelectedRecordId(null);
+    setSemesterId(nextSemester);
+    setEntries([]);
+    setPeriods(data?.periods_default || []);
+    setSectionName("A");
+    setAcademicYear("2026-27");
+    setEditing(null);
+    try {
+      const fresh = await getTimetables({ semester_id: nextSemester });
+      setEditorSubjects(fresh.subjects || []);
+      setEditorFaculty(fresh.faculty || []);
+      if (fresh.periods_default?.length) setPeriods(fresh.periods_default);
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : "Failed to load semester options");
+    }
   }
 
   function openRecord(record: TimetableRecord) {
-    setSelectedRecordId(record.id); setSemesterId(record.semester_id); setSectionName(record.section_name); setAcademicYear(record.academic_year); setPeriods(record.periods); setEntries(record.entries.map(toDraft)); setEditing(null);
+    setSelectedRecordId(record.id);
+    if (isAdmin && !showBuilder) return;
+    setSemesterId(record.semester_id);
+    setSectionName(record.section_name);
+    setAcademicYear(record.academic_year);
+    setPeriods(record.periods);
+    setEntries(record.entries.map(toDraft));
+    setEditing(null);
   }
 
   function subjectFor(entry: DraftEntry): TimetableSubject | undefined {
     if (entry.subject_id == null) return undefined;
-
-    // Builder responses include the subject catalogue, while viewer responses
-    // only need the subject data serialized on each timetable entry. Keep the
-    // renderer tolerant of both shapes so a published timetable never crashes.
-    const subject = data?.subjects?.find(s => s.id === entry.subject_id);
+    const source = showBuilder ? editorSubjects : (data?.subjects || []);
+    const subject = source.find(s => s.id === entry.subject_id);
     if (subject) return subject;
-
     if (entry.subject_code || entry.subject_name) {
-      return {
-        id: entry.subject_id,
-        code: entry.subject_code ?? "",
-        name: entry.subject_name ?? "",
-        has_lab: 0,
-      };
+      return { id: entry.subject_id, code: entry.subject_code ?? "", name: entry.subject_name ?? "", has_lab: 0 };
     }
-
     return undefined;
   }
 
   function facultyFor(entry: DraftEntry): TimetableFaculty | undefined {
     if (!entry.faculty_username) return undefined;
-
-    const faculty = data?.faculty?.find(f => f.username === entry.faculty_username);
+    const source = showBuilder ? editorFaculty : (data?.faculty || []);
+    const faculty = source.find(f => f.username === entry.faculty_username);
     if (faculty) return faculty;
-
-    // Viewer payloads carry the resolved faculty name on each entry instead of
-    // returning a separate faculty catalogue.
-    if (entry.faculty_name) {
-      return { username: entry.faculty_username, full_name: entry.faculty_name };
-    }
-
+    if (entry.faculty_name) return { username: entry.faculty_username, full_name: entry.faculty_name };
     return undefined;
   }
 
@@ -192,25 +308,37 @@ export function TimetablePage({ user, onLoggedOut }: Props) {
       day, section, start_slot: slot, duration: 1, block_type: type, subject_id: null, custom_label: "", faculty_username: null, room: "",
     };
     if (!canPlace(entries, candidate)) { setError("That period is already occupied."); return; }
-    setEntries(prev => [...prev, candidate]); setEditing(candidate);
+    setEntries(prev => [...prev, candidate]);
+    setEditing(candidate);
+    setPaletteOpen("closed");
+    setDragType(null);
   }
 
   function handleSlotDrop(day: string, section: TimetableSection, slot: number) {
     if (dragType) {
       if (canPlace(entries, { day, section, start_slot: slot, duration: 1 })) createEntry(dragType, day, section, slot);
       else setError("That period is already occupied.");
-      setDragType(null); return;
+      setDragType(null);
+      return;
     }
     if (dragEntryId) {
       const moving = entries.find(e => e.clientId === dragEntryId);
       if (!moving) return;
-      if (!canPlace(entries, { day, section, start_slot: slot, duration: moving.duration }, moving.clientId)) { setError("That move would overlap another block."); return; }
+      if (!canPlace(entries, { day, section, start_slot: slot, duration: moving.duration }, moving.clientId)) {
+        setError("That move would overlap another block.");
+        return;
+      }
       setEntries(prev => prev.map(e => e.clientId === dragEntryId ? { ...e, day, section, start_slot: slot } : e));
       setDragEntryId(null);
+    } else if (showBuilder && !getSpanEntry(entries, day, section, slot)) {
+      if (paletteOpen === "open") setDragType(null);
     }
   }
 
-  function removeEntry(id: string) { setEntries(prev => prev.filter(e => e.clientId !== id)); if (editing?.clientId === id) setEditing(null); }
+  function removeEntry(id: string) {
+    setEntries(prev => prev.filter(e => e.clientId !== id));
+    if (editing?.clientId === id) setEditing(null);
+  }
 
   function updateEditing(patch: Partial<DraftEntry>) {
     if (!editing) return;
@@ -229,123 +357,395 @@ export function TimetablePage({ user, onLoggedOut }: Props) {
 
   async function save(status: "DRAFT" | "PUBLISHED") {
     if (!semesterId) { setError("Select a semester first."); return; }
+    if (!sectionName.trim()) { setError("Section is required."); return; }
+
+    const currentLabel = builderSelectedRecord ? recordLabel(builderSelectedRecord) : `${data?.semesters.find(s => s.id === Number(semesterId))?.code || "Timetable"} · Section ${sectionName.trim().toUpperCase()}`;
+    if (status === "PUBLISHED") {
+      const confirmed = window.confirm(
+        `${currentLabel} will be published to faculty and students. Continue?`,
+      );
+      if (!confirmed) return;
+    } else if (builderSelectedRecord?.status === "PUBLISHED") {
+      const confirmed = window.confirm(
+        `Saving ${currentLabel} as a draft will remove its current published state. Continue?`,
+      );
+      if (!confirmed) return;
+    }
+
     setSaving(true); setError(null);
     try {
-      const result = await saveTimetable({ id: selectedRecordId, semester_id: semesterId, section_name: sectionName.trim().toUpperCase(), academic_year: academicYear.trim(), periods: activePeriods, entries, status });
-      setSelectedRecordId(result.timetable.id); setNotice(status === "PUBLISHED" ? "Timetable published for faculty and students." : "Timetable draft saved."); await load({ semester_id: semesterId });
-      setTimeout(() => setSelectedRecordId(result.timetable.id), 0);
-    } catch (err) { setError(err instanceof ApiClientError ? err.message : "Could not save timetable"); }
-    finally { setSaving(false); }
+      const result = await saveTimetable({
+        id: selectedRecordId,
+        semester_id: Number(semesterId),
+        section_name: sectionName.trim().toUpperCase(),
+        academic_year: academicYear.trim(),
+        periods: activePeriods,
+        entries,
+        status,
+      });
+      setSelectedRecordId(result.timetable.id);
+      setNotice(status === "PUBLISHED" ? "Timetable published for faculty and students." : "Timetable draft saved.");
+      await load();
+      setShowBuilder(false);
+      setBuilderReady(false);
+      setEditing(null);
+      setPaletteOpen("closed");
+      setBuilderMenuOpen(false);
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : "Could not save timetable");
+    } finally { setSaving(false); }
   }
 
   async function removeCurrent() {
     if (!selectedRecordId) return;
-    if (!window.confirm("Delete this timetable?")) return;
-    try { await deleteTimetable(selectedRecordId); setNotice("Timetable deleted."); setSelectedRecordId(null); setEntries([]); await load({ semester_id: Number(semesterId) }); }
-    catch (err) { setError(err instanceof ApiClientError ? err.message : "Could not delete timetable"); }
+    const record = data?.timetables.find(item => item.id === selectedRecordId);
+    const label = record ? recordLabel(record) : "this timetable";
+    if (!window.confirm(`Delete ${label}? This cannot be undone.`)) return;
+    try {
+      await deleteTimetable(selectedRecordId);
+      setNotice("Timetable deleted.");
+      setSelectedRecordId(null);
+      setEntries([]);
+      setShowBuilder(false);
+      await load();
+    } catch (err) { setError(err instanceof ApiClientError ? err.message : "Could not delete timetable"); }
   }
 
-  function blockTitle(entry: DraftEntry) {
-    const subject = subjectFor(entry);
-    return subject ? `${subject.code} · ${subject.name}` : entry.custom_label || BLOCK_LABELS[entry.block_type];
-  }
-
-  function renderDay(day: string, label: string, readonly = false, record?: TimetableRecord) {
-    const sourceEntries = readonly && record ? record.entries.map(toDraft) : entries;
-    const sourcePeriods = readonly && record ? record.periods : activePeriods;
-    const renderSection = (section: TimetableSection, count: number) => {
-      const sectionEntries = sourceEntries.filter(e => e.day === day && e.section === section);
-      return (
-        <div className={`tt-slot-area ${section === "MORNING" ? "morning" : "afternoon"}`}>
-          <div className="tt-slot-grid" aria-hidden={readonly ? undefined : "false"}>
-            {Array.from({ length: count }, (_, slot) => (
-              <div
-                key={`${day}-${section}-${slot}`}
-                className="tt-slot"
-                onDragOver={readonly ? undefined : e => { e.preventDefault(); e.currentTarget.classList.add("drop-ready"); }}
-                onDragLeave={readonly ? undefined : e => e.currentTarget.classList.remove("drop-ready")}
-                onDrop={readonly ? undefined : e => { e.preventDefault(); e.currentTarget.classList.remove("drop-ready"); handleSlotDrop(day, section, slot); }}
-                onClick={readonly ? undefined : () => { if (dragType) handleSlotDrop(day, section, slot); }}
-              >
-                {!readonly && !getSpanEntry(sourceEntries, day, section, slot) && <div className="tt-drop-label">Drop here</div>}
-              </div>
-            ))}
-          </div>
-          <div className="tt-block-layer">
-            {sectionEntries.map(entry => (
-              <div
-                key={entry.clientId}
-                className={`tt-block${!readonly && editing?.clientId === entry.clientId ? " tt-selected" : ""}`}
-                data-type={entry.block_type}
-                style={{ gridColumn: `${entry.start_slot + 1} / span ${entry.duration}` }}
-                draggable={!readonly}
-                onDragStart={readonly ? undefined : () => setDragEntryId(entry.clientId)}
-                onDragEnd={readonly ? undefined : () => setDragEntryId(null)}
-                onClick={readonly ? undefined : () => setEditing(entry)}
-              >
-                <div className="tt-block-title">{blockTitle(entry)}</div>
-                <div className="tt-block-meta">{BLOCK_LABELS[entry.block_type]} · {entry.duration} {entry.duration === 1 ? "period" : "periods"}</div>
-                {(entry.faculty_username && facultyFor(entry)) && <div className="tt-block-faculty">{facultyFor(entry)?.full_name}</div>}
-                {readonly && entry.faculty_name && <div className="tt-block-faculty">{entry.faculty_name}</div>}
-                {!!entry.room && <div className="tt-block-faculty">{entry.room}</div>}
-                {!readonly && <div className="tt-block-actions"><button type="button" className="tt-icon-btn" onClick={e => { e.stopPropagation(); setEditing(entry); }} aria-label="Edit">✎</button></div>}
-              </div>
-            ))}
-          </div>
-        </div>
-      );
-    };
-    return <div className="tt-day-row" key={`${day}-${record?.id ?? "edit"}`}><div className="tt-day-label">{label}</div>{renderSection("MORNING", periodBySection(sourcePeriods, "MORNING").length)}<div className="tt-break-strip">LUNCH</div>{renderSection("AFTERNOON", periodBySection(sourcePeriods, "AFTERNOON").length)}</div>;
-  }
-
-
-
-  function renderReadonly(record: TimetableRecord) {
+  function buildCellBlock(entry: DraftEntry, readonly: boolean) {
+    const title = formatBlockTitle(entry);
     return (
-      <div className="tt-canvas-card"><div className="tt-scroll"><div className="tt-grid">
-        <div className="tt-grid-header"><div className="tt-day-head">Day</div><div className="tt-slot-group">{periodBySection(record.periods, "MORNING").map(p=><div key={p.key} className="tt-slot-head"><strong>{p.label}</strong>{p.start}-{p.end}</div>)}</div><div className="tt-break-strip">L</div><div className="tt-slot-group afternoon">{periodBySection(record.periods, "AFTERNOON").map(p=><div key={p.key} className="tt-slot-head"><strong>{p.label}</strong>{p.start}-{p.end}</div>)}</div></div>
-        {DAYS.map(([day,label]) => renderDay(day, label, true, record))}
-      </div></div></div>
+      <button
+        type="button"
+        key={entry.clientId}
+        className={`tt-block${!readonly && editing?.clientId === entry.clientId ? " tt-selected" : ""}`}
+        data-type={entry.block_type}
+        style={{ gridColumn: `${entry.start_slot + 1} / span ${entry.duration}` }}
+        draggable={!readonly}
+        onDragStart={readonly ? undefined : () => setDragEntryId(entry.clientId)}
+        onDragEnd={readonly ? undefined : () => setDragEntryId(null)}
+        onClick={(event) => {
+          event.stopPropagation();
+          if (readonly) {
+            setViewEntry(entry as TimetableEntry);
+          } else {
+            setEditing(entry);
+          }
+        }}
+        title={title}
+      >
+        <span className="tt-block-title">{title}</span>
+      </button>
     );
   }
 
-  if (loading) return <AppShell user={user} activeNav="timetable" heading="Timetable" onLoggedOut={onLoggedOut}><p className="empty-note">Loading timetable workspace…</p></AppShell>;
+  function renderTimetableGrid(record: TimetableRecord, readonly = true) {
+    const sourcePeriods = record.periods;
+    const sourceEntries = readonly && record ? record.entries.map(toDraft) : entries;
 
-  if ((user.role === "HOD" || user.role === "FACULTY") && !showBuilder) return <AppShell user={user} activeNav="timetable" heading="Schedule" onLoggedOut={onLoggedOut}><ScheduleView user={user} onManage={()=>setShowBuilder(true)} /></AppShell>;
+    return (
+      <div className="tt-grid">
+        <div className="tt-grid-header">
+          <div className="tt-day-head">Day</div>
+          <div className="tt-slot-group">
+            {periodBySection(sourcePeriods, "MORNING").map(p => <div key={p.key} className="tt-slot-head"><strong>{p.label}</strong><span>{p.start}–{p.end}</span></div>)}
+          </div>
+          <div className="tt-break-strip"><span>LUNCH</span></div>
+          <div className="tt-slot-group afternoon">
+            {periodBySection(sourcePeriods, "AFTERNOON").map(p => <div key={p.key} className="tt-slot-head"><strong>{p.label}</strong><span>{p.start}–{p.end}</span></div>)}
+          </div>
+        </div>
+        {DAYS.map(([day, label]) => {
+          const recordDay = day;
+          const renderDaySection = (section: TimetableSection, count: number) => {
+            const sectionEntries = sourceEntries.filter(e => e.day === recordDay && e.section === section);
+            const slots = Array.from({ length: count }, (_, slot) => slot);
+            return (
+              <div className={`tt-slot-area ${section === "MORNING" ? "morning" : "afternoon"}`}>
+                <div className="tt-slot-grid" aria-hidden="true">
+                  {slots.map(slot => {
+                    const occupied = Boolean(getSpanEntry(sourceEntries, recordDay, section, slot));
+                    return (
+                      <div
+                        key={`${recordDay}-${section}-${slot}`}
+                        className={`tt-slot${!readonly && occupied ? " is-occupied" : ""}`}
+                        onDragOver={readonly ? undefined : (event) => { event.preventDefault(); event.currentTarget.classList.add("drop-ready"); }}
+                        onDragLeave={readonly ? undefined : (event) => event.currentTarget.classList.remove("drop-ready")}
+                        onDrop={readonly ? undefined : (event) => { event.preventDefault(); event.currentTarget.classList.remove("drop-ready"); handleSlotDrop(recordDay, section, slot); }}
+                        onClick={readonly ? undefined : () => handleSlotDrop(recordDay, section, slot)}
+                        aria-label={!readonly && !occupied ? `${label} ${periodBySection(sourcePeriods, section)[slot]?.label || "period"}` : undefined}
+                      >
+                        {!readonly && !occupied && <span className="tt-slot-add" aria-hidden="true">+</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="tt-block-layer">
+                  {sectionEntries.map(entry => buildCellBlock(entry, readonly))}
+                </div>
+              </div>
+            );
+          };
+          return (
+            <div className="tt-day-row" key={day}>
+              <div className="tt-day-label"><strong>{label}</strong><span>{day}</span></div>
+              {renderDaySection("MORNING", periodBySection(sourcePeriods, "MORNING").length)}
+              <div className="tt-break-strip"><span>LUNCH</span></div>
+              {renderDaySection("AFTERNOON", periodBySection(sourcePeriods, "AFTERNOON").length)}
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
 
-  if (!isBuilder) {
-    const records = filteredViewer;
-    const viewer = records.find(t => t.semester_id === viewerSemesterId) || viewerRecord;
+  function renderReadonlyGrid(record: TimetableRecord) {
+    return <div className="tt-table-frame"><div className="tt-scroll"><div className="tt-grid-shell">{renderTimetableGrid(record, true)}</div></div></div>;
+  }
+
+  function renderEditGrid() {
+    const draftRecord: TimetableRecord = {
+      id: selectedRecordId ?? 0,
+      semester_id: Number(semesterId || 0),
+      semester_code: data?.semesters.find(s => s.id === Number(semesterId))?.code || "",
+      semester_name: data?.semesters.find(s => s.id === Number(semesterId))?.name || "",
+      section_name: sectionName || "A",
+      academic_year: academicYear,
+      hod_username: user.username,
+      status: builderSelectedRecord?.status || "DRAFT",
+      periods: activePeriods,
+      entries: entries.map(entry => ({
+        id: Number(entry.id || 0), day: entry.day, section: entry.section, start_slot: entry.start_slot,
+        duration: entry.duration, block_type: entry.block_type, subject_id: entry.subject_id,
+        subject_code: entry.subject_code ?? subjectFor(entry)?.code ?? null,
+        subject_name: entry.subject_name ?? subjectFor(entry)?.name ?? null,
+        custom_label: entry.custom_label, faculty_username: entry.faculty_username,
+        faculty_name: entry.faculty_name ?? facultyFor(entry)?.full_name ?? null, room: entry.room,
+      })),
+    };
+    return <div className="tt-table-frame tt-edit-frame"><div className="tt-scroll"><div className="tt-grid-shell">{renderTimetableGrid(draftRecord, false)}</div></div></div>;
+  }
+
+  const adminHeaderRecord = selectedAdminRecord;
+  const adminStatus = adminHeaderRecord?.status || "DRAFT";
+
+  if (loading) {
+    return <AppShell user={user} activeNav="timetable" heading={isAdmin ? "Timetable" : "Timetable"} onLoggedOut={onLoggedOut}><p className="empty-note">Loading timetable…</p></AppShell>;
+  }
+
+  if ((user.role === "HOD" || user.role === "FACULTY") && !showBuilder) {
+    return <AppShell user={user} activeNav="timetable" heading="Schedule" onLoggedOut={onLoggedOut}><ScheduleView user={user} onManage={() => setShowBuilder(true)} /></AppShell>;
+  }
+
+  if (!isBuilderRole) {
+    const records = (data?.timetables || []).filter(t => viewerSection === "ALL" || t.section_name === viewerSection);
+    const viewer = records.find(t => t.semester_id === viewerSemesterId) || records[0] || null;
     return <AppShell user={user} activeNav="timetable" heading="Timetable" onLoggedOut={onLoggedOut}>
-      <ErrorPopup message={error} onClose={() => setError(null)} />{notice&&<ToastPopup type="success" message={notice} onClose={()=>setNotice(null)}/>} 
-      <div className="timetable-page">
-        <div className="tt-viewer-head"><div className="tt-viewer-title"><h2>Class timetable</h2><p>Published schedules from your department.</p></div><div className="tt-viewer-selects"><select value={viewerSemesterId} onChange={e=>{setViewerSemesterId(Number(e.target.value));setViewerSection("ALL");void load({semester_id:Number(e.target.value)})}}><option value="">Select semester</option>{data?.semesters.map(s=><option key={s.id} value={s.id}>{s.code}</option>)}</select><select value={viewerSection} onChange={e=>setViewerSection(e.target.value)}><option value="ALL">All sections</option>{Array.from(new Set((data?.timetables||[]).map(t=>t.section_name))).sort().map(s=><option key={s} value={s}>Section {s}</option>)}</select></div></div>
+      <ErrorPopup message={error} onClose={() => setError(null)} />
+      {notice && <ToastPopup type="success" message={notice} onClose={() => setNotice(null)} />}
+      <div className="timetable-page timetable-viewer-page">
+        <div className="tt-public-head">
+          <div><span className="tt-eyebrow">Academic schedule</span><h2>Class timetable</h2><p>Published schedule for your current academic context.</p></div>
+          <div className="tt-viewer-selects"><select value={viewerSemesterId} onChange={e => { setViewerSemesterId(Number(e.target.value)); void load({ semester_id: Number(e.target.value) }); }}><option value="">Select semester</option>{data?.semesters.map(s => <option key={s.id} value={s.id}>{s.code}</option>)}</select><select value={viewerSection} onChange={e => setViewerSection(e.target.value)}><option value="ALL">All sections</option>{Array.from(new Set((data?.timetables || []).map(t => t.section_name))).sort().map(s => <option key={s} value={s}>Section {s}</option>)}</select></div>
+        </div>
         {!viewer && <div className="tt-empty">No published timetable is available for this selection yet.</div>}
-        {viewer && <><div className="tt-status-row"><div className="tt-status-copy"><strong>{viewer.semester_code}</strong> · Section {viewer.section_name} · {viewer.academic_year}</div><span className="tt-badge published">PUBLISHED</span></div>{renderReadonly(viewer)}</>}
+        {viewer && <div className="tt-read-surface"><div className="tt-read-context"><div><strong>{recordLabel(viewer)}</strong><span>{viewer.academic_year}</span></div><span className="tt-badge published">PUBLISHED</span></div>{renderReadonlyGrid(viewer)}</div>}
       </div>
     </AppShell>;
   }
 
-  return <AppShell user={user} activeNav="timetable" heading="Timetable Builder" onLoggedOut={onLoggedOut}>
-    <ErrorPopup message={error} onClose={()=>setError(null)} />{notice&&<ToastPopup type="success" message={notice} onClose={()=>setNotice(null)}/>} 
-    <div className="timetable-page">
-      {user.role === "HOD" && <button type="button" className="ng-flat-btn ng-flat-btn-outline" onClick={()=>setShowBuilder(false)}>← Back to Schedule</button>}
-      <DaySchedulePanel faculty={data?.faculty ?? []} onNotice={setNotice} />
-      <div className="timetable-toolbar">
-        <div><div className="tt-inline-note">Compose the schedule as blocks. Drag a block onto a period, set its duration, then publish once it passes conflict checks.</div></div>
-        <div className="timetable-toolbar-actions"><button type="button" className="ng-flat-btn ng-flat-btn-outline" onClick={()=>semesterId&&newDraftForSemester(Number(semesterId))}>New timetable</button>{selectedRecordId&&<button type="button" className="ng-flat-btn ng-flat-btn-outline" onClick={removeCurrent}>Delete</button>}<button type="button" className="ng-flat-btn ng-flat-btn-outline" disabled={saving} onClick={()=>save("DRAFT")}>{saving?"Saving…":"Save draft"}</button><button type="button" className="ng-flat-btn ng-flat-btn-primary" disabled={saving} onClick={()=>save("PUBLISHED")}>{saving?"Publishing…":"Publish"}</button></div>
+  // ----------------------------- ADMIN: VIEW MODE -----------------------------
+  if (isAdmin && !showBuilder) {
+    return <AppShell user={user} activeNav="timetable" heading="Timetable" onLoggedOut={onLoggedOut}>
+      <ErrorPopup message={error} onClose={() => setError(null)} />
+      {notice && <ToastPopup type="success" message={notice} onClose={() => setNotice(null)} />}
+      <div className="timetable-page tt-admin-page">
+        <header className="tt-admin-intro">
+          <div>
+            <span className="tt-eyebrow">Academic operations</span>
+            <h2>Timetable management</h2>
+          </div>
+          <div className="tt-admin-actions">
+            <button type="button" className="ng-flat-btn ng-flat-btn-primary" onClick={() => enterEdit(null)}>+ New timetable</button>
+            <div className="tt-menu-wrap">
+              <button type="button" className="tt-icon-action" onClick={() => setAdminMenuOpen(v => !v)} aria-label="More timetable actions" aria-expanded={adminMenuOpen}>•••</button>
+              {adminMenuOpen && (
+                <>
+                  <button type="button" className="tt-popover-dismiss" aria-label="Close menu" onClick={() => setAdminMenuOpen(false)} />
+                  <div className="tt-admin-menu" role="menu">
+                    {adminHeaderRecord && <button type="button" role="menuitem" onClick={() => enterEdit(adminHeaderRecord)}>Edit timetable</button>}
+                    {adminHeaderRecord?.status === "DRAFT" && <button type="button" role="menuitem" onClick={() => enterEdit(adminHeaderRecord)}>Review & publish</button>}
+                    {adminHeaderRecord && <button type="button" role="menuitem" className="danger" onClick={() => { setAdminMenuOpen(false); void removeCurrent(); }}>Delete timetable</button>}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </header>
+
+        <section className="tt-admin-context" aria-label="Timetable selection">
+          <label>
+            <span>Semester</span>
+            <select value={adminSemesterFilter} onChange={e => { const value = e.target.value; setAdminSemesterFilter(value === "ALL" ? "ALL" : Number(value)); setAdminSectionFilter("ALL"); }}>
+              <option value="ALL">All semesters</option>
+              {data?.semesters.map(s => <option key={s.id} value={s.id}>{s.code}</option>)}
+            </select>
+          </label>
+          <label>
+            <span>Section</span>
+            <select value={adminSectionFilter} onChange={e => setAdminSectionFilter(e.target.value)}>
+              <option value="ALL">All sections</option>
+              {adminSections.map(section => <option key={section} value={section}>Section {section}</option>)}
+            </select>
+          </label>
+          <div className="tt-context-status">
+            <span>{adminRecords.length} {adminRecords.length === 1 ? "timetable" : "timetables"}</span>
+            <span>·</span>
+            <span>View mode</span>
+          </div>
+        </section>
+
+        {adminRecords.length > 1 && (
+          <section className="tt-admin-switcher">
+            <div className="tt-switcher-label">Timetables</div>
+            <div className="tt-switcher-list" role="tablist" aria-label="Available timetables">
+              {adminRecords.map(record => (
+                <button key={record.id} type="button" className={`tt-switcher-item${record.id === adminHeaderRecord?.id ? " active" : ""}`} onClick={() => setSelectedRecordId(record.id)} role="tab" aria-selected={record.id === adminHeaderRecord?.id}>
+                  <span><strong>{recordLabel(record)}</strong><small>{record.academic_year}</small></span>
+                  <span className={`tt-badge ${record.status === "PUBLISHED" ? "published" : "draft"}`}>{statusLabel(record.status)}</span>
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {!adminHeaderRecord && (
+          <section className="tt-admin-empty">
+            <div className="tt-empty-icon" aria-hidden="true">＋</div>
+            <span className="tt-eyebrow">No timetable yet</span>
+            <h3>Create the first schedule</h3>
+            <button type="button" className="ng-flat-btn ng-flat-btn-primary" onClick={() => enterEdit(null)}>Create timetable</button>
+          </section>
+        )}
+
+        {adminHeaderRecord && (
+          <section className="tt-admin-surface">
+            <div className="tt-admin-surface-head">
+              <div>
+                <div className="tt-admin-record-line"><strong>{recordLabel(adminHeaderRecord)}</strong><span>·</span><span>{adminHeaderRecord.academic_year}</span></div>
+              </div>
+              <span className={`tt-badge ${adminStatus === "PUBLISHED" ? "published" : "draft"}`}>{statusLabel(adminStatus)}</span>
+            </div>
+            {renderReadonlyGrid(adminHeaderRecord)}
+            <div className="tt-admin-surface-footer">
+              <button type="button" className="tt-inline-edit" onClick={() => enterEdit(adminHeaderRecord)}>Edit timetable</button>
+            </div>
+          </section>
+        )}
       </div>
-      <div className="timetable-toolbar"><div className="timetable-toolbar-left"><div className="tt-field"><label>Semester</label><select value={semesterId} onChange={e=>newDraftForSemester(Number(e.target.value))}><option value="">Choose semester</option>{data?.semesters.map(s=><option key={s.id} value={s.id}>{s.code} — {s.name}</option>)}</select></div><div className="tt-field"><label>Section</label><input value={sectionName} onChange={e=>setSectionName(e.target.value)} maxLength={32}/></div><div className="tt-field"><label>Academic year</label><input value={academicYear} onChange={e=>setAcademicYear(e.target.value)} maxLength={32}/></div></div><div className="tt-inline-note tt-desktop-note">Blocks snap to the timetable skeleton. A block cannot overlap another block.</div></div>
-      {selectedRecord && <div className="tt-status-row"><div className="tt-status-copy"><strong>{selectedRecord.semester_code}</strong> · Section {selectedRecord.section_name} · {selectedRecord.academic_year}</div><span className={`tt-badge ${selectedRecord.status === "PUBLISHED" ? "published" : "draft"}`}>{selectedRecord.status}</span></div>}
-      <div className="tt-workspace">
-        <aside className="tt-palette"><h3>Block library</h3><p>Drag these onto the timetable. On mobile, tap a block, then tap a period.</p><div className="tt-mobile-placement">Tip: tap a block type, then tap the empty period where you want it.</div><div className="tt-palette-group"><div>Academic</div><div className="tt-palette-list">{BLOCKS.map(([type,label])=><button key={type} type="button" draggable onDragStart={()=>setDragType(type)} onClick={()=>setDragType(type)} className="tt-palette-item">{label}<small>+</small></button>)}</div></div></aside>
-        <div className="tt-canvas-card"><div className="tt-scroll"><div className="tt-grid">
-          <div className="tt-grid-header"><div className="tt-day-head">Day</div><div className="tt-slot-group">{morningPeriods.map(p=><div key={p.key} className="tt-slot-head"><strong>{p.label}</strong>{p.start}-{p.end}</div>)}</div><div className="tt-break-strip">L</div><div className="tt-slot-group afternoon">{afternoonPeriods.map(p=><div key={p.key} className="tt-slot-head"><strong>{p.label}</strong>{p.start}-{p.end}</div>)}</div></div>
-          {DAYS.map(([day,label])=>renderDay(day,label))}
-        </div></div></div>
-      </div>
-      {editing && <div className="tt-modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)setEditing(null)}}><section className="tt-modal" role="dialog" aria-modal="true"><div className="tt-modal-head"><div><h3>Configure block</h3><p>{editing.day} · {editing.section === "MORNING" ? "Morning" : "Afternoon"} · slot {editing.start_slot + 1}</p></div><button type="button" className="tt-icon-btn" onClick={()=>setEditing(null)} aria-label="Close">×</button></div><div className="tt-modal-body"><div className="tt-modal-grid"><div className="tt-field"><label>Block type</label><select value={editing.block_type} onChange={e=>updateEditing({block_type:e.target.value as TimetableBlockType})}>{BLOCKS.map(([t,l])=><option key={t} value={t}>{l}</option>)}</select></div><div className="tt-field"><label>Duration</label><select value={editing.duration} onChange={e=>changeDuration(Number(e.target.value))}>{Array.from({length:periodBySection(activePeriods,editing.section).length-editing.start_slot},(_,i)=><option key={i+1} value={i+1}>{i+1} {i===0?"period":"periods"}</option>)}</select></div><div className="tt-field"><label>Subject</label><select value={editing.subject_id ?? ""} onChange={e=>updateEditing({subject_id:e.target.value?Number(e.target.value):null,custom_label:e.target.value?"":editing.custom_label})}><option value="">Custom / no subject</option>{(data?.subjects ?? []).map(s=><option key={s.id} value={s.id}>{s.code} — {s.name}</option>)}</select></div><div className="tt-field"><label>Faculty</label><select value={editing.faculty_username ?? ""} onChange={e=>updateEditing({faculty_username:e.target.value||null})}><option value="">Not assigned</option>{(data?.faculty ?? []).map(f=><option key={f.username} value={f.username}>{f.full_name || f.username}</option>)}</select></div><div className="tt-field"><label>Room</label><input value={editing.room} onChange={e=>updateEditing({room:e.target.value})} placeholder="e.g. Lab 2"/></div><div className="tt-field"><label>Custom label</label><input value={editing.custom_label} onChange={e=>updateEditing({custom_label:e.target.value})} placeholder="Used for activities / labels"/></div></div><div className="tt-help">The duration changes the block span automatically. Moving a block keeps its length; the system refuses overlaps before saving.</div><div className="tt-modal-actions"><button type="button" className="ng-flat-btn ng-flat-btn-outline" onClick={()=>{removeEntry(editing.clientId);setEditing(null)}}>Remove block</button><button type="button" className="ng-flat-btn ng-flat-btn-primary" onClick={()=>setEditing(null)}>Done</button></div></div></section></div>}
-      <div className="tt-side-panel"><div className="tt-side-card"><h3>Saved timetables</h3>{!data?.timetables.length?<div className="tt-empty">No timetable drafts yet.</div>:<div className="tt-side-list">{data?.timetables.map(t=><div className="tt-saved-row" key={t.id}><div className="tt-saved-main"><strong>{t.semester_code} · Section {t.section_name}</strong><span>{t.academic_year} · {t.status}</span></div><button type="button" className="ng-flat-btn ng-flat-btn-outline" onClick={()=>openRecord(t)}>Open</button></div>)}</div>}</div><div className="tt-side-card"><h3>Build status</h3><div className="tt-side-list"><div className="tt-saved-row"><div className="tt-saved-main"><strong>{entries.length}</strong><span>scheduled blocks</span></div></div><div className="tt-saved-row"><div className="tt-saved-main"><strong>{entries.filter(e=>e.block_type === "LAB").length}</strong><span>lab blocks</span></div></div></div></div></div>
+
+      {viewEntry && (
+        <div className="tt-modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) setViewEntry(null); }}>
+          <section className="tt-detail-modal" role="dialog" aria-modal="true" aria-labelledby="tt-detail-title">
+            <div className="tt-modal-head"><div><span className="tt-eyebrow">Timetable entry</span><h3 id="tt-detail-title">{formatBlockTitle(viewEntry)}</h3><p>{viewEntry.day} · {viewEntry.section === "MORNING" ? "Morning" : "Afternoon"}</p></div><button type="button" className="tt-icon-btn" onClick={() => setViewEntry(null)} aria-label="Close">×</button></div>
+            <div className="tt-detail-grid">
+              <div><span>Period</span><strong>{adminHeaderRecord?.periods.filter(p => p.section === viewEntry.section).slice(viewEntry.start_slot, viewEntry.start_slot + viewEntry.duration).map(p => p.label).join(" → ") || "—"}</strong></div>
+              <div><span>Type</span><strong>{BLOCK_LABELS[viewEntry.block_type]}</strong></div>
+              <div><span>Faculty</span><strong>{viewEntry.faculty_name || "Not assigned"}</strong></div>
+              <div><span>Room</span><strong>{viewEntry.room || "Not assigned"}</strong></div>
+            </div>
+            <div className="tt-modal-actions"><button type="button" className="ng-flat-btn ng-flat-btn-outline" onClick={() => setViewEntry(null)}>Close</button></div>
+          </section>
+        </div>
+      )}
+    </AppShell>;
+  }
+
+  // ----------------------------- BUILDER: HOD + ADMIN EDIT MODE -----------------------------
+  const activeBuilderRecord = builderSelectedRecord;
+  return <AppShell user={user} activeNav="timetable" heading={isAdmin ? "Edit timetable" : "Timetable builder"} onLoggedOut={onLoggedOut}>
+    <ErrorPopup message={error} onClose={() => setError(null)} />
+    {notice && <ToastPopup type="success" message={notice} onClose={() => setNotice(null)} />}
+    <div className={`timetable-page tt-builder-page${builderReady ? " is-ready" : ""}`}>
+      <header className="tt-builder-head">
+        <div>
+          <nav className="tt-breadcrumb" aria-label="Breadcrumb">
+            <span className="tt-breadcrumb-chevron" aria-hidden="true">‹</span>
+            <button type="button" onClick={exitEdit}>Timetable</button>
+            <span aria-hidden="true">/</span>
+            <span>Edit timetable</span>
+          </nav>
+          <h2>{activeBuilderRecord ? recordLabel(activeBuilderRecord) : "New timetable"}</h2>
+          <div className="tt-builder-subline">
+            <span>{activeBuilderRecord?.academic_year || academicYear}</span>
+            {activeBuilderRecord && <span className={`tt-badge ${activeBuilderRecord.status === "PUBLISHED" ? "published" : "draft"}`}>{statusLabel(activeBuilderRecord.status)}</span>}
+            {isAdmin && activeBuilderRecord?.status === "PUBLISHED" && <span className="tt-edit-mode-chip">EDIT MODE</span>}
+          </div>
+        </div>
+        <div className="tt-builder-actions">
+          <button type="button" className="ng-flat-btn ng-flat-btn-outline" disabled={saving} onClick={() => void save("DRAFT")}>{saving ? "Saving…" : "Save draft"}</button>
+          <button type="button" className="ng-flat-btn ng-flat-btn-primary" disabled={saving} onClick={() => void save("PUBLISHED")}>{saving ? "Publishing…" : "Publish"}</button>
+          {selectedRecordId && <div className="tt-menu-wrap">
+            <button type="button" className="tt-icon-action" onClick={() => setBuilderMenuOpen(v => !v)} aria-label="More edit actions" aria-expanded={builderMenuOpen}>•••</button>
+            {builderMenuOpen && (
+              <>
+                <button type="button" className="tt-popover-dismiss" aria-label="Close menu" onClick={() => setBuilderMenuOpen(false)} />
+                <div className="tt-admin-menu" role="menu">
+                  <button type="button" role="menuitem" className="danger" onClick={() => { setBuilderMenuOpen(false); void removeCurrent(); }}>Delete timetable</button>
+                </div>
+              </>
+            )}
+          </div>}
+        </div>
+      </header>
+
+      {user.role === "HOD" && <DaySchedulePanel faculty={editorFaculty} onNotice={setNotice} />}
+
+      <section className="tt-builder-context" aria-label="Timetable details">
+        <label className="tt-field"><span>Semester</span><select value={semesterId} disabled={Boolean(activeBuilderRecord)} onChange={e => void newDraftForSemester(Number(e.target.value))}><option value="">Choose semester</option>{data?.semesters.map(s => <option key={s.id} value={s.id}>{s.code} — {s.name}</option>)}</select></label>
+        <label className="tt-field"><span>Section</span><input value={sectionName} onChange={e => setSectionName(e.target.value)} maxLength={32} /></label>
+        <label className="tt-field"><span>Academic year</span><input value={academicYear} onChange={e => setAcademicYear(e.target.value)} maxLength={32} /></label>
+      </section>
+
+      <section className="tt-editor-tools">
+        <button type="button" className={`tt-add-class ${paletteOpen === "open" ? "active" : ""}`} onClick={() => setPaletteOpen(paletteOpen === "open" ? "closed" : "open")}>
+          <span>＋</span> Add class
+        </button>
+        <div className="tt-editor-summary"><strong>{entries.length}</strong><span>scheduled blocks</span></div>
+      </section>
+
+      {paletteOpen === "open" && (
+        <section className="tt-palette-panel" aria-label="Add timetable block">
+          <div className="tt-palette-copy"><strong>Choose class type</strong></div>
+          <div className="tt-palette-list">{BLOCKS.map(([type, label]) => <button key={type} type="button" draggable onDragStart={() => setDragType(type)} onClick={() => setDragType(type)} className={`tt-palette-item${dragType === type ? " selected" : ""}`}><span>{label}</span><small>＋</small></button>)}</div>
+        </section>
+      )}
+
+      {activeBuilderRecord || semesterId ? renderEditGrid() : (
+        <div className="tt-admin-empty tt-builder-empty"><span className="tt-eyebrow">Start here</span><h3>Select a semester</h3></div>
+      )}
     </div>
+
+    {editing && (
+      <div className="tt-modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) setEditing(null); }}>
+        <section className="tt-modal" role="dialog" aria-modal="true" aria-labelledby="configure-block-title">
+          <div className="tt-modal-head">
+            <div><span className="tt-eyebrow">Edit class</span><h3 id="configure-block-title">Configure timetable entry</h3><p>{editing.day} · {editing.section === "MORNING" ? "Morning" : "Afternoon"} · period {editing.start_slot + 1}</p></div>
+            <button type="button" className="tt-icon-btn" onClick={() => setEditing(null)} aria-label="Close">×</button>
+          </div>
+          <div className="tt-modal-body">
+            <div className="tt-modal-grid">
+              <div className="tt-field"><span>Type</span><select value={editing.block_type} onChange={e => updateEditing({ block_type: e.target.value as TimetableBlockType })}>{BLOCKS.map(([t, l]) => <option key={t} value={t}>{l}</option>)}</select></div>
+              <div className="tt-field"><span>Duration</span><select value={editing.duration} onChange={e => changeDuration(Number(e.target.value))}>{Array.from({ length: periodBySection(activePeriods, editing.section).length - editing.start_slot }, (_, i) => <option key={i + 1} value={i + 1}>{i + 1} {i === 0 ? "period" : "periods"}</option>)}</select></div>
+              <div className="tt-field"><span>Subject</span><select value={editing.subject_id ?? ""} onChange={e => updateEditing({ subject_id: e.target.value ? Number(e.target.value) : null, custom_label: e.target.value ? "" : editing.custom_label })}><option value="">Custom / no subject</option>{editorSubjects.map(s => <option key={s.id} value={s.id}>{s.code} — {s.name}</option>)}</select></div>
+              <div className="tt-field"><span>Faculty</span><select value={editing.faculty_username ?? ""} onChange={e => updateEditing({ faculty_username: e.target.value || null })}><option value="">Not assigned</option>{editorFaculty.map(f => <option key={f.username} value={f.username}>{f.full_name || f.username}</option>)}</select></div>
+              <div className="tt-field"><span>Room</span><input value={editing.room} onChange={e => updateEditing({ room: e.target.value })} placeholder="e.g. Lab 2" /></div>
+              <div className="tt-field"><span>Custom label</span><input value={editing.custom_label} onChange={e => updateEditing({ custom_label: e.target.value })} placeholder="Used for activities / labels" /></div>
+            </div>
+            <div className="tt-help">Edits remain local until you save the draft or publish. Moving or resizing a class never permits an overlap.</div>
+            <div className="tt-modal-actions"><button type="button" className="ng-flat-btn ng-flat-btn-outline tt-secondary-danger" onClick={() => removeEntry(editing.clientId)}>Remove class</button><button type="button" className="ng-flat-btn ng-flat-btn-primary" onClick={() => setEditing(null)}>Done</button></div>
+          </div>
+        </section>
+      </div>
+    )}
   </AppShell>;
 }
