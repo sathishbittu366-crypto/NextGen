@@ -4,6 +4,7 @@
 // tuples 1:1 so the form page can render generically from the same order
 // HOD sees in the OG app, without hardcoding 19 separate <input> blocks.
 import { apiFetch, apiUpload, getAuthUrl } from "./client";
+import type { StudentResultReport } from "./learning";
 
 // ──────────────────────────────────────────────
 // Field specs — label/key pairs, same order as OG's students.py
@@ -402,4 +403,9 @@ export interface StudentSemesterTrackRecord {
 
 export async function getStudentSemesterTrackRecord(id: number, semesterId: number): Promise<StudentSemesterTrackRecord> {
   return apiFetch<StudentSemesterTrackRecord>(`/api/students/${id}/track-record/${semesterId}`, { method: "GET" });
+}
+
+
+export async function getStudentResultReport(id: number): Promise<StudentResultReport> {
+  return apiFetch<StudentResultReport>(`/api/students/${id}/results-report`, { method: "GET" });
 }

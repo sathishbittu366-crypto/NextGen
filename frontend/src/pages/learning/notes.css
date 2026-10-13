@@ -1,0 +1,35 @@
+/* Notes — one collapsed row per subject; files appear only when a subject is opened. */
+.nt { display: grid; gap: 10px; max-width: 980px; }
+.nt-page-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 6px 0 12px; max-width: 980px; }
+.nt-page-title { margin: 0; font-size: 17px; font-weight: 800; letter-spacing: -.01em; }
+
+.nt-group { border: 1px solid var(--ng-line); border-radius: 12px; background: var(--ng-surface); overflow: hidden; }
+.nt-group-head { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 56px; padding: 10px 14px; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.nt-group-head:hover { background: var(--ng-surface-2); }
+.nt-group-head:focus-visible { outline: 2px solid var(--ng-accent); outline-offset: -2px; }
+.nt-group-title { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.nt-code { font-size: 11px; font-weight: 700; letter-spacing: .04em; color: var(--ng-soft); }
+.nt-name { font-size: 14.5px; font-weight: 800; line-height: 1.3; letter-spacing: -.005em; color: var(--ng-text); overflow-wrap: anywhere; }
+.nt-count { flex: none; min-width: 22px; padding: 2px 7px; border-radius: 99px; background: #e8edf1; color: var(--ng-muted); font-size: 11.5px; font-weight: 800; text-align: center; font-variant-numeric: tabular-nums; }
+.nt-chevron { flex: none; color: var(--ng-muted); transition: transform .15s ease; }
+.nt-group.is-open .nt-chevron { transform: rotate(180deg); }
+
+.nt-list { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--ng-line); }
+.nt-item { display: flex; align-items: center; gap: 14px; padding: 12px 14px; }
+.nt-item + .nt-item { border-top: 1px solid var(--ng-line); }
+.nt-type { flex: none; width: 40px; height: 40px; display: grid; place-items: center; border-radius: 9px; background: var(--ng-surface-2); border: 1px solid var(--ng-line); color: var(--ng-muted); font-size: 10.5px; font-weight: 800; letter-spacing: .04em; }
+.nt-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.nt-title { font-size: 14px; font-weight: 700; line-height: 1.35; color: var(--ng-text); overflow-wrap: anywhere; }
+.nt-meta { font-size: 12px; color: var(--ng-muted); overflow-wrap: anywhere; }
+.nt-actions { flex: none; display: flex; gap: 8px; }
+.nt-remove { color: var(--ng-red); }
+
+.nt-empty { max-width: 980px; padding: 36px 24px; border: 1px solid var(--ng-line); border-radius: 12px; background: var(--ng-surface); text-align: center; color: var(--ng-muted); font-size: 14px; }
+.nt-empty strong { display: block; margin-bottom: 4px; color: var(--ng-text); font-size: 15px; }
+
+@media (max-width: 640px) {
+  .nt-item { gap: 12px; padding: 12px; }
+  .nt-type { width: 36px; height: 36px; }
+  .nt-actions { flex-direction: column; }
+}
+@media (prefers-reduced-motion: reduce) { .nt-chevron { transition: none; } }

@@ -1,0 +1,36 @@
+/* Report a problem — light surface built from the --ng-* tokens, flat controls.
+   Centered dialog on desktop, bottom sheet on phones. */
+.rp-overlay { position: fixed; inset: 0; z-index: 999; display: flex; align-items: center; justify-content: center; padding: 20px; background: rgba(23, 33, 43, .45); }
+.rp-card { width: 100%; max-width: 480px; max-height: calc(100dvh - 40px); overflow-y: auto; padding: 22px 24px 24px; border: 1px solid var(--ng-line); border-radius: 14px; background: var(--ng-surface); color: var(--ng-text); box-shadow: 0 24px 60px rgba(19, 38, 53, .22); animation: rp-in .16s ease-out; }
+@keyframes rp-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+.rp-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.rp-head h2 { margin: 0; font-size: 18px; font-weight: 800; letter-spacing: -.02em; color: var(--ng-text); }
+.rp-head p { margin: 4px 0 0; font-size: 12.5px; color: var(--ng-muted); }
+.rp-close { flex: none; width: 36px; height: 36px; margin: -6px -8px 0 0; display: grid; place-items: center; border: 0; border-radius: 9px; background: transparent; color: var(--ng-muted); font-size: 22px; line-height: 1; cursor: pointer; }
+.rp-close:hover { background: var(--ng-surface-2); color: var(--ng-text); }
+.rp-close:focus-visible { outline: 2px solid var(--ng-accent); outline-offset: 1px; }
+
+.rp-form { display: grid; gap: 16px; margin-top: 18px; }
+.rp-field { display: grid; gap: 6px; }
+.rp-field label { font-size: 12.5px; font-weight: 700; color: var(--ng-muted); }
+.rp-field select, .rp-field input, .rp-field textarea { width: 100%; box-sizing: border-box; border: 1px solid var(--ng-line-strong); border-radius: 9px; background: var(--ng-surface); color: var(--ng-text); font: inherit; font-size: 14px; }
+.rp-field select, .rp-field input { min-height: 44px; padding: 0 12px; }
+.rp-field textarea { min-height: 112px; padding: 10px 12px; line-height: 1.45; resize: vertical; }
+.rp-field input::placeholder, .rp-field textarea::placeholder { color: var(--ng-soft); }
+.rp-field select:focus, .rp-field input:focus, .rp-field textarea:focus { outline: 2px solid var(--ng-accent); outline-offset: 1px; border-color: var(--ng-accent); }
+
+.rp-msg { margin: 0; padding: 10px 12px; border-radius: 9px; font-size: 13px; line-height: 1.4; }
+.rp-msg.is-error { background: var(--ng-red-soft); color: var(--ng-red); }
+.rp-msg.is-ok { background: var(--ng-green-soft); color: var(--ng-green); }
+
+.rp-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 2px; }
+.rp-actions .ng-flat-btn { min-height: 44px; padding: 0 20px; }
+
+@media (max-width: 640px) {
+  .rp-overlay { align-items: flex-end; padding: 0; }
+  .rp-card { max-width: none; max-height: 92dvh; padding: 18px 16px calc(16px + env(safe-area-inset-bottom)); border-width: 1px 0 0; border-radius: 16px 16px 0 0; animation-name: rp-up; }
+  .rp-actions { display: grid; grid-template-columns: 1fr 1.4fr; }
+}
+@keyframes rp-up { from { transform: translateY(24px); opacity: .6; } to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .rp-card { animation: none; } }

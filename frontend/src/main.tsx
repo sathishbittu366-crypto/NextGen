@@ -5,6 +5,7 @@ import { App } from "./App";
 import { ThemeProvider } from "./context/ThemeContext";
 import "./tokens.css";
 import "./redesign.css";
+import "./styles/ngx.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

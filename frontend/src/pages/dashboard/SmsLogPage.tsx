@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { AppShell } from "../../components/AppShell";
 import { ErrorPopup } from "../../components/ErrorPopup";
 import { ToastPopup } from "../../components/ToastPopup";
@@ -33,6 +33,7 @@ import {
 import { ApiClientError } from "../../api/client";
 import { getFacultyPage, getSmsAccessControl, type UserAccount, type FacultySmsAccessData } from "../../api/faculty";
 import { AdminStudentSelfEditCard } from "../../components/AdminStudentSelfEditCard";
+import { EmptyState, Icon, Modal, Pill, Switch, TabPanel, Tabs, humanize, useConfirm, type TabDef, type Tone } from "../../components/ngx";
 
 interface Props {
   user: { username: string; role: string };
@@ -117,6 +118,9 @@ export function SmsLogPage({ user, onLoggedOut }: Props) {
   const [gatewayConnectionStatus, setGatewayConnectionStatus] = useState<Record<number, "connected" | "not_connected">>({});
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+
+  const [requestedTab, setRequestedTab] = useState("");
+  const { confirm, dialog } = useConfirm();
 
   const currentGateway = useMemo(() => {
     if (isAdmin) return gateways.find((g) => g.hod_username === selectedHodUsername) || null;
@@ -277,7 +281,19 @@ export function SmsLogPage({ user, onLoggedOut }: Props) {
 
   const sendGeneral = async () => {
     if (!selectedBatchId || !composeText.trim()) return;
-    if (!window.confirm(isFaculty ? "Send this SMS to every parent in the selected delegated batch?" : "Queue this General Notice for every parent in the selected batch?")) return;
+    const batch = batches.find((b) => b.id === selectedBatchId);
+    const label = batch ? (batch.code || batch.name) : "the selected batch";
+    const ok = await confirm({
+      title: isFaculty ? `Send SMS to ${label}?` : `Queue notice for ${label}?`,
+      body: (
+        <>
+          <p>{batch ? `Every parent in ${label} (${batch.student_count} students) will receive this message${isFaculty ? " right away" : " once it is approved"}.` : "Every parent in the selected batch will receive this message."}</p>
+          <div className="ngx-quote">{composeText}</div>
+        </>
+      ),
+      confirmLabel: isFaculty ? "Send SMS" : "Queue notice",
+    });
+    if (!ok) return;
     setBusy("general"); setError(null);
     try {
       const result = await sendGeneralNotice(selectedBatchId, composeText);
@@ -289,10 +305,42 @@ export function SmsLogPage({ user, onLoggedOut }: Props) {
 
   const approve = async () => {
     if (!approvalRows.length) return;
-    if (!window.confirm(`Approve ${approvalRows.length} absentee SMS message(s) for ${approvalDate}?`)) return;
+    const ok = await confirm({
+      title: `Approve ${approvalRows.length} message${approvalRows.length === 1 ? "" : "s"}?`,
+      body: <p>Absentee messages for {prettyDate(approvalDate)} will be released for sending.</p>,
+      confirmLabel: `Approve ${approvalRows.length}`,
+    });
+    if (!ok) return;
     setBusy("approve"); setError(null);
     try { const result = await approveSmsBatch(approvalDate); setSuccess(`${result.approved_count} message(s) approved.`); await load(); }
     catch (err) { setError(err instanceof ApiClientError ? err.message : "Could not approve SMS batch"); }
+    finally { setBusy(null); }
+  };
+
+  const approveOne = async (r: SmsApprovalRow) => {
+    const ok = await confirm({
+      title: `Approve SMS for ${r.student_name}?`,
+      body: <><div className="ngx-quote">{r.message}</div><p className="ngx-hint">To {r.parent_phone}</p></>,
+      confirmLabel: "Approve",
+    });
+    if (!ok) return;
+    setBusy(`approve-${r.id}`);
+    try { await approveSmsRow(r.id); setSuccess(`SMS approved for ${r.roll_no}.`); await load(); }
+    catch (err) { setError(err instanceof ApiClientError ? err.message : "Could not approve SMS"); }
+    finally { setBusy(null); }
+  };
+
+  const rejectOne = async (r: SmsApprovalRow) => {
+    const ok = await confirm({
+      title: `Reject SMS for ${r.student_name}?`,
+      body: <p>This message will not be sent to {r.parent_phone}.</p>,
+      confirmLabel: "Reject message",
+      tone: "danger",
+    });
+    if (!ok) return;
+    setBusy(`reject-${r.id}`);
+    try { await rejectSmsRow(r.id); setSuccess(`SMS rejected for ${r.roll_no}.`); await load(); }
+    catch (err) { setError(err instanceof ApiClientError ? err.message : "Could not reject SMS"); }
     finally { setBusy(null); }
   };
 
@@ -303,6 +351,27 @@ export function SmsLogPage({ user, onLoggedOut }: Props) {
     finally { setBusy(null); }
   };
 
+  const saveTemplate = async () => {
+    try {
+      const r = await saveSmsTemplate(messageType, composeText);
+      setTemplates((t) => ({ ...t, [messageType]: r.template }));
+      setSuccess("Message template saved for this scope.");
+    } catch (err) { setError(err instanceof ApiClientError ? err.message : "Could not save message template"); }
+  };
+
+  const toggleAutoSend = async (next: boolean) => {
+    if (!currentGateway) return;
+    try {
+      const res = await setSmsGatewayAutoSend(currentGateway.id, next);
+      setGateways((old) => old.map((g) => (g.id === currentGateway.id ? { ...g, auto_send: res.auto_send } : g)));
+      setSuccess(res.auto_send ? "Auto-send enabled for your gateway." : "Auto-send disabled.");
+    } catch (err) { setError(err instanceof ApiClientError ? err.message : "Could not change auto-send setting"); }
+  };
+
+  const tabIds = isFaculty ? ["compose", "activity", "setup"] : ["review", "compose", "activity", "setup"];
+  const tab = tabIds.includes(requestedTab) ? requestedTab : tabIds[0];
+  const setTab = (id: string) => setRequestedTab(id);
+
   if (isAdmin) {
     return <AdminGatewayOverview user={user} onLoggedOut={onLoggedOut} gateways={gateways} activities={smsActivity} loading={loading} error={error} onRefresh={() => void load()} onClearError={() => setError(null)} />;
   }
@@ -311,203 +380,457 @@ export function SmsLogPage({ user, onLoggedOut }: Props) {
     return (
       <AppShell user={user as any} activeNav="sms-log" heading="SMS Gateway" onLoggedOut={onLoggedOut}>
         <ErrorPopup message={error} onClose={() => setError(null)} />
-        <div style={{ ...cardStyle, maxWidth: 760, margin: "48px auto" }}>
-          <div style={eyebrow}>SMS GATEWAY ACCESS</div>
-          <h2 style={titleStyle}>Access not granted</h2>
-          <p style={muted}>Your HOD has not granted SMS Gateway permission to this Faculty account. No gateway, batch or recipient controls are available until delegation is enabled.</p>
+        <div className="ngx ngx-page">
+          <div className="ngx-card">
+            <EmptyState title="SMS Gateway access is not enabled" hint="Your HOD has not delegated SMS sending to this account yet. Ask them to enable it from the Faculty page." />
+          </div>
         </div>
       </AppShell>
     );
   }
 
+  const gatewayState: { tone: "good" | "bad" | "warn"; label: string } = !currentGateway
+    ? { tone: "bad", label: "Not configured" }
+    : !currentGateway.active
+      ? { tone: "warn", label: "Disabled" }
+      : gatewayConfigured
+        ? { tone: "good", label: "Ready" }
+        : { tone: "bad", label: "Not configured" };
+  const connection = currentGateway ? gatewayConnectionStatus[currentGateway.id] : undefined;
+  const blockedCount = approvalRows.filter((r) => r.error).length;
+  const handlers = (hodSmsAccess?.faculty || []).filter((f) => f.enabled);
+  const handlerReady = (f: (typeof handlers)[number]) => {
+    const g = gateways.find((x) => x.owner_username === f.username && x.hod_username === user.username);
+    return Boolean(g && g.active && ((g.gateway_mode === "cloud" && g.device_id_configured && g.username && g.password_set) || (g.gateway_mode === "local" && g.local_url) || (g.gateway_mode === "modem" && g.modem_port)));
+  };
+  const setupNeedsAttention = gatewayState.tone !== "good" || (isHod && handlers.some((f) => !handlerReady(f)));
+  const selectedBatch = batches.find((b) => b.id === selectedBatchId);
+
+  const tabs: TabDef[] = isFaculty
+    ? [
+        { id: "compose", label: "Send message" },
+        { id: "activity", label: "Activity", count: smsActivity.length },
+        { id: "setup", label: "Gateway", alert: setupNeedsAttention },
+      ]
+    : [
+        { id: "review", label: "Review", count: approvalRows.length || null },
+        { id: "compose", label: "Compose" },
+        { id: "activity", label: "Activity", count: smsActivity.length },
+        { id: "setup", label: "Setup", alert: setupNeedsAttention },
+      ];
+
+  const gatewayForm = (
+    <>
+      {isFaculty && facultyAccess && (
+        <div className="ngx-assigned">
+          <span className="ngx-label">Delegated by</span>
+          <strong>{facultyAccess.hod_username || "Your HOD"}</strong>
+          <div className="ngx-chips">
+            {facultyAccess.allowed_batches.map((b) => <span key={b.id} className="ngx-chip">{b.code || b.name} · {b.student_count}</span>)}
+            {!facultyAccess.allowed_batches.length && <span className="ngx-chip is-none">No batch delegated</span>}
+          </div>
+        </div>
+      )}
+      {isFaculty && !currentGateway && (
+        <div className="ngx-notice is-info" style={{ marginBottom: 18 }}>
+          <Icon name="info" />
+          <span>No gateway yet. Add your own credentials below; other Faculty credentials are never visible to you.</span>
+        </div>
+      )}
+      <div className="ngx-form-grid">
+        <label className="ngx-field"><span>Gateway name</span><input className="ngx-input" value={gateway.gateway_name} onChange={(e) => setGateway({ ...gateway, gateway_name: e.target.value })} /></label>
+        <label className="ngx-field"><span>Mode</span>
+          <select className="ngx-select" value={gateway.gateway_mode} onChange={(e) => setGateway({ ...gateway, gateway_mode: e.target.value as GatewayForm["gateway_mode"] })}>
+            <option value="cloud">Cloud server</option><option value="local">Local server</option><option value="modem">USB / serial modem</option>
+          </select>
+        </label>
+        {gateway.gateway_mode === "cloud" && <>
+          <label className="ngx-field"><span>Device ID</span><input className="ngx-input" value={gateway.device_id} onChange={(e) => setGateway({ ...gateway, device_id: e.target.value })} placeholder={currentGateway?.device_id_masked || "Enter device ID"} autoComplete="off" /></label>
+          <label className="ngx-field"><span>Cloud username</span><input className="ngx-input" value={gateway.username} onChange={(e) => setGateway({ ...gateway, username: e.target.value })} autoComplete="off" /></label>
+          <label className="ngx-field"><span>Cloud password {currentGateway?.password_set && <em>· leave blank to keep</em>}</span><input type="password" className="ngx-input" value={gateway.password} onChange={(e) => setGateway({ ...gateway, password: e.target.value })} autoComplete="new-password" /></label>
+          <label className="ngx-field"><span>SIM slot <em>· optional</em></span><input type="number" min={1} max={3} className="ngx-input" value={gateway.sim_number} onChange={(e) => setGateway({ ...gateway, sim_number: e.target.value })} /></label>
+        </>}
+        {gateway.gateway_mode === "local" && <>
+          <label className="ngx-field is-wide"><span>Local server URL</span><input className="ngx-input" value={gateway.local_url} onChange={(e) => setGateway({ ...gateway, local_url: e.target.value })} placeholder="http://phone-ip:8080" /></label>
+          <label className="ngx-field"><span>Username</span><input className="ngx-input" value={gateway.username} onChange={(e) => setGateway({ ...gateway, username: e.target.value })} autoComplete="off" /></label>
+          <label className="ngx-field"><span>Password {currentGateway?.password_set && <em>· leave blank to keep</em>}</span><input type="password" className="ngx-input" value={gateway.password} onChange={(e) => setGateway({ ...gateway, password: e.target.value })} autoComplete="new-password" /></label>
+        </>}
+        {gateway.gateway_mode === "modem" && <>
+          <label className="ngx-field"><span>Serial port</span><input className="ngx-input" value={gateway.modem_port} onChange={(e) => setGateway({ ...gateway, modem_port: e.target.value })} placeholder="COM3 or /dev/ttyUSB0" /></label>
+          <label className="ngx-field"><span>Baud rate</span><input className="ngx-input" value={gateway.modem_baud} onChange={(e) => setGateway({ ...gateway, modem_baud: e.target.value })} /></label>
+        </>}
+      </div>
+      <div style={{ marginTop: 10 }}>
+        <div className="ngx-toggle-row">
+          <div><strong>Gateway enabled</strong></div>
+          <Switch label="Gateway enabled" checked={gateway.active} onChange={(v) => setGateway({ ...gateway, active: v })} />
+        </div>
+        {currentGateway && (
+          <div className="ngx-toggle-row">
+            <div><strong>Auto-send approved SMS</strong><small>Send queued messages without manual review. Applies immediately.</small></div>
+            <Switch label="Auto-send approved SMS" checked={Boolean(currentGateway.auto_send)} onChange={(v) => void toggleAutoSend(v)} />
+          </div>
+        )}
+      </div>
+      <div className="ngx-form-actions">
+        <button className="ngx-btn is-primary" onClick={() => void saveGateway()} disabled={busy !== null || (isFaculty && !facultyAccess?.enabled)}>{busy === "gateway" ? "Saving…" : "Save gateway"}</button>
+        {currentGateway && <button className="ngx-btn is-secondary" onClick={() => void testConnection()} disabled={busy !== null}>{busy === "connection" ? "Testing…" : "Test connection"}</button>}
+        {connection === "connected" && <Pill tone="good">Connected</Pill>}
+        {connection === "not_connected" && <Pill tone="bad">Not connected</Pill>}
+      </div>
+    </>
+  );
+
   return (
     <AppShell user={user as any} activeNav="sms-log" heading={isFaculty ? "SMS Gateway" : "Absentee SMS"} onLoggedOut={onLoggedOut}>
       <ErrorPopup message={error} onClose={() => setError(null)} />
       <ToastPopup message={success} onClose={() => setSuccess(null)} />
-      <div className="sms-log-page" style={{ display: "grid", gap: 14, maxWidth: 1100, margin: "0 auto" }}>
+      {dialog}
+      <div className="ngx ngx-page">
 
-        {isHod && (
-          <section style={cardStyle}>
-            <div style={headerStyle}>
-              <div>
-                <div style={eyebrow}>SMS GATEWAY HANDLERS</div>
-                <h2 style={titleStyle}>Faculty gateway handlers</h2>
-                <p style={muted}>Faculty shown here are delegated to handle SMS for batches inside your department. Their phones and credentials remain private to their own accounts; you only see routing status and logs.</p>
-              </div>
-              <span style={pill("good")}>{(hodSmsAccess?.faculty || []).filter(f => f.enabled).length} ACTIVE</span>
-            </div>
-            {!(hodSmsAccess?.faculty || []).some(f => f.enabled) ? (
-              <div style={emptyStyle}>No Faculty has been delegated SMS Gateway access yet. Open <strong>Faculty → Edit Access → SMS Gateway</strong> to assign a batch handler.</div>
-            ) : (
-              <div style={{ display: "grid", gap: 10 }}>
-                {(hodSmsAccess?.faculty || []).filter(f => f.enabled).map(f => {
-                  const g = gateways.find(x => x.owner_username === f.username && x.hod_username === user.username);
-                  const delegated = f.allowed_batches || [];
-                  const ready = Boolean(g && g.active && ((g.gateway_mode === "cloud" && g.device_id_configured && g.username && g.password_set) || (g.gateway_mode === "local" && g.local_url) || (g.gateway_mode === "modem" && g.modem_port)));
-                  return (
-                    <div key={f.username} style={handlerRowStyle}>
-                      <div style={{ minWidth: 180, flex: 1 }}>
-                        <strong style={{ color: "var(--text)" }}>{f.full_name || f.username}</strong>
-                        <div style={muted}>{f.username}</div>
-                      </div>
-                      <div style={{ minWidth: 190, flex: 1 }}>
-                        <div style={{ color: "var(--muted)", fontSize: 11, fontWeight: 800, textTransform: "uppercase" }}>Assigned batch</div>
-                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 5 }}>{delegated.length ? delegated.map(b => <span key={b.id} style={batchPillStyle}>{b.code || b.name} · {b.student_count ?? "—"}</span>) : <span style={{ ...batchPillStyle, color: "#dc2626" }}>No batch</span>}</div>
-                      </div>
-                      <div style={{ minWidth: 250, textAlign: "right" }}>
-                        <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" }}>
-                          <span style={pill(ready ? "good" : "bad")}>{ready ? "GATEWAY READY" : g ? "GATEWAY NOT READY" : "NOT CONFIGURED"}</span>
-                          {g && (
-                            <span style={pill(gatewayConnectionStatus[g.id] === "connected" ? "good" : gatewayConnectionStatus[g.id] === "not_connected" ? "bad" : "muted")}>
-                              {gatewayConnectionStatus[g.id] === "connected" ? "CONNECTED" : gatewayConnectionStatus[g.id] === "not_connected" ? "NOT CONNECTED" : "NOT TESTED"}
-                            </span>
-                          )}
-                        </div>
-                        <div style={{ ...muted, marginTop: 5 }}>{g?.gateway_name || "Faculty must configure gateway"}</div>
-                        {g && (
-                          <button
-                            className="btn btn-outline"
-                            style={{ marginTop: 8 }}
-                            onClick={() => void testConnection(g.id)}
-                            disabled={busy !== null || !ready}
-                          >
-                            {testingGatewayId === g.id ? "Testing…" : "Test connection"}
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </section>
-        )}
-
-        <section style={cardStyle}>
-          <div style={headerStyle}>
-            <div>
-              <div style={eyebrow}>SMS ROUTING</div>
-              <h2 style={titleStyle}>{isAdmin ? "HOD SMSGate connections" : isFaculty ? "Your SMSGate connection" : "Your SMSGate connection"}</h2>
-              <p style={muted}>{isAdmin ? "Choose the responsible HOD to administer that HOD's gateway. Physical phone location does not affect routing." : isFaculty ? "This gateway is owned by your Faculty account. You may configure only your own credentials." : "This is your department gateway. Faculty handler gateways for delegated batches are managed by their owners and their activity is visible below."}</p>
-            </div>
-            <span style={pill(!currentGateway?.active ? "muted" : gatewayConfigured ? "good" : "bad")}>{!currentGateway?.active ? "INACTIVE" : gatewayConfigured ? "READY" : "NOT CONFIGURED"}</span>
+        {/* Context first: what is the state of sending right now? */}
+        <section className="ngx-strip" aria-label="Sending status">
+          <div className="ngx-strip-cell">
+            <div className="ngx-strip-label">Gateway</div>
+            <div className="ngx-strip-value is-text"><i className={`ngx-dot is-${gatewayState.tone}`} aria-hidden="true" />{gatewayState.label}</div>
+            <div className="ngx-strip-meta">{currentGateway ? `${currentGateway.gateway_name} · ${humanize(currentGateway.gateway_mode)}` : "Add one in Setup"}</div>
           </div>
-
-          {isAdmin && (
-            <div style={{ display: "grid", gap: 7, marginBottom: 14 }}>
-              <label style={fieldLabel}>Responsible HOD</label>
-              <select value={selectedHodUsername} onChange={(e) => { const username = e.target.value; setSelectedHodUsername(username); const g = gateways.find((x) => x.hod_username === username && x.owner_username === username) || gateways.find((x) => x.hod_username === username); if (g) { setSelectedGatewayId(g.id); setGateway(formFromGateway(g)); } else { setSelectedGatewayId(null); setGateway({ ...blankGateway, hod_username: username }); } }} style={inputStyle}>
-                <option value="">Select an HOD</option>
-                {hodAccounts.map((h) => <option key={h.username} value={h.username}>{h.full_name || h.username} ({h.username})</option>)}
-              </select>
-              {!hodAccounts.length && <p style={muted}>No active HOD accounts were returned. Check the Faculty account roster.</p>}
-            </div>
+          {isFaculty ? (
+            <>
+              <div className="ngx-strip-cell">
+                <div className="ngx-strip-label">Delegated by</div>
+                <div className="ngx-strip-value is-text">{facultyAccess?.hod_username || "—"}</div>
+                <div className="ngx-strip-meta">Head of Department</div>
+              </div>
+              <div className="ngx-strip-cell">
+                <div className="ngx-strip-label">Your batches</div>
+                <div className="ngx-strip-value">{facultyAccess?.allowed_batches.length ?? 0}</div>
+                <div className="ngx-strip-meta">{facultyAccess?.allowed_batches.map((b) => b.code || b.name).join(", ") || "None delegated"}</div>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className={`ngx-strip-cell${approvalRows.length ? " is-attention" : ""}`}>
+                <div className="ngx-strip-label">Awaiting approval</div>
+                <div className="ngx-strip-value">{approvalRows.length}</div>
+                <div className="ngx-strip-meta">{blockedCount ? `${blockedCount} blocked · ` : ""}for {prettyDate(approvalDate)}</div>
+              </div>
+              <div className="ngx-strip-cell">
+                <div className="ngx-strip-label">Daily cap</div>
+                <div className="ngx-strip-value">{settings.sms_daily_cap}</div>
+                <div className="ngx-strip-meta">messages per day</div>
+              </div>
+              <div className="ngx-strip-cell">
+                <div className="ngx-strip-label">Absentee cutoff</div>
+                <div className="ngx-strip-value">{clock12(settings.sms_absentee_cutoff_time)}</div>
+                <div className="ngx-strip-meta">Auto worker {settings.sms_enabled === "1" ? "on" : "paused"}</div>
+              </div>
+            </>
           )}
-
-          {isFaculty && facultyAccess && (
-            <div style={{ ...emptyStyle, textAlign: "left", marginBottom: 14, background: "var(--chip-bg-muted)" }}>
-              <strong style={{ color: "var(--text)" }}>Assigned to you</strong>
-              <div style={{ marginTop: 3, color: "var(--muted)" }}>{facultyAccess.hod_username || "Your HOD"}</div>
-              <div style={{ marginTop: 4, color: "var(--muted)" }}>Only your delegated batches may use this gateway. Physical phone location does not affect routing.</div>
-              <div style={{ display: "flex", gap: 7, flexWrap: "wrap", marginTop: 9 }}>
-                {facultyAccess.allowed_batches.map((b) => (
-                  <span key={b.id} style={batchPillStyle}>{b.code || b.name} · {b.student_count}</span>
-                ))}
-                {!facultyAccess.allowed_batches.length && <span style={{ ...batchPillStyle, color: "#dc2626" }}>No batch delegated</span>}
-              </div>
-            </div>
-          )}
-
-          {isFaculty && !currentGateway && <div style={{ ...emptyStyle, textAlign: "left", marginBottom: 14 }}><strong style={{ color: "var(--text)" }}>No gateway configured yet.</strong><div style={{ marginTop: 4 }}>Add your own gateway below. Other Faculty gateway credentials are never exposed to this account.</div></div>}
-
-          <div className="sms-log-gateway-meta">
-            <Field label="Gateway name"><input style={inputStyle} value={gateway.gateway_name} onChange={(e) => setGateway({ ...gateway, gateway_name: e.target.value })} /></Field>
-            <Field label="Mode"><select style={inputStyle} value={gateway.gateway_mode} onChange={(e) => setGateway({ ...gateway, gateway_mode: e.target.value as GatewayForm["gateway_mode"] })}><option value="cloud">Cloud Server</option><option value="local">Local Server</option><option value="modem">USB / Serial Modem</option></select></Field>
-          </div>
-          {gateway.gateway_mode === "cloud" && <div className="sms-log-gateway-fields">
-            <Field label="Device ID"><input style={inputStyle} value={gateway.device_id} onChange={(e) => setGateway({ ...gateway, device_id: e.target.value })} placeholder={currentGateway?.device_id_masked || "Enter device ID"} /></Field>
-            <Field label="Cloud username"><input style={inputStyle} value={gateway.username} onChange={(e) => setGateway({ ...gateway, username: e.target.value })} /></Field>
-            <Field label={`Cloud password${currentGateway?.password_set ? " (leave blank to keep)" : ""}`}><input type="password" style={inputStyle} value={gateway.password} onChange={(e) => setGateway({ ...gateway, password: e.target.value })} /></Field>
-            <Field label="SIM slot (optional)"><input type="number" min={1} max={3} style={inputStyle} value={gateway.sim_number} onChange={(e) => setGateway({ ...gateway, sim_number: e.target.value })} /></Field>
-          </div>}
-          {gateway.gateway_mode === "local" && <div className="sms-log-gateway-fields sms-log-gateway-fields--local">
-            <Field label="Local server URL"><input style={inputStyle} value={gateway.local_url} onChange={(e) => setGateway({ ...gateway, local_url: e.target.value })} placeholder="http://phone-ip:8080" /></Field>
-            <Field label="Username"><input style={inputStyle} value={gateway.username} onChange={(e) => setGateway({ ...gateway, username: e.target.value })} /></Field>
-            <Field label="Password"><input type="password" style={inputStyle} value={gateway.password} onChange={(e) => setGateway({ ...gateway, password: e.target.value })} /></Field>
-          </div>}
-          {gateway.gateway_mode === "modem" && <div className="sms-log-gateway-fields sms-log-gateway-fields--modem">
-            <Field label="Serial port"><input style={inputStyle} value={gateway.modem_port} onChange={(e) => setGateway({ ...gateway, modem_port: e.target.value })} placeholder="COM3 or /dev/ttyUSB0" /></Field>
-            <Field label="Baud rate"><input style={inputStyle} value={gateway.modem_baud} onChange={(e) => setGateway({ ...gateway, modem_baud: e.target.value })} /></Field>
-          </div>}
-          <div className="sms-log-gateway-options">
-            <label className="sms-log-check"><input type="checkbox" checked={gateway.active} onChange={(e) => setGateway({ ...gateway, active: e.target.checked })} /> <span>Gateway enabled</span></label>
-            {currentGateway && !isAdmin && <label className="sms-log-check"><input type="checkbox" checked={Boolean(currentGateway.auto_send)} onChange={async (e) => { try { const res = await setSmsGatewayAutoSend(currentGateway.id, e.target.checked); setGateways(old => old.map(g => g.id === currentGateway.id ? { ...g, auto_send: res.auto_send } : g)); setSuccess(res.auto_send ? "Auto-send enabled for your gateway." : "Auto-send disabled."); } catch (err) { setError(err instanceof ApiClientError ? err.message : "Could not change auto-send setting"); } }} /> <span>Auto-send approved SMS</span></label>}
-          </div>
-          <div className="sms-log-gateway-actions"><button className="btn btn-primary" onClick={() => void saveGateway()} disabled={busy !== null || (isFaculty && !facultyAccess?.enabled)}>{busy === "gateway" ? "Saving…" : "Save gateway"}</button>{currentGateway && <button className="btn btn-outline" onClick={() => void testConnection()} disabled={busy !== null}>{busy === "connection" ? "Testing…" : "Test connection"}</button>}</div>
         </section>
 
-        {isFaculty ? (
-          <section style={cardStyle}>
-            <div style={headerStyle}><div><div style={eyebrow}>MESSAGE COMPOSER</div><h2 style={titleStyle}>Choose what to send</h2><p style={muted}>Like the HOD SMS screen, you manage messages here — but the selectable recipients are limited to the batches delegated to your Faculty account.</p></div></div>
-            <div style={gridStyle}>
-              <Field label="Allowed batch"><select style={inputStyle} value={selectedBatchId ?? ""} onChange={e => setSelectedBatchId(Number(e.target.value))}><option value="">Select batch</option>{batches.map(b => <option key={b.id} value={b.id}>{b.code || b.name} ({b.student_count})</option>)}</select></Field>
-              <Field label="Message"><textarea style={{ ...inputStyle, minHeight: 118, resize: "vertical" }} value={composeText} onChange={e => setComposeText(e.target.value)} placeholder="Dear Parent, {student}: {message}" /></Field>
+        <Tabs tabs={tabs} active={tab} onChange={setTab} label="SMS sections" />
+
+        {/* ── Review (HOD) ───────────────────────────────────────────── */}
+        {!isFaculty && (
+          <TabPanel id="review" active={tab}>
+            <div className="ngx-card">
+              <div className="ngx-queue-bar">
+                <div className="ngx-queue-date">
+                  <input type="date" aria-label="Absentee date" className="ngx-input is-sm" value={approvalDate} onChange={(e) => setApprovalDate(e.target.value)} />
+                  {approvalRows.length > 0 && (
+                    <span className="ngx-queue-summary"><b>{approvalRows.length}</b> awaiting approval{blockedCount > 0 && <> · <b>{blockedCount}</b> blocked</>}</span>
+                  )}
+                </div>
+                {approvalRows.length > 0 && (
+                  <button className="ngx-btn is-primary" onClick={() => void approve()} disabled={busy !== null}>
+                    {busy === "approve" ? "Approving…" : `Approve ${approvalRows.length} message${approvalRows.length === 1 ? "" : "s"}`}
+                  </button>
+                )}
+              </div>
+              {loading && approvalRows.length === 0 ? (
+                <div style={{ padding: 18, display: "grid", gap: 14 }}><div className="ngx-skel" style={{ width: "40%" }} /><div className="ngx-skel" /><div className="ngx-skel" style={{ width: "70%" }} /></div>
+              ) : approvalRows.length === 0 ? (
+                <EmptyState
+                  title={`Nothing waiting for ${prettyDate(approvalDate)}`}
+                  hint={currentGateway?.auto_send ? "Auto-send is on, so absentee messages go out without review." : "Absentee messages appear here after attendance is marked. Nothing is sent until you approve it."}
+                />
+              ) : (
+                <div>
+                  {approvalRows.map((r) => {
+                    const routed = Boolean(r.gateway_id && r.gateway_active && !r.error);
+                    return (
+                      <div key={r.id} className={`ngx-queue-row${r.error ? " is-blocked" : ""}`}>
+                        <div className="ngx-queue-who">
+                          <strong>{r.student_name}</strong>
+                          <span>{r.roll_no} · {r.parent_phone}</span>
+                        </div>
+                        <p className="ngx-queue-msg">{r.message}</p>
+                        <div className="ngx-queue-act">
+                          <div className="ngx-queue-route">
+                            {r.error ? <><Pill tone="bad">Blocked</Pill><div className="ngx-cell-sub" title={r.error}>{r.error}</div></> : routed ? <div className="ngx-cell-sub" style={{ marginTop: 0 }}>via {r.gateway_name}</div> : <Pill tone="bad">No gateway</Pill>}
+                          </div>
+                          <div className="ngx-queue-btns">
+                            <button className="ngx-btn is-secondary is-sm" disabled={busy !== null} onClick={() => void rejectOne(r)}>Reject</button>
+                            <button className="ngx-btn is-primary is-sm" disabled={busy !== null || Boolean(r.error)} onClick={() => void approveOne(r)}>Approve</button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
-            <div style={actionsStyle}><button className="btn btn-primary" disabled={busy !== null || !selectedBatchId || !composeText.trim() || !gatewayConfigured} onClick={() => void sendGeneral()}>{busy === "general" ? "Sending…" : "Send SMS to batch"}</button></div>
-            <p style={{ ...muted, marginTop: 10 }}>Individual-student Reject/Skip behavior used by the existing absentee flow is unchanged. This faculty flow never creates recipients outside the delegated batch.</p>
-          </section>
-        ) : (
-          <section style={cardStyle}>
-            <div style={headerStyle}><div><div style={eyebrow}>MESSAGE COMPOSER</div><h2 style={titleStyle}>Choose what to send</h2></div></div>
-            <div style={{ display: "grid", gap: 12 }}>
-              <fieldset style={{ border: 0, padding: 0, margin: 0 }}><legend style={{ color: "var(--text)", fontWeight: 800, marginBottom: 8 }}>Message Type</legend><div style={{ display: "flex", gap: 18, flexWrap: "wrap" }}><label><input type="radio" checked={messageType === "ABSENTEE_ALERT"} onChange={() => { setMessageType("ABSENTEE_ALERT"); setComposeText(templates.ABSENTEE_ALERT || ""); }} /> Absentee Alert</label><label><input type="radio" checked={messageType === "GENERAL_NOTICE"} onChange={() => { setMessageType("GENERAL_NOTICE"); setComposeText(templates.GENERAL_NOTICE || ""); }} /> General Notice</label></div></fieldset>
-              <Field label="Saved message template"><textarea style={{ ...inputStyle, minHeight: 100, resize: "vertical" }} value={composeText} onChange={(e) => setComposeText(e.target.value)} /></Field>
-              <div style={actionsStyle}><button className="btn btn-outline" onClick={async () => { try { const r = await saveSmsTemplate(messageType, composeText); setTemplates(t => ({ ...t, [messageType]: r.template })); setSuccess("Message template saved for this scope."); } catch (err) { setError(err instanceof ApiClientError ? err.message : "Could not save message template"); } }}>Save template</button>{messageType === "GENERAL_NOTICE" && <select style={{ ...inputStyle, width: 260 }} value={selectedBatchId ?? ""} onChange={e => setSelectedBatchId(Number(e.target.value))}><option value="">Select batch</option>{batches.map(b => <option key={b.id} value={b.id}>{b.code || b.name} ({b.student_count})</option>)}</select>}{messageType === "GENERAL_NOTICE" && <button className="btn btn-primary" disabled={busy !== null || !selectedBatchId || !composeText.trim()} onClick={() => void sendGeneral()}>{busy === "general" ? "Queuing…" : "Queue General Notice"}</button>}</div>
-            </div>
-          </section>
+          </TabPanel>
         )}
 
-        {!isFaculty && <section style={cardStyle}>
-          <div style={headerStyle}><div><div style={eyebrow}>SAFETY GATE</div><h2 style={titleStyle}>Review before sending</h2><p style={muted}>Attendance creates a queued batch. Nothing is sent until approved unless the configured HOD gateway is set to auto-send.</p></div><input type="date" value={approvalDate} onChange={(e) => setApprovalDate(e.target.value)} style={{ ...inputStyle, width: 170 }} /></div>
-          {approvalRows.length === 0 ? <div style={emptyStyle}>No unapproved absentee SMS messages for this date.</div> : <><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}><strong style={{ color: "var(--text)" }}>{approvalRows.length} message(s) awaiting approval</strong><button className="btn btn-primary" onClick={() => void approve()} disabled={busy !== null}>{busy === "approve" ? "Approving…" : "Approve batch"}</button></div><div style={{ display: "grid", gap: 8 }}>{approvalRows.map((r) => <div key={r.id} style={rowStyle}><div><strong style={{ color: "var(--text)" }}>{r.roll_no} — {r.student_name}</strong><div style={muted}>{r.parent_phone}</div></div><div style={{ flex: 1, color: "var(--text)", fontSize: 13 }}>{r.message}</div><div style={{ minWidth: 220, textAlign: "right" }}><span style={pill(r.gateway_id && r.gateway_active && !r.error ? "good" : "bad")}>{r.error ? "BLOCKED" : r.gateway_name || "NO GATEWAY"}</span><div style={{ ...muted, marginTop: 4 }}>{r.hod_username || "No HOD"}</div><div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 8 }}><button className="btn btn-sm btn-primary" disabled={busy !== null || Boolean(r.error)} onClick={async () => { if (!window.confirm(`Approve SMS for ${r.student_name}?`)) return; setBusy(`approve-${r.id}`); try { await approveSmsRow(r.id); setSuccess(`SMS approved for ${r.roll_no}.`); await load(); } catch (err) { setError(err instanceof ApiClientError ? err.message : "Could not approve SMS"); } finally { setBusy(null); } }}>Approve</button><button className="btn btn-sm btn-outline" disabled={busy !== null} onClick={async () => { if (!window.confirm(`Reject SMS for ${r.student_name}?`)) return; setBusy(`reject-${r.id}`); try { await rejectSmsRow(r.id); setSuccess(`SMS rejected for ${r.roll_no}.`); await load(); } catch (err) { setError(err instanceof ApiClientError ? err.message : "Could not reject SMS"); } finally { setBusy(null); } }}>Reject</button></div></div></div>)}</div></>}
-        </section>}
+        {/* ── Compose ────────────────────────────────────────────────── */}
+        <TabPanel id="compose" active={tab}>
+          <div className="ngx-card ngx-composer">
+            <div className="ngx-card-body">
+              {!isFaculty && (
+                <div className="ngx-segment" role="group" aria-label="Message type" style={{ marginBottom: 18 }}>
+                  <button type="button" className={messageType === "ABSENTEE_ALERT" ? "is-active" : ""} aria-pressed={messageType === "ABSENTEE_ALERT"} onClick={() => { setMessageType("ABSENTEE_ALERT"); setComposeText(templates.ABSENTEE_ALERT || ""); }}>Absentee alert</button>
+                  <button type="button" className={messageType === "GENERAL_NOTICE" ? "is-active" : ""} aria-pressed={messageType === "GENERAL_NOTICE"} onClick={() => { setMessageType("GENERAL_NOTICE"); setComposeText(templates.GENERAL_NOTICE || ""); }}>General notice</button>
+                </div>
+              )}
+              <div className="ngx-form-grid">
+                {(isFaculty || messageType === "GENERAL_NOTICE") && (
+                  <label className="ngx-field"><span>{isFaculty ? "Batch" : "Send to batch"}</span>
+                    <select className="ngx-select" value={selectedBatchId ?? ""} onChange={(e) => setSelectedBatchId(e.target.value ? Number(e.target.value) : null)}>
+                      <option value="">Select a batch</option>
+                      {batches.map((b) => <option key={b.id} value={b.id}>{b.code || b.name} ({b.student_count} students)</option>)}
+                    </select>
+                  </label>
+                )}
+                <label className="ngx-field"><span>{isFaculty || messageType === "GENERAL_NOTICE" ? "Message" : "Absentee message template"}</span>
+                  <textarea className="ngx-textarea" value={composeText} onChange={(e) => setComposeText(e.target.value)} placeholder="Dear Parent, {student}: {message}" style={{ minHeight: 120 }} />
+                  <div className="ngx-counter"><span className="ngx-hint">{composeText.length} characters</span></div>
+                </label>
+              </div>
+              <div className="ngx-form-actions">
+                {isFaculty || messageType === "GENERAL_NOTICE" ? (
+                  <>
+                    <button className="ngx-btn is-primary" disabled={busy !== null || !selectedBatchId || !composeText.trim() || (isFaculty && !gatewayConfigured)} onClick={() => void sendGeneral()}>
+                      {busy === "general" ? (isFaculty ? "Sending…" : "Queuing…") : isFaculty ? (selectedBatch ? `Send to ${selectedBatch.code || selectedBatch.name}` : "Send SMS to batch") : (selectedBatch ? `Queue for ${selectedBatch.code || selectedBatch.name}` : "Queue notice")}
+                    </button>
+                    {!isFaculty && <button className="ngx-btn is-secondary" onClick={() => void saveTemplate()} disabled={busy !== null}>Save template</button>}
+                    {isFaculty && !gatewayConfigured && <span className="ngx-hint is-warn">Set up your gateway before sending.</span>}
+                  </>
+                ) : (
+                  <button className="ngx-btn is-primary" onClick={() => void saveTemplate()} disabled={busy !== null || !composeText.trim()}>Save template</button>
+                )}
+              </div>
+            </div>
+          </div>
+        </TabPanel>
 
-        {(isAdmin || user.username === "admin") && <AdminStudentSelfEditCard onNotification={(msg, type) => type === "success" ? setSuccess(msg) : setError(msg)} />}
+        {/* ── Activity ───────────────────────────────────────────────── */}
+        <TabPanel id="activity" active={tab}>
+          <SmsActivityPanel activities={smsActivity} loading={loading} />
+        </TabPanel>
 
-        {!isFaculty && <section style={cardStyle}>
-          <div style={headerStyle}><div><div style={eyebrow}>OPERATIONS</div><h2 style={titleStyle}>Sending controls</h2></div></div>
-          <div style={gridStyle}><Field label="Daily SMS cap"><input type="number" min={1} style={inputStyle} value={settings.sms_daily_cap} onChange={(e) => setSettings({ ...settings, sms_daily_cap: e.target.value })} /></Field><Field label="Absentee cutoff (HH:MM)"><input type="time" style={inputStyle} value={settings.sms_absentee_cutoff_time} onChange={(e) => setSettings({ ...settings, sms_absentee_cutoff_time: e.target.value })} /></Field><Field label="Automatic worker"><select style={inputStyle} value={settings.sms_enabled} onChange={(e) => setSettings({ ...settings, sms_enabled: e.target.value })}><option value="1">Enabled</option><option value="0">Disabled</option></select></Field><Field label="Test recipient"><input style={inputStyle} value={testPhone} onChange={(e) => setTestPhone(e.target.value)} placeholder="10-digit mobile number" /></Field></div>
-          <div style={actionsStyle}><button className="btn btn-primary" onClick={() => void saveOperationsSettings()} disabled={busy !== null}>{busy === "settings" ? "Saving…" : "Save settings"}</button><button className="btn btn-outline" onClick={() => void sendTest()} disabled={busy !== null || !currentGateway}>{busy === "test-sms" ? "Sending…" : "Send test SMS"}</button></div>
-        </section>}
+        {/* ── Setup ──────────────────────────────────────────────────── */}
+        <TabPanel id="setup" active={tab}>
+          <div className="ngx-card">
+            <section className="ngx-set">
+              <div className="ngx-set-head">
+                <h3>{isFaculty ? "Your gateway" : "Department gateway"}</h3>
+                <p>{isFaculty ? "Messages to your delegated batches go out through this phone." : "Messages for your batches go out through this phone."}</p>
+                <Pill tone={gatewayState.tone}>{gatewayState.label}</Pill>
+              </div>
+              <div className="ngx-set-body">{gatewayForm}</div>
+            </section>
 
-        <SmsActivityPanel activities={smsActivity} loading={loading} />
+            {isHod && (
+              <section className="ngx-set">
+                <div className="ngx-set-head">
+                  <h3>Batch handlers</h3>
+                  <p>Faculty who send for a batch use their own gateway. You only see routing status.</p>
+                </div>
+                <div className="ngx-set-body">
+                  {handlers.length === 0 ? (
+                    <div className="ngx-notice is-info"><Icon name="info" /><span>No Faculty has SMS access yet. Delegate it from Faculty → SMS routing.</span></div>
+                  ) : handlers.map((f) => {
+                    const g = gateways.find((x) => x.owner_username === f.username && x.hod_username === user.username);
+                    const ready = handlerReady(f);
+                    const status = g ? gatewayConnectionStatus[g.id] : undefined;
+                    return (
+                      <div key={f.username} className="ngx-handler">
+                        <div><div className="ngx-cell-main">{f.full_name || f.username}</div><div className="ngx-cell-sub">@{f.username}</div></div>
+                        <div className="ngx-chips">{(f.allowed_batches || []).length ? f.allowed_batches.map((b) => <span key={b.id} className="ngx-chip">{b.code || b.name} · {b.student_count ?? "—"}</span>) : <span className="ngx-chip is-none">No batch</span>}</div>
+                        <div>
+                          <div className="ngx-handler-status">
+                            <Pill tone={ready ? "good" : "bad"}>{ready ? "Ready" : g ? "Not ready" : "Not configured"}</Pill>
+                            {g && ready && <Pill tone={status === "connected" ? "good" : status === "not_connected" ? "bad" : "muted"} dot={false}>{status === "connected" ? "Connected" : status === "not_connected" ? "Not connected" : "Not tested"}</Pill>}
+                          </div>
+                          <div className="ngx-cell-sub">{g?.gateway_name || "Faculty must configure a gateway"}</div>
+                        </div>
+                        {g && <button className="ngx-btn is-secondary is-sm" onClick={() => void testConnection(g.id)} disabled={busy !== null || !ready}>{testingGatewayId === g.id ? "Testing…" : "Test connection"}</button>}
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            )}
+
+            {!isFaculty && (
+              <section className="ngx-set">
+                <div className="ngx-set-head">
+                  <h3>Sending limits</h3>
+                  <p>Caps and timing for the automatic absentee worker.</p>
+                </div>
+                <div className="ngx-set-body">
+                  <div className="ngx-form-grid is-3">
+                    <label className="ngx-field"><span>Daily SMS cap</span><input type="number" min={1} className="ngx-input" value={settings.sms_daily_cap} onChange={(e) => setSettings({ ...settings, sms_daily_cap: e.target.value })} /></label>
+                    <label className="ngx-field"><span>Absentee cutoff</span><input type="time" className="ngx-input" value={settings.sms_absentee_cutoff_time} onChange={(e) => setSettings({ ...settings, sms_absentee_cutoff_time: e.target.value })} /></label>
+                    <label className="ngx-field"><span>Automatic worker</span>
+                      <select className="ngx-select" value={settings.sms_enabled} onChange={(e) => setSettings({ ...settings, sms_enabled: e.target.value })}><option value="1">Enabled</option><option value="0">Disabled</option></select>
+                    </label>
+                  </div>
+                  <div className="ngx-form-actions"><button className="ngx-btn is-primary" onClick={() => void saveOperationsSettings()} disabled={busy !== null}>{busy === "settings" ? "Saving…" : "Save limits"}</button></div>
+                </div>
+              </section>
+            )}
+
+            {!isFaculty && (
+              <section className="ngx-set">
+                <div className="ngx-set-head">
+                  <h3>Test message</h3>
+                  <p>Send one SMS through your gateway to confirm it works.</p>
+                </div>
+                <div className="ngx-set-body">
+                  <div className="ngx-form-actions" style={{ marginTop: 0 }}>
+                    <input className="ngx-input" style={{ maxWidth: 260 }} inputMode="tel" aria-label="Test recipient" value={testPhone} onChange={(e) => setTestPhone(e.target.value)} placeholder="10-digit mobile number" />
+                    <button className="ngx-btn is-secondary" onClick={() => void sendTest()} disabled={busy !== null || !currentGateway || !testPhone.trim()}>{busy === "test-sms" ? "Sending…" : "Send test SMS"}</button>
+                  </div>
+                </div>
+              </section>
+            )}
+          </div>
+
+          {user.username === "admin" && <AdminStudentSelfEditCard onNotification={(msg, type) => type === "success" ? setSuccess(msg) : setError(msg)} />}
+        </TabPanel>
       </div>
     </AppShell>
   );
 }
 
+/* ── helpers ─────────────────────────────────────────────────────────── */
 
-function activityPill(status: string): "good" | "bad" | "muted" { return ["CONNECTED","SENT"].includes(status) ? "good" : ["NOT_CONNECTED","FAILED","BLOCKED"].includes(status) ? "bad" : "muted"; }
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+function prettyDate(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || "");
+  if (!m) return iso || "";
+  if (iso.slice(0, 10) === today()) return "today";
+  return `${Number(m[3])} ${MONTHS[Number(m[2]) - 1]}`;
+}
+
+function stamp(ts: string): { date: string; time: string } {
+  const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}:\d{2}(?::\d{2})?)/.exec(String(ts));
+  if (!m) return { date: String(ts), time: "" };
+  return { date: `${Number(m[3])} ${MONTHS[Number(m[2]) - 1]} ${m[1]}`, time: m[4] };
+}
+
+function clock12(hhmm: string): string {
+  const m = /^(\d{1,2}):(\d{2})/.exec(hhmm || "");
+  if (!m) return hhmm || "—";
+  const h = Number(m[1]);
+  return `${((h + 11) % 12) + 1}:${m[2]} ${h >= 12 ? "PM" : "AM"}`;
+}
+
+function statusTone(status: string): Tone {
+  const s = status.toUpperCase();
+  if (["CONNECTED", "SENT", "APPROVED", "DELIVERED"].includes(s)) return "good";
+  if (["NOT_CONNECTED", "FAILED", "BLOCKED", "REJECTED"].includes(s)) return "bad";
+  if (["QUEUED", "PENDING"].includes(s)) return "warn";
+  return "muted";
+}
+
+/* ── Admin: cross-department gateway overview ────────────────────────── */
 
 function AdminGatewayOverview({ user, onLoggedOut, gateways, activities, loading, error, onRefresh, onClearError }: {
   user: { username: string; role: string }; onLoggedOut: () => void; gateways: SmsGateway[]; activities: SmsActivityRow[];
   loading: boolean; error: string | null; onRefresh: () => void; onClearError: () => void;
 }) {
-  const [q,setQ]=useState(""); const [dept,setDept]=useState("ALL"); const [role,setRole]=useState("ALL"); const [status,setStatus]=useState("ALL"); const [selected,setSelected]=useState<number|null>(null);
-  const departments=useMemo(()=>Array.from(new Set(gateways.map(g=>g.owner_department||g.hod_department).filter(Boolean) as string[])).sort(),[gateways]);
-  const filtered=useMemo(()=>gateways.filter(g=>{const h=`${g.owner_name||""} ${g.owner_username||""} ${g.hod_name||""} ${g.hod_username||""} ${g.gateway_name} ${g.gateway_mode}`.toLowerCase(); const r=g.is_hod_gateway?"HOD":"FACULTY"; return (!q||h.includes(q.toLowerCase()))&&(dept==="ALL"||(g.owner_department||g.hod_department)===dept)&&(role==="ALL"||r===role)&&(status==="ALL"||g.connection_status===status)}),[gateways,q,dept,role,status]);
-  const chosen=selected?gateways.find(g=>g.id===selected)||null:null;
-  return <AppShell user={user as any} activeNav="sms-log" heading="SMS Gateways" onLoggedOut={onLoggedOut}><ErrorPopup message={error} onClose={onClearError}/><div style={{display:"grid",gap:18,maxWidth:1180,margin:"0 auto"}}>
-    <section style={cardStyle}><div style={headerStyle}><div><div style={eyebrow}>SMS GATEWAYS</div><h2 style={titleStyle}>Gateway Overview / Management</h2><p style={muted}>Cross-department oversight. Details are read-only; credential material is never exposed to Admin.</p></div><button className="btn btn-outline" onClick={onRefresh} disabled={loading}>{loading?"Refreshing…":"Refresh"}</button></div>
-      <div style={{display:"grid",gridTemplateColumns:"minmax(220px,2fr) repeat(3,minmax(140px,1fr))",gap:10}}><input style={inputStyle} value={q} onChange={e=>setQ(e.target.value)} placeholder="Search owner, HOD, gateway…"/><select style={inputStyle} value={dept} onChange={e=>setDept(e.target.value)}><option value="ALL">All departments</option>{departments.map(d=><option key={d} value={d}>{d}</option>)}</select><select style={inputStyle} value={role} onChange={e=>setRole(e.target.value)}><option value="ALL">All roles</option><option value="HOD">HOD</option><option value="FACULTY">Faculty Handler</option></select><select style={inputStyle} value={status} onChange={e=>setStatus(e.target.value)}><option value="ALL">All statuses</option><option value="CONNECTED">Connected</option><option value="NOT_CONNECTED">Not connected</option><option value="NOT_TESTED">Not tested</option></select></div>
-    </section>
-    <AdminGatewayTable title="HOD GATEWAYS" rows={filtered.filter(g=>g.is_hod_gateway)} onView={setSelected}/><AdminGatewayTable title="FACULTY GATEWAY HANDLERS" rows={filtered.filter(g=>!g.is_hod_gateway)} onView={setSelected}/><SmsActivityPanel activities={activities} loading={loading}/>
-  </div>{chosen&&<div style={modalBackdrop}><div style={modalCard}><div style={headerStyle}><div><div style={eyebrow}>READ-ONLY GATEWAY DETAIL</div><h2 style={titleStyle}>{chosen.gateway_name}</h2></div><button className="btn btn-outline" onClick={()=>setSelected(null)}>Close</button></div><div style={gridStyle}><DetailItem label="Owner" value={`${chosen.owner_name||"—"} (${chosen.owner_username||"—"})`}/><DetailItem label="Role" value={chosen.is_hod_gateway?"HOD":"FACULTY GATEWAY HANDLER"}/><DetailItem label="Department" value={chosen.owner_department||chosen.hod_department||"—"}/><DetailItem label="HOD" value={`${chosen.hod_name||"—"} (${chosen.hod_username||"—"})`}/><DetailItem label="Mode" value={chosen.gateway_mode}/><DetailItem label="Connection status" value={chosen.connection_status.replace("_"," ")}/><DetailItem label="Last connection test" value={chosen.last_connection_test||"Not tested"}/><DetailItem label="SMS auto-send" value={chosen.auto_send?"Enabled":"Disabled"}/><DetailItem label="Assigned batches" value={chosen.assigned_batches?.length?chosen.assigned_batches.map(b=>`${b.code||b.name} (${b.student_count??0})`).join(", "):"—"}/></div><div style={{marginTop:16,padding:12,borderRadius:12,background:"var(--chip-bg-muted)",color:"var(--muted)",fontSize:12}}>Passwords, tokens, decrypted device IDs, modem secrets, and endpoint credentials are intentionally unavailable.</div></div></div>}</AppShell>;
+  const [q, setQ] = useState(""); const [dept, setDept] = useState("ALL"); const [role, setRole] = useState("ALL"); const [status, setStatus] = useState("ALL"); const [selected, setSelected] = useState<number | null>(null);
+  const departments = useMemo(() => Array.from(new Set(gateways.map((g) => g.owner_department || g.hod_department).filter(Boolean) as string[])).sort(), [gateways]);
+  const filtered = useMemo(() => gateways.filter((g) => {
+    const h = `${g.owner_name || ""} ${g.owner_username || ""} ${g.hod_name || ""} ${g.hod_username || ""} ${g.gateway_name} ${g.gateway_mode}`.toLowerCase();
+    const r = g.is_hod_gateway ? "HOD" : "FACULTY";
+    return (!q || h.includes(q.toLowerCase())) && (dept === "ALL" || (g.owner_department || g.hod_department) === dept) && (role === "ALL" || r === role) && (status === "ALL" || g.connection_status === status);
+  }), [gateways, q, dept, role, status]);
+  const chosen = selected ? gateways.find((g) => g.id === selected) || null : null;
+  const filtersOn = Boolean(q || dept !== "ALL" || role !== "ALL" || status !== "ALL");
+
+  return (
+    <AppShell user={user as any} activeNav="sms-log" heading="SMS Gateways" onLoggedOut={onLoggedOut}>
+      <ErrorPopup message={error} onClose={onClearError} />
+      <div className="ngx ngx-page">
+        <section className="ngx-card">
+          <div className="ngx-toolbar">
+            <div className="ngx-search"><Icon name="search" /><input className="ngx-input is-sm" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search owner, HOD or gateway" aria-label="Search gateways" /></div>
+            <select className="ngx-select is-sm" aria-label="Department" value={dept} onChange={(e) => setDept(e.target.value)}><option value="ALL">All departments</option>{departments.map((d) => <option key={d} value={d}>{d}</option>)}</select>
+            <select className="ngx-select is-sm" aria-label="Role" value={role} onChange={(e) => setRole(e.target.value)}><option value="ALL">All roles</option><option value="HOD">HOD</option><option value="FACULTY">Faculty handler</option></select>
+            <select className="ngx-select is-sm" aria-label="Status" value={status} onChange={(e) => setStatus(e.target.value)}><option value="ALL">All statuses</option><option value="CONNECTED">Connected</option><option value="NOT_CONNECTED">Not connected</option><option value="NOT_TESTED">Not tested</option></select>
+            {filtersOn && <button className="ngx-btn is-link" onClick={() => { setQ(""); setDept("ALL"); setRole("ALL"); setStatus("ALL"); }}>Clear</button>}
+            <span className="ngx-spacer" />
+            <button className="ngx-btn is-secondary is-sm" onClick={onRefresh} disabled={loading}><Icon name="refresh" size={14} />{loading ? "Refreshing…" : "Refresh"}</button>
+          </div>
+          <AdminGatewayTable title="HOD gateways" rows={filtered.filter((g) => g.is_hod_gateway)} onView={setSelected} />
+          <AdminGatewayTable title="Faculty gateway handlers" rows={filtered.filter((g) => !g.is_hod_gateway)} onView={setSelected} />
+        </section>
+        <SmsActivityPanel activities={activities} loading={loading} />
+      </div>
+
+      {chosen && (
+        <Modal title={chosen.gateway_name} size="lg" onClose={() => setSelected(null)} footer={<button className="ngx-btn is-secondary" onClick={() => setSelected(null)}>Close</button>}>
+          <dl className="ngx-dl">
+            <div><dt>Owner</dt><dd>{chosen.owner_name || "—"} ({chosen.owner_username || "—"})</dd></div>
+            <div><dt>Role</dt><dd>{chosen.is_hod_gateway ? "HOD" : "Faculty gateway handler"}</dd></div>
+            <div><dt>Department</dt><dd>{chosen.owner_department || chosen.hod_department || "—"}</dd></div>
+            <div><dt>HOD</dt><dd>{chosen.hod_name || "—"} ({chosen.hod_username || "—"})</dd></div>
+            <div><dt>Mode</dt><dd>{humanize(chosen.gateway_mode)}</dd></div>
+            <div><dt>Connection</dt><dd>{humanize(chosen.connection_status || "NOT_TESTED")}</dd></div>
+            <div><dt>Last connection test</dt><dd>{chosen.last_connection_test || "Not tested"}</dd></div>
+            <div><dt>Auto-send</dt><dd>{chosen.auto_send ? "Enabled" : "Disabled"}</dd></div>
+            <div><dt>Assigned batches</dt><dd>{chosen.assigned_batches?.length ? chosen.assigned_batches.map((b) => `${b.code || b.name} (${b.student_count ?? 0})`).join(", ") : "—"}</dd></div>
+          </dl>
+          <div className="ngx-notice is-info"><Icon name="lock" /><span>Passwords, tokens, device IDs, modem secrets and endpoint credentials are never shown to Admin.</span></div>
+        </Modal>
+      )}
+    </AppShell>
+  );
 }
 
-function AdminGatewayTable({title,rows,onView}:{title:string;rows:SmsGateway[];onView:(id:number)=>void}){return <section style={cardStyle}><div style={headerStyle}><div><div style={eyebrow}>{title}</div><h2 style={titleStyle}>{rows.length} gateway{rows.length===1?"":"s"}</h2></div></div>{rows.length?<div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",color:"var(--text)"}}><thead><tr>{["Owner","HOD / Department","Gateway","Mode","Status","Last Test","View"].map(h=><th key={h} style={thStyle}>{h}</th>)}</tr></thead><tbody>{rows.map(g=><tr key={g.id}><td style={tdStyle}><strong>{g.owner_name||g.owner_username}</strong><div style={muted}>{g.owner_username||"—"}</div></td><td style={tdStyle}>{g.hod_name||g.hod_username}<div style={muted}>{g.hod_department||g.owner_department||"—"}</div></td><td style={tdStyle}>{g.gateway_name}</td><td style={tdStyle}>{g.gateway_mode}</td><td style={tdStyle}><span style={pill(activityPill(g.connection_status))}>{g.connection_status.replace("_"," ")}</span></td><td style={tdStyle}>{g.last_connection_test||"—"}</td><td style={tdStyle}><button className="btn btn-sm btn-outline" onClick={()=>onView(g.id)}>View →</button></td></tr>)}</tbody></table></div>:<div style={emptyStyle}>No gateways in this group.</div>}</section>}
+function AdminGatewayTable({ title, rows, onView }: { title: string; rows: SmsGateway[]; onView: (id: number) => void }) {
+  return (
+    <div>
+      <div className="ngx-listmeta" style={{ background: "var(--ng-surface-2)" }}><strong style={{ color: "var(--ng-text)", fontSize: 13 }}>{title}</strong><span>{rows.length}</span></div>
+      {rows.length === 0 ? <EmptyState title="No gateways in this group" /> : (
+        <div className="ngx-table-wrap">
+          <table className="ngx-table">
+            <thead><tr><th>Owner</th><th>HOD / department</th><th>Gateway</th><th>Mode</th><th>Status</th><th>Last test</th><th><span style={{ position: "absolute", left: -9999 }}>Actions</span></th></tr></thead>
+            <tbody>{rows.map((g) => (
+              <tr key={g.id}>
+                <td><div className="ngx-cell-main">{g.owner_name || g.owner_username}</div><div className="ngx-cell-sub">{g.owner_username || "—"}</div></td>
+                <td>{g.hod_name || g.hod_username}<div className="ngx-cell-sub">{g.hod_department || g.owner_department || "—"}</div></td>
+                <td>{g.gateway_name}</td>
+                <td className="is-quiet">{humanize(g.gateway_mode)}</td>
+                <td><Pill tone={statusTone(g.connection_status || "NOT_TESTED")}>{humanize(g.connection_status || "NOT_TESTED")}</Pill></td>
+                <td className="is-quiet is-nowrap">{g.last_connection_test || "—"}</td>
+                <td className="is-right"><button className="ngx-btn is-secondary is-sm" onClick={() => onView(g.id)}>View</button></td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
 
-function DetailItem({label,value}:{label:string;value:string}){return <div style={{padding:12,border:"1px solid var(--border)",borderRadius:12}}><div style={{...eyebrow,marginBottom:4}}>{label}</div><div style={{color:"var(--text)",fontWeight:700,fontSize:13}}>{value}</div></div>}
+/* ── Activity log ────────────────────────────────────────────────────── */
 
 function SmsActivityPanel({ activities, loading }: { activities: SmsActivityRow[]; loading: boolean }) {
   const [search, setSearch] = useState("");
@@ -538,117 +861,91 @@ function SmsActivityPanel({ activities, loading }: { activities: SmsActivityRow[
   const visible = filtered.slice((page - 1) * pageSize, page * pageSize);
   const rangeStart = filtered.length ? (page - 1) * pageSize + 1 : 0;
   const rangeEnd = Math.min(page * pageSize, filtered.length);
-  const filtersActive = Boolean(search || role !== "ALL" || action !== "ALL" || status !== "ALL" || from || to);
+  const activeCount = [role !== "ALL", action !== "ALL", status !== "ALL", Boolean(from || to), Boolean(search)].filter(Boolean).length;
+  const filtersActive = activeCount > 0;
 
   useEffect(() => { setPage(1); }, [search, role, action, status, from, to]);
 
-  const clearFilters = () => {
-    setSearch(""); setRole("ALL"); setAction("ALL"); setStatus("ALL"); setFrom(""); setTo("");
-  };
+  const clearFilters = () => { setSearch(""); setRole("ALL"); setAction("ALL"); setStatus("ALL"); setFrom(""); setTo(""); };
+  const toggle = (id: number) => setExpandedId((cur) => (cur === id ? null : id));
 
   return (
-    <section style={cardStyle}>
-      <div className="sms-log-activity-header">
-        <div>
-          <div style={eyebrow}>SMS ACTIVITY / HISTORY</div>
-          <div className="sms-log-activity-title-row"><h2 style={titleStyle}>SMS activity</h2><span className="sms-log-count" aria-label={`${filtered.length} records`}>{filtered.length}</span></div>
-          <p style={muted}>Gateway tests, approvals, and sends.</p>
-        </div>
-        <button className="sms-log-filter-toggle" type="button" aria-expanded={filtersOpen} onClick={() => setFiltersOpen((open) => !open)}>
-          {filtersOpen ? "Hide filters" : "Filters"}{filtersActive ? ` · ${[role !== "ALL", action !== "ALL", status !== "ALL", Boolean(from || to), Boolean(search)].filter(Boolean).length}` : ""}
+    <section className="ngx-card">
+      <div className="ngx-filterbar">
+        <div className="ngx-search"><Icon name="search" /><input className="ngx-input is-sm" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search actor, gateway, batch" aria-label="Search activity" /></div>
+        <button type="button" className="ngx-btn is-secondary is-sm ngx-filter-toggle" aria-expanded={filtersOpen} onClick={() => setFiltersOpen((o) => !o)}>
+          <Icon name="filter" size={14} />Filters{activeCount ? ` · ${activeCount}` : ""}
         </button>
-      </div>
-
-      <div className={`sms-log-activity-filters${filtersOpen ? " is-open" : ""}`}>
-        <div className="sms-log-activity-search-row">
-          <input className="sms-log-search" style={inputStyle} value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search actor, gateway, batch…" />
-          {filtersActive && <button className="sms-log-clear-filters" type="button" onClick={clearFilters}>Clear</button>}
+        <div className={`ngx-filter-fields${filtersOpen ? " is-open" : ""}`}>
+          <select className="ngx-select is-sm" aria-label="Role" value={role} onChange={(e) => setRole(e.target.value)}><option value="ALL">All roles</option>{roles.map((r) => <option key={r} value={r}>{r}</option>)}</select>
+          <select className="ngx-select is-sm" aria-label="Action" value={action} onChange={(e) => setAction(e.target.value)}><option value="ALL">All actions</option>{actions.map((a) => <option key={a} value={a}>{a}</option>)}</select>
+          <select className="ngx-select is-sm" aria-label="Status" value={status} onChange={(e) => setStatus(e.target.value)}><option value="ALL">All statuses</option>{statuses.map((s) => <option key={s} value={s}>{humanize(s)}</option>)}</select>
+          <span className="ngx-date"><input type="date" aria-label="From date" className="ngx-input is-sm" value={from} onChange={(e) => setFrom(e.target.value)} />to<input type="date" aria-label="To date" className="ngx-input is-sm" value={to} onChange={(e) => setTo(e.target.value)} /></span>
         </div>
-        <div className="sms-log-activity-filter-grid">
-          <select style={inputStyle} value={role} onChange={(e) => setRole(e.target.value)}>
-            <option value="ALL">All roles</option>
-            {roles.map((r) => <option key={r} value={r}>{r}</option>)}
-          </select>
-          <select style={inputStyle} value={action} onChange={(e) => setAction(e.target.value)}>
-            <option value="ALL">All actions</option>
-            {actions.map((a) => <option key={a} value={a}>{a}</option>)}
-          </select>
-          <select style={inputStyle} value={status} onChange={(e) => setStatus(e.target.value)}>
-            <option value="ALL">All status</option>
-            {statuses.map((s) => <option key={s} value={s}>{s}</option>)}
-          </select>
-          <div className="sms-log-date-range">
-            <input type="date" aria-label="From date" style={inputStyle} value={from} onChange={(e) => setFrom(e.target.value)} />
-            <span>to</span>
-            <input type="date" aria-label="To date" style={inputStyle} value={to} onChange={(e) => setTo(e.target.value)} />
-          </div>
-        </div>
+        {filtersActive && <button type="button" className="ngx-btn is-link" onClick={clearFilters}>Clear filters</button>}
       </div>
 
-      <div className="sms-log-activity-summary">
-        <span>{rangeStart ? `${rangeStart}–${rangeEnd} of ${filtered.length}` : "0 records"}</span>
-        {filtersActive && <span className="sms-log-filter-state">Filtered</span>}
+      <div className="ngx-listmeta">
+        <span>{rangeStart ? `${rangeStart}–${rangeEnd} of ${filtered.length}` : "0 records"}{filtersActive && filtered.length !== activities.length ? ` (filtered from ${activities.length})` : ""}</span>
       </div>
 
-      {loading ? <div style={emptyStyle}>Loading activity…</div> : visible.length === 0 ? <div style={emptyStyle}>No activity matches these filters.</div> : (
+      {loading && activities.length === 0 ? (
+        <div style={{ padding: 18, display: "grid", gap: 14 }}>{[60, 100, 80, 90].map((w, i) => <div key={i} className="ngx-skel" style={{ width: `${w}%` }} />)}</div>
+      ) : visible.length === 0 ? (
+        <EmptyState title={filtersActive ? "No activity matches these filters" : "No activity yet"} hint={filtersActive ? undefined : "Gateway tests, approvals and sends will be recorded here."} action={filtersActive ? <button className="ngx-btn is-secondary is-sm" onClick={clearFilters}>Clear filters</button> : undefined} />
+      ) : (
         <>
-          <div className="sms-log-activity-table-wrap">
-            <table className="sms-log-activity-table">
-              <thead><tr>{["Timestamp", "Actor", "Role", "Action", "Gateway", "Batch", "SMS", "Status"].map((h) => <th key={h} style={thStyle}>{h}</th>)}</tr></thead>
-              <tbody>{visible.map((a) => (
-                <Fragment key={a.id}>
-                  <tr onClick={() => setExpandedId((id) => id === a.id ? null : a.id)} className="sms-log-activity-row" tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpandedId((id) => id === a.id ? null : a.id); } }}>
-                    <td style={tdStyle}><span className="sms-log-time">{a.timestamp}</span></td>
-                    <td style={tdStyle}><strong>{a.actor}</strong></td>
-                    <td style={tdStyle}><span className="sms-log-role">{a.role}</span></td>
-                    <td style={tdStyle}><strong>{a.action}</strong></td>
-                    <td style={tdStyle}>{a.gateway}</td>
-                    <td style={tdStyle}>{a.batch || "—"}</td>
-                    <td style={{ ...tdStyle, textAlign: "center" }}>{a.sms_count}</td>
-                    <td style={tdStyle}><span style={pill(activityPill(a.status))}>{a.status}</span></td>
-                  </tr>
-                  {expandedId === a.id && <tr className="sms-log-activity-detail-row"><td colSpan={8} style={{ ...tdStyle, background: "var(--chip-bg-muted)" }}><strong style={{ color: "var(--text)" }}>Activity details</strong><div style={{ ...muted, marginTop: 6, wordBreak: "break-word" }}>{a.details || "No additional details recorded."}</div></td></tr>}
-                </Fragment>
-              ))}</tbody>
+          <div className="ngx-table-wrap ngx-act-table">
+            <table className="ngx-table">
+              <thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Gateway</th><th>Batch</th><th className="is-num">SMS</th><th>Status</th><th aria-label="Details" /></tr></thead>
+              <tbody>{visible.map((a) => {
+                const t = stamp(a.timestamp);
+                const open = expandedId === a.id;
+                return (
+                  <Fragment key={a.id}>
+                    <tr className={`ngx-act-row${open ? " is-open" : ""}`} onClick={() => toggle(a.id)} tabIndex={0} aria-expanded={open} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(a.id); } }}>
+                      <td><span className="ngx-time" title={String(a.timestamp)}>{t.date}<span>{t.time}</span></span></td>
+                      <td><div className="ngx-cell-main">{a.actor}</div><div className="ngx-cell-sub">{a.role}</div></td>
+                      <td>{a.action}</td>
+                      <td className="is-quiet">{a.gateway || "—"}</td>
+                      <td className="is-quiet">{a.batch || "—"}</td>
+                      <td className="is-num">{a.sms_count}</td>
+                      <td><Pill tone={statusTone(a.status)}>{humanize(a.status)}</Pill></td>
+                      <td className="is-right"><span className="ngx-chev" style={{ display: "inline-flex" }}><Icon name="chevronRight" size={15} /></span></td>
+                    </tr>
+                    {open && <tr className="ngx-act-detail"><td colSpan={8}><b>Details</b><p>{a.details || "No additional details recorded."}</p></td></tr>}
+                  </Fragment>
+                );
+              })}</tbody>
             </table>
           </div>
-          <div className="sms-log-activity-cards">
-            {visible.map((a) => (
-              <article key={a.id} className={`sms-log-activity-card${expandedId === a.id ? " is-expanded" : ""}`} onClick={() => setExpandedId((id) => id === a.id ? null : a.id)}>
-                <div className="sms-log-activity-card-top"><div><strong>{a.action}</strong><span>{a.actor} · {a.role}</span></div><span style={pill(activityPill(a.status))}>{a.status}</span></div>
-                <div className="sms-log-activity-card-meta"><span>{a.gateway}</span><span>{a.batch || "No batch"}</span><span>{a.sms_count} SMS</span></div>
-                <time dateTime={String(a.timestamp)}>{a.timestamp}</time>
-                {expandedId === a.id && <div className="sms-log-activity-card-detail"><strong>Activity details</strong><span>{a.details || "No additional details recorded."}</span></div>}
-              </article>
-            ))}
+
+          <div className="ngx-cards">
+            {visible.map((a) => {
+              const t = stamp(a.timestamp);
+              return (
+                <button key={a.id} type="button" className="ngx-act-card" aria-expanded={expandedId === a.id} onClick={() => toggle(a.id)}>
+                  <div className="ngx-act-card-top">
+                    <div><strong>{a.action}</strong><span className="ngx-sub">{a.actor} · {a.role}</span></div>
+                    <Pill tone={statusTone(a.status)}>{humanize(a.status)}</Pill>
+                  </div>
+                  <div className="ngx-act-card-meta"><span>{a.gateway || "—"}</span>{a.batch && <span>{a.batch}</span>}<span>{a.sms_count} SMS</span></div>
+                  <time dateTime={String(a.timestamp)}>{t.date} · {t.time}</time>
+                  {expandedId === a.id && <div className="ngx-act-card-detail">{a.details || "No additional details recorded."}</div>}
+                </button>
+              );
+            })}
           </div>
         </>
       )}
 
-      <div className="sms-log-activity-pagination">
+      <div className="ngx-pager">
         <span>Page {page} of {pageCount}</span>
-        <div><button className="btn btn-sm btn-outline" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1}>Previous</button><button className="btn btn-sm btn-outline" onClick={() => setPage((p) => Math.min(pageCount, p + 1))} disabled={page >= pageCount}>Next</button></div>
+        <div>
+          <button className="ngx-btn is-secondary is-sm" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1}>Previous</button>
+          <button className="ngx-btn is-secondary is-sm" onClick={() => setPage((p) => Math.min(pageCount, p + 1))} disabled={page >= pageCount}>Next</button>
+        </div>
       </div>
     </section>
   );
 }
-
-function Field({ label, children }: { label: string; children: ReactNode }) { return <label style={fieldLabel}>{label}{children}</label>; }
-const modalBackdrop: CSSProperties = { position:"fixed", inset:0, background:"rgba(0,0,0,.45)", display:"grid", placeItems:"center", padding:20, zIndex:100 };
-const modalCard: CSSProperties = { width:"min(860px,100%)", maxHeight:"90vh", overflow:"auto", background:"var(--card-glass)", border:"1px solid var(--border)", borderRadius:18, padding:22, boxShadow:"0 30px 80px rgba(0,0,0,.25)" };
-const cardStyle: CSSProperties = { background: "var(--card-glass)", border: "1px solid var(--border)", borderRadius: 18, padding: 20, boxShadow: "0 8px 28px rgba(0,0,0,.08)" };
-const headerStyle: CSSProperties = { display: "flex", justifyContent: "space-between", gap: 18, alignItems: "flex-start", marginBottom: 18 };
-const titleStyle: CSSProperties = { margin: "3px 0 5px", color: "var(--text)", fontSize: 21 };
-const muted: CSSProperties = { color: "var(--muted)", fontSize: 13, lineHeight: 1.5, margin: 0 };
-const eyebrow: CSSProperties = { color: "var(--heading-accent)", fontSize: 11, fontWeight: 900, letterSpacing: 1.4 };
-const fieldLabel: CSSProperties = { display: "grid", gap: 7, color: "var(--text)", fontSize: 13, fontWeight: 700 };
-const gridStyle: CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 14 };
-const inputStyle: CSSProperties = { width: "100%", boxSizing: "border-box", padding: "10px 12px", borderRadius: 10, border: "1px solid var(--input-border)", background: "var(--input-bg)", color: "var(--text)" };
-const actionsStyle: CSSProperties = { display: "flex", gap: 10, flexWrap: "wrap", marginTop: 14 };
-const emptyStyle: CSSProperties = { padding: 18, borderRadius: 12, background: "var(--chip-bg-muted)", color: "var(--muted)", textAlign: "center" };
-const rowStyle: CSSProperties = { display: "flex", alignItems: "center", gap: 14, padding: 12, border: "1px solid var(--border)", borderRadius: 12, flexWrap: "wrap" };
-const handlerRowStyle: CSSProperties = { display: "flex", alignItems: "center", gap: 16, padding: 14, border: "1px solid var(--border)", borderRadius: 12, flexWrap: "wrap", background: "var(--input-bg)" };
-const thStyle: CSSProperties = { textAlign: "left", padding: "9px 8px", borderBottom: "1px solid var(--border)", fontSize: 11, color: "var(--muted)", textTransform: "uppercase" };
-const tdStyle: CSSProperties = { padding: "10px 8px", borderBottom: "1px solid var(--border)", fontSize: 12, verticalAlign: "top" };
-const batchPillStyle: CSSProperties = { display: "inline-flex", alignItems: "center", padding: "8px 10px", borderRadius: 999, background: "var(--chip-bg-muted)", border: "1px solid var(--border)", color: "var(--text)", fontSize: 12, fontWeight: 800 };
-function pill(kind: "good" | "bad" | "muted"): CSSProperties { return { display: "inline-flex", padding: "4px 8px", borderRadius: 999, fontSize: 10, fontWeight: 900, letterSpacing: .5, background: kind === "good" ? "rgba(16,185,129,.12)" : kind === "bad" ? "rgba(239,68,68,.12)" : "var(--chip-bg-muted)", color: kind === "good" ? "#059669" : kind === "bad" ? "#dc2626" : "var(--muted)" }; }

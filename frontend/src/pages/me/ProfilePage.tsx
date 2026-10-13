@@ -11,34 +11,51 @@ import {
 } from "../../api/me";
 import { ApiClientError, formatPhotoUrl } from "../../api/client";
 import { logout, type CurrentUser } from "../../api/auth";
+import "../../styles/ng-flat-controls.css";
+import "./profile.css";
+import "../../styles/ng-flat-controls.css";
+import "./profile.css";
 
 interface Props {
   user: CurrentUser;
   onLoggedOut: () => void;
 }
 
-const READONLY_FIELDS: Array<{ label: string; key: keyof StudentSelf }> = [
-  { label: "Roll Number", key: "roll_no" },
-  { label: "Department", key: "department" },
+type Kind = "text" | "gender" | "category" | "seat" | "dob";
+interface FieldDef { label: string; key: keyof StudentSelf; kind?: Kind; inputType?: string; wide?: boolean; editOnly?: boolean }
+
+// Name sits in the header while reading, so it only appears as a field when editing.
+const GROUPS: Array<{ title: string; fields: FieldDef[] }> = [
+  { title: "Personal", fields: [
+    { label: "Full name", key: "name", editOnly: true, wide: true },
+    { label: "Father's name", key: "father_name" },
+    { label: "Date of birth", key: "dob", kind: "dob" },
+    { label: "Gender", key: "gender", kind: "gender" },
+  ] },
+  { title: "Contact", fields: [
+    { label: "Email", key: "email", inputType: "email", wide: true },
+    { label: "Phone", key: "phone", inputType: "tel" },
+    { label: "Parent's phone", key: "parent_phone", inputType: "tel" },
+    { label: "Address", key: "address", wide: true },
+  ] },
+  { title: "Admission", fields: [
+    { label: "Category", key: "category", kind: "category" },
+    { label: "Seat category", key: "seat_category", kind: "seat" },
+  ] },
 ];
 
-const EDITABLE_FIELDS: Array<{ label: string; key: keyof StudentSelf; inputType?: string }> = [
-  { label: "Full Name", key: "name" },
-  { label: "Father Name", key: "father_name" },
-  { label: "Email", key: "email", inputType: "email" },
-  { label: "Phone", key: "phone", inputType: "tel" },
-  { label: "Parent Phone Number", key: "parent_phone", inputType: "tel" },
-  { label: "Date of Birth (YYYY-MM-DD)", key: "dob" },
-  { label: "Category", key: "category" },
-  { label: "Gender", key: "gender" },
-  { label: "Seat Category", key: "seat_category" },
-  { label: "Address", key: "address" },
-];
+const CATEGORY_OPTIONS = ["OC", "BC-A", "BC-B", "BC-C", "BC-D", "BC-E", "SC", "ST", "EWS"];
+const SEAT_OPTIONS = ["Convenor (A-Category)", "Management (B-Category)", "NRI / Spot Admission"];
+
+function initials(name: string) {
+  return name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase() || "?";
+}
 
 export function ProfilePage({ user, onLoggedOut }: Props) {
   const navigate = useNavigate();
   const [student, setStudent] = useState<StudentSelf | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
@@ -55,31 +72,32 @@ export function ProfilePage({ user, onLoggedOut }: Props) {
 
   async function reload() {
     setLoading(true);
-    setError(null);
+    setLoadFailed(false);
     try {
       const res = await getMyProfile();
       setStudent(res.student);
       setEditData(res.student);
       setSelfEditEnabled(Boolean(res.student_self_edit_enabled));
     } catch (_err) {
-      // Clean fallback so Profile Information table always renders cleanly
+      setLoadFailed(true);
     } finally { setLoading(false); }
   }
 
   useEffect(() => { reload(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  function startEdit() { setEditData(student ?? {}); setEditError(null); setEditing(true); }
+  function stopEdit() { setEditData(student ?? {}); setEditError(null); setEditing(false); }
+
   async function handleSaveProfile(e: React.FormEvent) {
     e.preventDefault();
-    if (user.role === "STUDENT" && !selfEditEnabled) {
-      setEditError("Student self-editing is disabled by administrator.");
-      return;
-    }
+    if (!selfEditEnabled) return;
     setSubmitting(true); setEditError(null);
     try {
       const res = await updateMyProfile(editData as Parameters<typeof updateMyProfile>[0]);
       setStudent(res.student);
+      setEditData(res.student);
       setEditing(false);
-      setNotice("Profile updated successfully");
+      setNotice("Profile updated");
     } catch (err) {
       setEditError(err instanceof Error ? err.message : "Failed to update profile");
     } finally { setSubmitting(false); }
@@ -99,7 +117,7 @@ export function ProfilePage({ user, onLoggedOut }: Props) {
   }
 
   async function handleRemovePhoto() {
-    if (!window.confirm("Remove profile photo and revert to default avatar?")) return;
+    if (!window.confirm("Remove your profile photo?")) return;
     try {
       await deleteMyProfilePhoto();
       setStudent(prev => prev ? { ...prev, photo_path: null } : prev);
@@ -118,7 +136,7 @@ export function ProfilePage({ user, onLoggedOut }: Props) {
       await changeMyProfilePassword({ old_password: oldPw, new_password: newPw, confirm_password: confirmPw });
       setOldPw(""); setNewPw(""); setConfirmPw("");
       setShowPwForm(false);
-      setNotice("Password changed successfully");
+      setNotice("Password changed");
     } catch (err) {
       setPwError(err instanceof Error ? err.message : "Failed to change password");
     } finally { setSubmitting(false); }
@@ -130,345 +148,161 @@ export function ProfilePage({ user, onLoggedOut }: Props) {
     </AppShell>
   );
 
-  const activeStudent: StudentSelf = student || {
-    id: 1,
-    roll_no: user.student_roll_no || user.username || "2024-CSE-001",
-    name: user.username || "Student User",
-    department: "Computer Science & Engineering",
-    email: `${user.username.toLowerCase()}@campus.edu`,
-    phone: "9876543210",
-    parent_phone: "9876543211",
-    dob: "2002-05-15",
-    address: "Campus Hostel Block A, Room 102",
-    father_name: "Parent / Guardian",
-    category: "General",
-    gender: "Male",
-    seat_category: "Merit",
-    active: true,
-    photo_path: null,
-    current_semester_id: 1,
-  };
+  if (!student) return (
+    <AppShell user={user} activeNav="profile" heading="My Profile" onLoggedOut={onLoggedOut}>
+      <div className="pf">
+        <div className="pf-card pf-row">
+          <strong>{loadFailed ? "Couldn't load your profile." : "No profile found."}</strong>
+          <button type="button" className="ng-flat-btn ng-flat-btn-outline ng-flat-btn-sm" onClick={() => void reload()}>Retry</button>
+        </div>
+      </div>
+    </AppShell>
+  );
 
-  const photoSrc = formatPhotoUrl(activeStudent.photo_path);
+  const photoSrc = formatPhotoUrl(student.photo_path);
+  const record = student as unknown as Record<string, unknown>;
+  const draft = editData as unknown as Record<string, unknown>;
+  const canType = editing && selfEditEnabled;
+
+  function renderInput({ label, key, kind, inputType }: FieldDef, id: string) {
+    const val = String(draft[key] ?? "");
+    const set = (v: string) => setEditData({ ...editData, [key]: v });
+    if (kind === "gender") {
+      const current = val.toUpperCase();
+      return (
+        <div className="pf-seg" role="group" aria-label={label}>
+          {[{ t: "Male", v: "MALE" }, { t: "Female", v: "FEMALE" }].map((o) => (
+            <button key={o.v} type="button" aria-pressed={current === o.v} onClick={() => set(o.v)}>{o.t}</button>
+          ))}
+        </div>
+      );
+    }
+    if (kind === "category" || kind === "seat") {
+      const options = kind === "category" ? CATEGORY_OPTIONS : SEAT_OPTIONS;
+      return (
+        <select id={id} value={val} onChange={(e) => set(e.target.value)}>
+          <option value="">Select…</option>
+          {options.map((o) => <option key={o} value={o}>{o}</option>)}
+        </select>
+      );
+    }
+    return <input id={id} type={kind === "dob" ? "date" : inputType || "text"} value={val} onChange={(e) => set(e.target.value)} />;
+  }
 
   return (
     <AppShell user={user} activeNav="profile" heading="My Profile"
-      whoami={`${activeStudent.roll_no} · ${activeStudent.name}`}
+      whoami={`${student.roll_no} · ${student.name}`}
       onLoggedOut={onLoggedOut}>
-      <ErrorPopup message={editError || pwError} onClose={() => { setEditError(null); setPwError(null); }} />
+      <ErrorPopup message={error || editError || pwError} onClose={() => { setError(null); setEditError(null); setPwError(null); }} />
       {notice && <ToastPopup type="success" message={notice} onClose={() => setNotice(null)} />}
 
-      {/* ── Photo ── */}
-      <div className="detail-box">
-        <h3>Profile Photo</h3>
-        <div className="account-photo-row">
-          {photoSrc ? (
-            <img src={photoSrc} alt="Profile" className="photo-preview" />
-          ) : (
-            <div className="photo-placeholder">👤</div>
-          )}
-          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-            <button
-              type="button"
-              className="btn btn-sm"
-              title={photoSrc ? "Change Photo" : "Upload Photo"}
-              aria-label="Upload profile photo"
-              onClick={() => photoRef.current?.click()}
-              style={{
-                width: 40,
-                height: 40,
-                padding: 0,
-                borderRadius: 10,
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "center",
-                background: "linear-gradient(135deg, #0284c7, #2563eb)",
-                color: "#ffffff",
-                border: "none",
-                boxShadow: "0 4px 12px rgba(56, 189, 248, 0.35)",
-                cursor: "pointer",
-              }}
-            >
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
-                <circle cx="12" cy="13" r="4"/>
-              </svg>
-            </button>
-            {photoSrc && (
-              <button
-                type="button"
-                className="btn btn-sm"
-                title="Remove Photo"
-                aria-label="Remove profile photo"
-                onClick={handleRemovePhoto}
-                style={{
-                  width: 40,
-                  height: 40,
-                  padding: 0,
-                  borderRadius: 10,
-                  display: "inline-flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  background: "linear-gradient(135deg, #ef4444, #dc2626)",
-                  color: "#ffffff",
-                  border: "none",
-                  boxShadow: "0 4px 12px rgba(239, 68, 68, 0.35)",
-                  cursor: "pointer",
-                }}
-              >
-                <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="3 6 5 6 21 6" />
-                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                </svg>
-              </button>
+      <div className="pf">
+        <form className="pf-card" onSubmit={handleSaveProfile}>
+          <div className="pf-head">
+            {photoSrc
+              ? <img src={photoSrc} alt="" className="pf-avatar" />
+              : <div className="pf-avatar is-initials" aria-hidden="true">{initials(student.name)}</div>}
+            <div className="pf-id">
+              <h2>{student.name}</h2>
+              <p>{student.roll_no}{student.department ? ` · ${student.department}` : ""}</p>
+            </div>
+            {!editing && (
+              <button type="button" className="ng-flat-btn ng-flat-btn-outline ng-flat-btn-sm" onClick={startEdit}>Edit</button>
             )}
-            <input ref={photoRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handlePhoto} />
           </div>
-        </div>
-      </div>
 
-      {/* ── Profile info ── */}
-      <div className="detail-box">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-          <h3 style={{ margin: 0 }}>Personal Information</h3>
-          {!selfEditEnabled ? (
-            <span
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 5,
-                padding: "4px 10px",
-                borderRadius: 8,
-                fontSize: 12,
-                fontWeight: 700,
-                background: "rgba(239, 68, 68, 0.1)",
-                color: "#ef4444",
-                border: "1px solid rgba(239, 68, 68, 0.2)",
-              }}
-              title="Student self-editing is currently disabled by administrator"
-            >
-              🔒 Locked
-            </span>
-          ) : !editing ? (
-            <button
-              type="button"
-              className="btn btn-sm btn-outline"
-              title="Edit Personal Information"
-              aria-label="Edit Personal Information"
-              onClick={() => setEditing(true)}
-              style={{
-                width: 36,
-                height: 36,
-                padding: 0,
-                borderRadius: 10,
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: 16,
-                cursor: "pointer",
-              }}
-            >
-              ✏️
-            </button>
-          ) : null}
+          {editing && (
+            <div className="pf-photo-tools">
+              <button type="button" className="ng-flat-btn ng-flat-btn-outline ng-flat-btn-sm" onClick={() => photoRef.current?.click()}>
+                {photoSrc ? "Change photo" : "Add photo"}
+              </button>
+              {photoSrc && <button type="button" className="pf-link-danger" onClick={handleRemovePhoto}>Remove photo</button>}
+              <input ref={photoRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handlePhoto} />
+            </div>
+          )}
+
+          {editing && !selfEditEnabled && (
+            <p className="pf-lock" role="alert">
+              Editing details is turned off by your college administrator. To change your name, phone numbers or other details, contact your HOD. You can still change your photo.
+            </p>
+          )}
+
+          {GROUPS.map((group) => (
+            <section key={group.title} className="pf-group" aria-label={group.title}>
+              <h3>{group.title}</h3>
+              <div className={`pf-grid${canType ? " is-editing" : ""}`}>
+                {group.fields.filter((f) => canType || !f.editOnly).map((f) => {
+                  const id = `pf-${String(f.key)}`;
+                  const raw = String(record[f.key] ?? "").trim();
+                  const value = f.kind === "gender" && raw ? raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase() : raw;
+                  return (
+                    <div key={String(f.key)} className={`${canType ? "pf-field" : "pf-item"}${f.wide ? " pf-wide" : ""}`}>
+                      {canType
+                        ? <><label className="pf-label" htmlFor={id}>{f.label}</label>{renderInput(f, id)}</>
+                        : <><span className="pf-label">{f.label}</span><div className={`pf-val${value ? "" : " is-empty"}`}>{value || "Not set"}</div></>}
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          ))}
+
+          {editing && (
+            <div className="pf-actions">
+              {selfEditEnabled
+                ? <>
+                    <button type="submit" className="ng-flat-btn ng-flat-btn-primary" disabled={submitting}>{submitting ? "Saving…" : "Save changes"}</button>
+                    <button type="button" className="ng-flat-btn ng-flat-btn-outline" onClick={stopEdit} disabled={submitting}>Cancel</button>
+                  </>
+                : <button type="button" className="ng-flat-btn ng-flat-btn-outline" onClick={stopEdit}>Done</button>}
+            </div>
+          )}
+        </form>
+
+        <div className="pf-card">
+          <div className="pf-row">
+            <strong>Password</strong>
+            {!showPwForm && <button type="button" className="ng-flat-btn ng-flat-btn-outline ng-flat-btn-sm" onClick={() => setShowPwForm(true)}>Change</button>}
+          </div>
+          {showPwForm && (
+            <form className="pf-pw" onSubmit={handleChangePassword}>
+              <div className="pf-field">
+                <label className="pf-label" htmlFor="pf-old">Current password</label>
+                <input id="pf-old" type="password" value={oldPw} onChange={e => setOldPw(e.target.value)} required autoComplete="current-password" />
+              </div>
+              <div className="pf-field">
+                <label className="pf-label" htmlFor="pf-new">New password (min 8 characters)</label>
+                <input id="pf-new" type="password" value={newPw} onChange={e => setNewPw(e.target.value)} required minLength={8} autoComplete="new-password" />
+              </div>
+              <div className="pf-field">
+                <label className="pf-label" htmlFor="pf-confirm">Confirm new password</label>
+                <input id="pf-confirm" type="password" value={confirmPw} onChange={e => setConfirmPw(e.target.value)} required minLength={8} autoComplete="new-password" />
+              </div>
+              <div style={{ display: "flex", gap: 10 }}>
+                <button type="submit" className="ng-flat-btn ng-flat-btn-primary" disabled={submitting}>{submitting ? "Updating…" : "Update password"}</button>
+                <button type="button" className="ng-flat-btn ng-flat-btn-outline" onClick={() => { setShowPwForm(false); setOldPw(""); setNewPw(""); setConfirmPw(""); }}>Cancel</button>
+              </div>
+            </form>
+          )}
         </div>
 
-        {!selfEditEnabled && (
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 12,
-              padding: "12px 16px",
-              marginBottom: 16,
-              borderRadius: 12,
-              background: "rgba(245, 158, 11, 0.08)",
-              border: "1px solid rgba(245, 158, 11, 0.25)",
-              color: "var(--text)",
+        <div className="profile-logout-zone pf-logout">
+          <button
+            type="button"
+            className="profile-logout"
+            onClick={async () => {
+              try { await logout(); } catch (err) { console.warn("Logout failed:", err); }
+              finally { onLoggedOut(); navigate("/login"); }
             }}
           >
-            <span style={{ fontSize: 20 }}>ℹ️</span>
-            <div style={{ fontSize: 13, lineHeight: 1.5 }}>
-              <strong style={{ color: "#d97706", display: "block" }}>Profile Self-Editing Disabled</strong>
-              Student profile self-editing is currently turned off by the college administrator. If you need to update your name, contact numbers, or other details, please contact your department HOD or administrator.
-            </div>
-          </div>
-        )}
-
-        {!editing || !selfEditEnabled ? (
-          <div className="detail-grid">
-            {READONLY_FIELDS.map(({ label, key }) => (
-              <div key={key} className="detail-field">
-                <label>{label}</label>
-                <div className="val">{String((activeStudent as unknown as Record<string, unknown>)?.[key] || "—")}</div>
-              </div>
-            ))}
-            {EDITABLE_FIELDS.map(({ label, key }) => (
-              <div key={key} className="detail-field">
-                <label>{label}</label>
-                <div className={`val${!(activeStudent as unknown as Record<string, unknown>)?.[key] ? " empty" : ""}`}>
-                  {String((activeStudent as unknown as Record<string, unknown>)?.[key] || "") || "—"}
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <form onSubmit={handleSaveProfile}>
-            <div className="form-grid">
-              {READONLY_FIELDS.map(({ label, key }) => (
-                <div key={key} className="field">
-                  <label>{label} (read-only)</label>
-                  <input type="text" value={String((activeStudent as unknown as Record<string, unknown>)?.[key] || "")} disabled style={{ background: "var(--bg)" }} />
-                </div>
-              ))}
-              {EDITABLE_FIELDS.map(({ label, key, inputType }) => {
-                const val = String((editData as unknown as Record<string, unknown>)?.[key] || "");
-                if (key === "gender") {
-                  const current = val.toUpperCase();
-                  return (
-                    <div key={key} className="field" style={{ background: "var(--row-alt)", padding: 12, borderRadius: 12, border: "1.5px solid var(--border)" }}>
-                      <label style={{ fontWeight: 800, fontSize: 12, color: "var(--heading-accent)", textTransform: "uppercase", letterSpacing: "0.5px" }}>{label}</label>
-                      <div style={{ display: "flex", gap: 10, marginTop: 6 }}>
-                        {[{ label: "👨 Male", v: "MALE" }, { label: "👩 Female", v: "FEMALE" }].map(item => (
-                          <button
-                            key={item.v}
-                            type="button"
-                            onClick={() => setEditData({ ...editData, [key]: item.v })}
-                            style={{
-                              flex: 1,
-                              padding: "9px 12px",
-                              borderRadius: 10,
-                              fontWeight: 700,
-                              fontSize: 13,
-                              border: current === item.v ? "2px solid #2563eb" : "1.5px solid var(--border)",
-                              background: current === item.v ? "linear-gradient(135deg, #2563eb, #1d4ed8)" : "#ffffff",
-                              color: current === item.v ? "#ffffff" : "var(--text)",
-                              boxShadow: current === item.v ? "0 4px 12px rgba(37, 99, 235, 0.3)" : "0 1px 3px rgba(0,0,0,0.04)",
-                              cursor: "pointer",
-                              transition: "all 0.2s ease",
-                            }}
-                          >
-                            {item.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  );
-                }
-                if (key === "category") {
-                  return (
-                    <div key={key} className="field">
-                      <label style={{ fontWeight: 800, fontSize: 12, color: "var(--heading-accent)", textTransform: "uppercase", letterSpacing: "0.5px" }}>{label}</label>
-                      <select
-                        className="input-field"
-                        value={val}
-                        onChange={e => setEditData({ ...editData, [key]: e.target.value })}
-                      >
-                        <option value="">— Select Category —</option>
-                        {["OC", "BC-A", "BC-B", "BC-C", "BC-D", "BC-E", "SC", "ST", "EWS"].map(cat => (
-                          <option key={cat} value={cat}>{cat}</option>
-                        ))}
-                      </select>
-                    </div>
-                  );
-                }
-                if (key === "seat_category") {
-                  return (
-                    <div key={key} className="field">
-                      <label style={{ fontWeight: 800, fontSize: 12, color: "var(--heading-accent)", textTransform: "uppercase", letterSpacing: "0.5px" }}>{label}</label>
-                      <select
-                        className="input-field"
-                        value={val}
-                        onChange={e => setEditData({ ...editData, [key]: e.target.value })}
-                      >
-                        <option value="">— Select Seat Category —</option>
-                        {["Convenor (A-Category)", "Management (B-Category)", "NRI / Spot Admission"].map(s => (
-                          <option key={s} value={s}>{s}</option>
-                        ))}
-                      </select>
-                    </div>
-                  );
-                }
-                if (key === "dob") {
-                  return (
-                    <div key={key} className="field">
-                      <label style={{ fontWeight: 800, fontSize: 12, color: "var(--heading-accent)", textTransform: "uppercase", letterSpacing: "0.5px" }}>{label}</label>
-                      <input
-                        type="date"
-                        className="input-field"
-                        value={val}
-                        onChange={e => setEditData({ ...editData, [key]: e.target.value })}
-                      />
-                    </div>
-                  );
-                }
-                return (
-                  <div key={key} className="field">
-                    <label style={{ fontWeight: 800, fontSize: 12, color: "var(--heading-accent)", textTransform: "uppercase", letterSpacing: "0.5px" }}>{label}</label>
-                    <input
-                      type={inputType || "text"}
-                      className="input-field"
-                      value={val}
-                      onChange={e => setEditData({ ...editData, [key]: e.target.value })}
-                    />
-                  </div>
-                );
-              })}
-            </div>
-            <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
-              <button type="submit" className="btn" disabled={submitting}>{submitting ? "Saving…" : "Save Changes"}</button>
-              <button type="button" className="btn btn-outline" onClick={() => setEditing(false)}>Cancel</button>
-            </div>
-          </form>
-        )}
-      </div>
-
-      {/* ── Change password ── */}
-      <div className="detail-box">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <h3 style={{ margin: 0 }}>Security</h3>
-          {!showPwForm && (
-            <button className="btn btn-sm btn-outline" onClick={() => setShowPwForm(true)}>Change Password</button>
-          )}
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M10 17l5-5-5-5" />
+              <path d="M15 12H3" />
+              <path d="M21 19V5a2 2 0 0 0-2-2h-6" />
+            </svg>
+            Log out
+          </button>
         </div>
-        {showPwForm && (
-          <form onSubmit={handleChangePassword} style={{ marginTop: 14, maxWidth: 400 }}>
-            <div className="field">
-              <label>Current Password *</label>
-              <input type="password" value={oldPw} onChange={e => setOldPw(e.target.value)} required />
-            </div>
-            <div className="field">
-              <label>New Password * (min 8 chars)</label>
-              <input type="password" value={newPw} onChange={e => setNewPw(e.target.value)} required minLength={8} />
-            </div>
-            <div className="field">
-              <label>Confirm New Password *</label>
-              <input type="password" value={confirmPw} onChange={e => setConfirmPw(e.target.value)} required minLength={8} />
-            </div>
-            <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
-              <button type="submit" className="btn" disabled={submitting}>{submitting ? "Changing…" : "Update Password"}</button>
-              <button type="button" className="btn btn-outline" onClick={() => setShowPwForm(false)}>Cancel</button>
-            </div>
-          </form>
-        )}
-      </div>
-
-      <div className="profile-logout-zone">
-        <button
-          type="button"
-          className="profile-logout"
-          onClick={async () => {
-            try { await logout(); } catch (err) { console.warn("Logout failed:", err); }
-            finally { onLoggedOut(); navigate("/login"); }
-          }}
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M10 17l5-5-5-5" />
-            <path d="M15 12H3" />
-            <path d="M21 19V5a2 2 0 0 0-2-2h-6" />
-          </svg>
-          Log out
-        </button>
       </div>
     </AppShell>
   );

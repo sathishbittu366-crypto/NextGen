@@ -21,7 +21,10 @@ import {
 import { DaySchedulePanel } from "./DaySchedulePanel";
 import "../../styles/ng-flat-controls.css";
 import "./timetable.css";
+import "./student-schedule.css";
 import { ScheduleView } from "./ScheduleView";
+import { StudentSchedule } from "./StudentSchedule";
+import { useMediaQuery } from "../../hooks/useMediaQuery";
 
 interface Props { user: CurrentUser; onLoggedOut: () => void; }
 
@@ -88,6 +91,7 @@ function formatBlockTitle(entry: Pick<DraftEntry, "subject_code" | "subject_name
 export function TimetablePage({ user, onLoggedOut }: Props) {
   const isBuilderRole = user.role === "HOD" || user.role === "ADMIN";
   const isAdmin = user.role === "ADMIN";
+  const isPhone = useMediaQuery("(max-width: 640px)");
 
   const [data, setData] = useState<TimetablePageData | null>(null);
   const [showBuilder, setShowBuilder] = useState(false);
@@ -529,7 +533,7 @@ export function TimetablePage({ user, onLoggedOut }: Props) {
   const adminStatus = adminHeaderRecord?.status || "DRAFT";
 
   if (loading) {
-    return <AppShell user={user} activeNav="timetable" heading={isAdmin ? "Timetable" : "Timetable"} onLoggedOut={onLoggedOut}><p className="empty-note">Loading timetable…</p></AppShell>;
+    return <AppShell user={user} activeNav="timetable" heading="Schedule" onLoggedOut={onLoggedOut}><p className="empty-note">Loading timetable…</p></AppShell>;
   }
 
   if ((user.role === "HOD" || user.role === "FACULTY") && !showBuilder) {
@@ -539,16 +543,46 @@ export function TimetablePage({ user, onLoggedOut }: Props) {
   if (!isBuilderRole) {
     const records = (data?.timetables || []).filter(t => viewerSection === "ALL" || t.section_name === viewerSection);
     const viewer = records.find(t => t.semester_id === viewerSemesterId) || records[0] || null;
-    return <AppShell user={user} activeNav="timetable" heading="Timetable" onLoggedOut={onLoggedOut}>
+    const semesters = data?.semesters || [];
+    const sections = Array.from(new Set((data?.timetables || []).map(t => t.section_name))).sort();
+    const selects = (semesters.length > 1 || sections.length > 1) && (
+      <div className={isPhone ? "ss-selects" : "tt-viewer-selects"}>
+        {semesters.length > 1 && (
+          <select aria-label="Semester" value={viewerSemesterId} onChange={e => { setViewerSemesterId(Number(e.target.value)); void load({ semester_id: Number(e.target.value) }); }}>
+            <option value="">Select semester</option>
+            {semesters.map(s => <option key={s.id} value={s.id}>{s.code}</option>)}
+          </select>
+        )}
+        {sections.length > 1 && (
+          <select aria-label="Section" value={viewerSection} onChange={e => setViewerSection(e.target.value)}>
+            <option value="ALL">All sections</option>
+            {sections.map(sec => <option key={sec} value={sec}>Section {sec}</option>)}
+          </select>
+        )}
+      </div>
+    );
+    return <AppShell user={user} activeNav="timetable" heading="Schedule" onLoggedOut={onLoggedOut}>
       <ErrorPopup message={error} onClose={() => setError(null)} />
       {notice && <ToastPopup type="success" message={notice} onClose={() => setNotice(null)} />}
       <div className="timetable-page timetable-viewer-page">
-        <div className="tt-public-head">
-          <div><span className="tt-eyebrow">Academic schedule</span><h2>Class timetable</h2><p>Published schedule for your current academic context.</p></div>
-          <div className="tt-viewer-selects"><select value={viewerSemesterId} onChange={e => { setViewerSemesterId(Number(e.target.value)); void load({ semester_id: Number(e.target.value) }); }}><option value="">Select semester</option>{data?.semesters.map(s => <option key={s.id} value={s.id}>{s.code}</option>)}</select><select value={viewerSection} onChange={e => setViewerSection(e.target.value)}><option value="ALL">All sections</option>{Array.from(new Set((data?.timetables || []).map(t => t.section_name))).sort().map(s => <option key={s} value={s}>Section {s}</option>)}</select></div>
-        </div>
-        {!viewer && <div className="tt-empty">No published timetable is available for this selection yet.</div>}
-        {viewer && <div className="tt-read-surface"><div className="tt-read-context"><div><strong>{recordLabel(viewer)}</strong><span>{viewer.academic_year}</span></div><span className="tt-badge published">PUBLISHED</span></div>{renderReadonlyGrid(viewer)}</div>}
+        {isPhone ? (
+          <div style={{ display: "grid", gap: 10 }}>
+            {selects}
+            {!viewer && <div className="tt-empty">No published timetable is available for this selection yet.</div>}
+            {viewer && (
+              <>
+                <div className="ss-context"><strong>{recordLabel(viewer)}</strong><span>{viewer.academic_year}</span></div>
+                <StudentSchedule key={viewer.id} record={viewer} />
+              </>
+            )}
+          </div>
+        ) : (
+          <>
+            {selects && <div className="tt-public-head" style={{ justifyContent: "flex-start" }}>{selects}</div>}
+            {!viewer && <div className="tt-empty">No published timetable is available for this selection yet.</div>}
+            {viewer && <div className="tt-read-surface"><div className="tt-read-context"><div><strong>{recordLabel(viewer)}</strong><span>{viewer.academic_year}</span></div></div>{renderReadonlyGrid(viewer)}</div>}
+          </>
+        )}
       </div>
     </AppShell>;
   }

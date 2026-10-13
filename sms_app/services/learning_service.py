@@ -1276,3 +1276,171 @@ def get_student_results(*, roll_no: str) -> dict:
             },
             "results": result_entries,
         }
+
+
+# — Student result report (per-student analysis layer over get_student_results)
+#
+# WHY: the report is deliberately built ON TOP of get_student_results() instead
+# of re-querying result_items. That keeps cohort scoping (department + batch)
+# and subject ordering identical to the existing Results / Track Record screens,
+# so the three views can never disagree about which rows belong to a student.
+# Do not replace this with a fresh SQL query without re-checking that scope.
+
+
+def _report_money(value: float | None) -> float | None:
+    """Round for display; None stays None so the UI can render a dash."""
+    return None if value is None else round(float(value), 2)
+
+
+def assemble_student_result_report(student: dict | None, entries: list[dict]) -> dict:
+    """Turn get_student_results() output into the report payload.
+
+    Pure function (no DB) so it can be unit-tested with synthetic data.
+
+    Attempt model — WHY: the product decision is "show every attempt
+    separately". Each result upload that contains the student is one attempt
+    at the subjects inside it. A subject_code appearing in more than one upload
+    is a re-attempt; earlier failed attempts are never merged away or rewritten.
+    What we DO derive, from stored data only:
+      * attempt_no     — 1 for the first upload containing that subject
+      * cleared_in     — on a failed attempt, the title of a later upload where
+                         the same subject_code passed
+      * pending        — failed attempt with no later pass (an open backlog)
+
+    Pass/fail uses _result_item_status() — the same rule the importer and the
+    admin dashboard use (grade F/FAIL/AB or status containing FAIL). No pass
+    mark is invented here.
+
+    CGPA — WHY it is "computed": the app does not store the university CGPA.
+    We take, per subject_code, the LATEST PASSED attempt, and compute
+    sum(grade_point * credits) / sum(credits). Failed attempts are excluded
+    from both numerator and denominator. It can differ from the official
+    figure (e.g. improvement exams, university rounding), so the payload
+    carries cgpa_computed=True and the UI must label it as computed.
+    """
+    # — Order attempts: semester order as returned, then upload time
+    rank: dict[str, int] = {}
+    for e in entries:
+        code = str(e["batch"].get("semester_code") or "")
+        rank.setdefault(code, len(rank))
+    ordered = sorted(
+        entries,
+        key=lambda e: (rank[str(e["batch"].get("semester_code") or "")], str(e["batch"].get("created_at") or "")),
+    )
+
+    # — Pass 1: classify every subject row
+    attempts: list[dict] = []
+    seen_count: dict[str, int] = {}
+    for e in ordered:
+        subjects = []
+        for row in e["subjects"]:
+            code = str(row.get("subject_code") or "").strip()
+            seen_count[code] = seen_count.get(code, 0) + 1
+            subjects.append({
+                "subject_code": code,
+                "subject_name": row.get("subject_name"),
+                "internal_marks": row.get("internal_marks"),
+                "external_marks": row.get("external_marks"),
+                "marks": row.get("marks"),
+                "max_marks": row.get("max_marks"),
+                "credits": row.get("credits"),
+                "grade": row.get("grade"),
+                "grade_point": row.get("grade_point"),
+                "status": _result_item_status(row),
+                "attempt_no": seen_count[code],
+                "cleared_in": None,
+                "pending": False,
+            })
+        attempts.append({"entry": e, "subjects": subjects})
+
+    # — Pass 2: link each failed attempt to a later pass of the same subject
+    for i, att in enumerate(attempts):
+        for sub in att["subjects"]:
+            if sub["status"] != "FAIL":
+                continue
+            later_pass = next(
+                (
+                    later["entry"]["batch"]["title"]
+                    for later in attempts[i + 1:]
+                    for s in later["subjects"]
+                    if s["subject_code"] == sub["subject_code"] and s["status"] == "PASS"
+                ),
+                None,
+            )
+            sub["cleared_in"] = later_pass
+            sub["pending"] = later_pass is None
+
+    # — Per-attempt summary
+    out_attempts = []
+    for att in attempts:
+        e = att["entry"]
+        subs = att["subjects"]
+        passed = sum(1 for s in subs if s["status"] == "PASS")
+        failed = sum(1 for s in subs if s["status"] == "FAIL")
+        unknown = sum(1 for s in subs if s["status"] == "UNKNOWN")
+        sgpa_num = _result_number(e.get("sgpa"))
+        out_attempts.append({
+            "batch": e["batch"],
+            "sgpa": _report_money(sgpa_num),
+            "result_status": e.get("result_status"),
+            "credits_earned": _report_money(sum(float(s.get("credits") or 0) for s in subs if s["status"] != "FAIL")),
+            "passed": passed,
+            "failed": failed,
+            "unknown": unknown,
+            "subjects": subs,
+        })
+
+    # — Cumulative ("till now") summary
+    latest_pass: dict[str, dict] = {}
+    for att in out_attempts:
+        for s in att["subjects"]:
+            if s["status"] == "PASS":
+                latest_pass[s["subject_code"]] = s
+    weighted = 0.0
+    credit_sum = 0.0
+    for s in latest_pass.values():
+        gp = _result_number(s.get("grade_point"))
+        cr = _result_number(s.get("credits"))
+        if gp is None or cr is None or cr <= 0:
+            continue
+        weighted += gp * cr
+        credit_sum += cr
+    cgpa = (weighted / credit_sum) if credit_sum > 0 else None
+
+    pending = [
+        {
+            "subject_code": s["subject_code"],
+            "subject_name": s["subject_name"],
+            "semester_code": att["batch"].get("semester_code"),
+            "attempt_title": att["batch"].get("title"),
+        }
+        for att in out_attempts
+        for s in att["subjects"]
+        if s["pending"]
+    ]
+    all_subjects = [s for att in out_attempts for s in att["subjects"]]
+    cleared_later = sum(1 for s in all_subjects if s["status"] == "FAIL" and s["cleared_in"])
+
+    return {
+        "student": student,
+        "attempts": out_attempts,
+        "summary": {
+            "attempt_count": len(out_attempts),
+            "subjects_passed": sum(1 for s in all_subjects if s["status"] == "PASS"),
+            "subjects_failed": sum(1 for s in all_subjects if s["status"] == "FAIL"),
+            "subjects_unknown": sum(1 for s in all_subjects if s["status"] == "UNKNOWN"),
+            "failed_then_cleared": cleared_later,
+            "pending_backlogs": pending,
+            "credits_earned": _report_money(sum(
+                float(_result_number(s.get("credits")) or 0) for s in latest_pass.values()
+            )),
+            "cgpa": _report_money(cgpa),
+            "cgpa_computed": True,
+        },
+    }
+
+
+def get_student_result_report(*, roll_no: str) -> dict:
+    """DB-backed entry point. Caller is responsible for authorization."""
+    base = get_student_results(roll_no=roll_no)
+    return assemble_student_result_report(base.get("student"), base.get("results", []))

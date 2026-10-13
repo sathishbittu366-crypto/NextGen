@@ -201,3 +201,62 @@ export interface StudentResults {
 export async function getMyResults(): Promise<StudentResults> {
   return apiFetch<StudentResults>("/api/results/me");
 }
+
+
+// — Result report (per-student analysis)
+export type ReportSubjectStatus = "PASS" | "FAIL" | "UNKNOWN";
+
+export interface ReportSubject {
+  subject_code: string;
+  subject_name: string | null;
+  internal_marks: number | null;
+  external_marks: number | null;
+  marks: number | null;
+  max_marks: number | null;
+  credits: number | null;
+  grade: string | null;
+  grade_point: string | null;
+  status: ReportSubjectStatus;
+  attempt_no: number;
+  cleared_in: string | null;
+  pending: boolean;
+}
+
+export interface ReportAttempt {
+  batch: {
+    id: number;
+    title: string;
+    created_at: string;
+    source_filename: string | null;
+    semester_code: string;
+    semester_name: string;
+  };
+  sgpa: number | null;
+  result_status: string | null;
+  credits_earned: number | null;
+  passed: number;
+  failed: number;
+  unknown: number;
+  subjects: ReportSubject[];
+}
+
+export interface StudentResultReport {
+  student: { roll_no: string; name: string; department: string } | null;
+  student_id?: number;
+  attempts: ReportAttempt[];
+  summary: {
+    attempt_count: number;
+    subjects_passed: number;
+    subjects_failed: number;
+    subjects_unknown: number;
+    failed_then_cleared: number;
+    pending_backlogs: { subject_code: string; subject_name: string | null; semester_code: string | null; attempt_title: string | null }[];
+    credits_earned: number | null;
+    cgpa: number | null;
+    cgpa_computed: boolean;
+  };
+}
+
+export async function getMyResultReport(): Promise<StudentResultReport> {
+  return apiFetch<StudentResultReport>("/api/results/me/report");
+}

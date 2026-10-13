@@ -1,0 +1,39 @@
+/* Student schedule (phone) — one day at a time. --ng-* tokens only. */
+.ss { display: grid; gap: 10px; }
+.ss-tabs { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px; padding: 3px; border: 1px solid var(--ng-line); border-radius: 11px; background: var(--ng-surface); }
+.ss-tab { position: relative; min-height: 38px; border: 0; border-radius: 8px; background: transparent; color: var(--ng-muted); font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.ss-tab[aria-selected="true"] { background: var(--ng-navy); color: #fff; }
+.ss-tab:focus-visible { outline: 2px solid var(--ng-accent); outline-offset: 1px; }
+.ss-tab i { position: absolute; left: 50%; bottom: 4px; width: 4px; height: 4px; margin-left: -2px; border-radius: 50%; background: transparent; }
+.ss-tab.is-today i { background: var(--ng-accent); }
+.ss-tab.is-today[aria-selected="true"] i { background: #fff; }
+
+.ss-panel { border: 1px solid var(--ng-line); border-radius: 12px; background: var(--ng-surface); overflow: hidden; }
+.ss-dayline { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--ng-line); }
+.ss-dayline strong { font-size: 15px; font-weight: 800; color: var(--ng-text); }
+.ss-dayline span { font-size: 12px; color: var(--ng-muted); }
+
+.ss-list { list-style: none; margin: 0; padding: 0; }
+.ss-list > li + li .ss-row { border-top: 1px solid var(--ng-line); }
+.ss-row { display: grid; grid-template-columns: 46px minmax(0, 1fr) auto; align-items: start; gap: 12px; padding: 12px 14px; }
+.ss-row.is-now { background: var(--ng-accent-soft); box-shadow: inset 3px 0 0 var(--ng-accent); }
+.ss-time { display: flex; flex-direction: column; gap: 2px; font-variant-numeric: tabular-nums; }
+.ss-time strong { font-size: 14px; font-weight: 800; color: var(--ng-text); }
+.ss-time span { font-size: 12px; color: var(--ng-soft); }
+.ss-main { min-width: 0; }
+.ss-title { font-size: 14px; line-height: 1.35; font-weight: 700; color: var(--ng-text); overflow-wrap: anywhere; }
+.ss-meta { margin-top: 2px; font-size: 12px; line-height: 1.4; color: var(--ng-muted); overflow-wrap: anywhere; }
+.ss-period { padding-top: 2px; font-size: 11px; font-weight: 700; color: var(--ng-soft); white-space: nowrap; }
+.ss-chip { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 5px; vertical-align: 1px; font-style: normal; font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; background: var(--ng-surface-2); color: var(--ng-muted); border: 1px solid var(--ng-line); }
+.ss-chip.is-now { background: var(--ng-accent); border-color: var(--ng-accent); color: #fff; }
+.ss-chip.is-next { background: var(--ng-amber-soft); border-color: transparent; color: var(--ng-amber); }
+
+.ss-lunch { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 14px; border-top: 1px solid var(--ng-line); background: var(--ng-surface-2); font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--ng-soft); }
+.ss-lunch time { letter-spacing: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
+.ss-list > li:first-child .ss-lunch { border-top: 0; }
+.ss-empty { margin: 0; padding: 32px 14px; text-align: center; font-size: 13.5px; color: var(--ng-muted); }
+
+.ss-context { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 8px; font-size: 12.5px; color: var(--ng-muted); }
+.ss-context strong { color: var(--ng-text); font-weight: 800; }
+.ss-selects { display: flex; gap: 8px; }
+.ss-selects select { flex: 1; min-width: 0; height: 38px; padding: 0 10px; border: 1px solid var(--ng-line-strong); border-radius: 9px; background: var(--ng-surface); color: var(--ng-text); font: inherit; font-size: 13px; }

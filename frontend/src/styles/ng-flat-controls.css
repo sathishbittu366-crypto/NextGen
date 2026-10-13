@@ -8,7 +8,9 @@
 .ng-flat-btn-outline{background:var(--ng-surface);color:var(--ng-text);border-color:var(--ng-line-strong)}
 .ng-flat-btn-outline:hover:not(:disabled){background:var(--ng-surface-2)}
 .ng-flat-btn-sm{min-height:34px;padding:0 12px;font-size:13px}
-.ng-flat-btn-block{display:flex;width:100%;min-height:46px}
+.ng-flat-btn-block{display:flex;width:100%;min-height:44px}
+.ng-flat-btn svg{width:15px;height:15px;flex:none}
+@media (max-width:640px){.ng-flat-btn{min-height:36px;padding:0 14px;font-size:13px;border-radius:8px}.ng-flat-btn-sm{min-height:32px;padding:0 11px;font-size:12.5px}.ng-flat-btn-block{min-height:42px}.ng-flat-select,.ng-flat-input{min-height:38px}}
 .ng-flat-select,.ng-flat-input{min-height:40px;padding:0 12px;border:1px solid var(--ng-line-strong);border-radius:9px;background:var(--ng-surface);color:var(--ng-text);font:inherit;font-size:14px}
 .ng-flat-card{border:1px solid var(--ng-line);border-radius:10px;background:var(--ng-surface)}
 .ng-flat-metric-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}

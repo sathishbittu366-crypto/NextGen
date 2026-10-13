@@ -519,6 +519,31 @@ async def student_track_record_semester(student_id: int, semester_id: int, user:
     })
 
 
+@router.get("/{student_id}/results-report")
+async def student_results_report(student_id: int, user: CurrentUser = Depends(get_current_user)):
+    # WHY: same ownership rule as /track-record (ADMIN: all; HOD: own students;
+    # FACULTY: students under their HOD). Unlike the Track Record page, Faculty
+    # is intentionally allowed here — results visibility for Faculty was an
+    # explicit product decision. A student outside the caller's scope returns
+    # 404 (not 403) so the route does not reveal which student ids exist.
+    if user.role == "STUDENT":
+        raise ApiError("Access denied", 403, "FORBIDDEN")
+    with connect() as c:
+        if user.role == "ADMIN" or user.username == "admin":
+            row = c.execute("SELECT roll_no FROM students WHERE id=? AND department='CSD'", (student_id,)).fetchone()
+        elif user.role == "HOD":
+            row = c.execute("SELECT roll_no FROM students WHERE id=? AND department='CSD' AND (hod_username=? OR hod_username IS NULL)", (student_id, user.username)).fetchone()
+        else:
+            hod = _get_user_hod_username(user.username)
+            row = c.execute("SELECT roll_no FROM students WHERE id=? AND department='CSD' AND (hod_username=? OR hod_username IS NULL)", (student_id, hod)).fetchone() if hod else None
+    if not row:
+        raise ApiError("Student not found", 404, "NOT_FOUND")
+    from sms_app.services.learning_service import get_student_result_report
+    report = get_student_result_report(roll_no=row["roll_no"])
+    report["student_id"] = student_id
+    return ok(report)
+
+
 @router.get("/{student_id}")
 async def student_view(student_id: int, user: CurrentUser = Depends(get_current_user)):
     if user.role == "STUDENT":

@@ -198,10 +198,10 @@ body { background: var(--ng-bg) !important; color: var(--ng-text) !important; fo
 
 @media (max-width: 980px) {
   .ng-sidebar { display:none !important; }
-  .ng-topbar { min-height:70px !important; padding:12px 16px !important; }
+  .ng-topbar { min-height:56px !important; padding:8px 14px !important; }
   .ng-mobile-brand { display:flex; align-items:center; gap:8px; margin-right:12px; }
-  .ng-mobile-brand img { width:30px; height:30px; border-radius:7px; }
-  .ng-page-heading h1 { font-size:19px !important; }
+  .ng-mobile-brand img { width:28px; height:28px; border-radius:7px; }
+  .ng-page-heading h1 { font-size:18px !important; margin-top:3px !important; }
   .ng-topbar-role { display:none; }
   .ng-main-body { padding:16px 14px 92px !important; }
   .att-shell-grid { grid-template-columns:1fr !important; }
@@ -301,15 +301,15 @@ body { background: var(--ng-bg) !important; color: var(--ng-text) !important; fo
    ================================================================ */
 @media (max-width: 980px) {
   .ng-main-body {
-    padding-bottom: calc(78px + env(safe-area-inset-bottom)) !important;
+    padding-bottom: calc(72px + env(safe-area-inset-bottom)) !important;
   }
 
   .ng-mobile-brand {
     margin-right:12px;
   }
   .ng-mobile-brand-action{
-    width:38px;
-    height:38px;
+    width:34px;
+    height:34px;
     padding:0;
     display:inline-flex;
     align-items:center;
@@ -321,8 +321,8 @@ body { background: var(--ng-bg) !important; color: var(--ng-text) !important; fo
     cursor:pointer;
   }
   .ng-mobile-brand-action img{
-    width:32px;
-    height:32px;
+    width:28px;
+    height:28px;
     border-radius:8px;
     object-fit:cover;
     display:block;
@@ -341,11 +341,11 @@ body { background: var(--ng-bg) !important; color: var(--ng-text) !important; fo
     bottom:calc(10px + env(safe-area-inset-bottom));
     z-index:40;
     height:auto;
-    padding:4px;
+    padding:3px;
     background:rgba(255,255,255,.98);
     border:1px solid #d7e1e7;
-    border-radius:14px;
-    box-shadow:0 10px 32px rgba(19,38,53,.16);
+    border-radius:13px;
+    box-shadow:0 6px 20px rgba(19,38,53,.12);
     backdrop-filter:blur(12px);
   }
 
@@ -373,18 +373,18 @@ body { background: var(--ng-bg) !important; color: var(--ng-text) !important; fo
   .ng-mobile-nav-item{
     flex:0 0 auto;
     min-width:max-content;
-    min-height:42px;
+    min-height:38px;
     display:inline-flex;
     flex-direction:row;
     align-items:center;
     justify-content:center;
-    gap:7px;
-    padding:0 12px;
+    gap:6px;
+    padding:0 11px;
     border:0;
     border-radius:8px;
     background:transparent;
     color:#617282;
-    font-size:10px;
+    font-size:11px;
     line-height:1;
     font-weight:800;
     white-space:nowrap;
@@ -544,10 +544,10 @@ body { background: var(--ng-bg) !important; color: var(--ng-text) !important; fo
     bottom:calc(8px + env(safe-area-inset-bottom));
   }
   .ng-mobile-nav-item{
-    min-height:42px;
-    padding:0 11px;
+    min-height:38px;
+    padding:0 10px;
     gap:6px;
-    font-size:9px;
+    font-size:11px;
   }
   .ng-mobile-nav-item .nav-icon,.ng-mobile-nav-item .nav-icon svg{width:16px;height:16px}
   .ng-mobile-nav-item .nav-icon{flex-basis:16px}
@@ -626,8 +626,10 @@ body { background: var(--ng-bg) !important; color: var(--ng-text) !important; fo
 .ng-notification-empty{padding:28px 10px;text-align:center;color:var(--muted,#667085);font-size:12px}
 @media (max-width:700px){
   .ng-topbar-actions{gap:6px}
-  .ng-notification-panel{position:fixed;right:12px;top:58px;width:min(390px,calc(100vw - 24px));max-height:calc(100dvh - 74px)}
-  .ng-notification-trigger{width:40px;height:40px}
+  .ng-notification-panel{position:fixed;right:12px;top:52px;width:min(390px,calc(100vw - 24px));max-height:calc(100dvh - 66px)}
+  .ng-notification-trigger{width:36px;height:36px;border-radius:10px}
+  .ng-notification-trigger svg{width:17px;height:17px}
+  .ng-notification-badge{min-width:16px;height:16px;line-height:12px;font-size:9px;right:-4px;top:-5px}
 }
 
 

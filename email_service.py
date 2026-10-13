@@ -1,25 +1,30 @@
-"""Real SMTP email sending for the auth OTP flow (registration email
-verification + password reset). Stdlib smtplib/email only -- no new
-dependency needed for requirements.txt.
+"""Email delivery for authentication OTPs.
 
-Configuration is entirely via environment variables (see .env.example at
-the project root) -- nothing is hardcoded here, so this works against
-Gmail (with an App Password), any other SMTP provider, or is safely
-inert (raises a clear error) if unconfigured. Kept in its own module,
-separate from database.py, so database.py stays free of network I/O --
-same reasoning as database.py's OTP/reset helpers not sending network I/O themselves.
+Supports SMTP, Resend, Brevo and SendGrid. Provider credentials are supplied
+through environment variables; no secrets are stored in source code.
+
+The important reliability rule here is that an API-provider failure must not
+be reduced to a bare ``HTTPError``. The server logs the provider/status/reason
+while the API returns a safe, stable error to the frontend. When more than
+one provider is configured, the next configured provider is attempted before
+failing the OTP request.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import smtplib
 import socket
 import ssl
 from email.message import EmailMessage
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
-# Force IPv4 socket resolution for SMTP hosts to prevent [Errno 101] Network is unreachable on cloud hosts
+# Force IPv4 socket resolution for SMTP hosts to prevent cloud hosts from
+# selecting an unreachable IPv6 route first.
 _orig_getaddrinfo = socket.getaddrinfo
+
 
 def _ipv4_only_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
     if isinstance(host, str) and ("gmail" in host.lower() or "smtp" in host.lower()):
@@ -28,6 +33,7 @@ def _ipv4_only_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
         except socket.gaierror:
             pass
     return _orig_getaddrinfo(host, port, family, type, proto, flags)
+
 
 socket.getaddrinfo = _ipv4_only_getaddrinfo
 
@@ -38,6 +44,13 @@ except ImportError:
     pass
 
 
+class EmailNotConfiguredError(RuntimeError):
+    """Raised when no usable email provider is configured."""
+
+
+class EmailDeliveryError(RuntimeError):
+    """Raised after all configured email providers fail."""
+
 
 def get_smtp_config():
     try:
@@ -45,17 +58,20 @@ def get_smtp_config():
         load_dotenv()
     except ImportError:
         pass
+
     host = os.environ.get("SMTP_HOST", "").strip()
-    port = int(os.environ.get("SMTP_PORT", "587"))
+    try:
+        port = int(os.environ.get("SMTP_PORT", "587"))
+    except ValueError:
+        port = 587
     username = os.environ.get("SMTP_USERNAME", "").strip()
     password = os.environ.get("SMTP_PASSWORD", "").strip()
-    # Strip spaces for Gmail SMTP so smtplib doesn't fail authentication.
     if "gmail" in host.lower() or "gmail" in username.lower():
         password = password.replace(" ", "")
     from_email = os.environ.get("SMTP_FROM_EMAIL", "").strip() or username
     from_name = os.environ.get("SMTP_FROM_NAME", "VCET CSD SMS").strip()
-    use_ssl = os.environ.get("SMTP_USE_SSL", "0") == "1"
-    use_tls = os.environ.get("SMTP_USE_TLS", "1") == "1"
+    use_ssl = os.environ.get("SMTP_USE_SSL", "0").strip() == "1"
+    use_tls = os.environ.get("SMTP_USE_TLS", "1").strip() == "1"
     return {
         "host": host,
         "port": port,
@@ -68,90 +84,127 @@ def get_smtp_config():
     }
 
 
-class EmailNotConfiguredError(RuntimeError):
-    """Raised when SMTP_HOST/SMTP_USERNAME/SMTP_PASSWORD aren't set. Kept as
-    its own exception (not a bare RuntimeError) so callers in routes_auth.py
-    can catch it specifically and return a clear ApiError instead of a
-    generic 500."""
-
-
-def is_configured() -> bool:
-    cfg = get_smtp_config()
+def _smtp_configured(cfg) -> bool:
     return bool(cfg["host"] and cfg["username"] and cfg["password"])
 
 
-def send_email(to_email: str, subject: str, body_text: str) -> None:
-    resend_key = os.environ.get("RESEND_API_KEY", "").strip()
-    brevo_key = os.environ.get("BREVO_API_KEY", "").strip()
-    sendgrid_key = os.environ.get("SENDGRID_API_KEY", "").strip()
-    cfg = get_smtp_config()
+def _provider_keys():
+    return {
+        "resend": os.environ.get("RESEND_API_KEY", "").strip(),
+        "brevo": os.environ.get("BREVO_API_KEY", "").strip(),
+        "sendgrid": os.environ.get("SENDGRID_API_KEY", "").strip(),
+    }
 
-    if resend_key:
-        import json, urllib.request
-        url = "https://api.resend.com/emails"
-        headers = {
-            "Authorization": f"Bearer {resend_key}",
+
+def is_configured() -> bool:
+    keys = _provider_keys()
+    return bool(any(keys.values()) or _smtp_configured(get_smtp_config()))
+
+
+def _safe_http_reason(exc: HTTPError) -> str:
+    """Read an API error body for server logs without leaking it to clients."""
+    try:
+        raw = exc.read(4096).decode("utf-8", errors="replace").strip()
+    except Exception:
+        raw = ""
+    if not raw:
+        return f"HTTP {exc.code}"
+    try:
+        data = json.loads(raw)
+        # Provider error bodies vary. Keep only a short human-readable field.
+        for key in ("message", "error", "detail", "name"):
+            value = data.get(key) if isinstance(data, dict) else None
+            if value:
+                return f"HTTP {exc.code}: {str(value)[:300]}"
+        return f"HTTP {exc.code}: {raw[:300]}"
+    except Exception:
+        return f"HTTP {exc.code}: {raw[:300]}"
+
+
+def _post_json(url: str, headers: dict[str, str], payload: dict, ok_statuses: set[int]) -> None:
+    req = Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urlopen(req, timeout=15) as resp:
+            if resp.status not in ok_statuses:
+                raise EmailDeliveryError(f"unexpected HTTP status {resp.status}")
+    except HTTPError:
+        raise
+    except (URLError, TimeoutError, OSError) as exc:
+        raise EmailDeliveryError(f"network error: {type(exc).__name__}") from exc
+
+
+def _send_resend(to_email: str, subject: str, body_text: str, api_key: str, cfg) -> None:
+    # onboarding@resend.dev is a Resend test sender. For arbitrary recipients
+    # in production, set RESEND_FROM_EMAIL to an address on a verified domain.
+    from_email = os.environ.get("RESEND_FROM_EMAIL", "onboarding@resend.dev").strip()
+    payload = {
+        "from": f"{cfg['from_name']} <{from_email}>",
+        "to": [to_email],
+        "subject": subject,
+        "text": body_text,
+    }
+    _post_json(
+        "https://api.resend.com/emails",
+        {
+            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) NextGenSMS/1.0",
-        }
-        payload = {
-            "from": f"{cfg['from_name']} <onboarding@resend.dev>",
-            "to": [to_email],
-            "subject": subject,
-            "text": body_text,
-        }
-        req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            if resp.status not in (200, 201):
-                raise RuntimeError(f"Resend API error status {resp.status}")
-        return
+            "User-Agent": "NextGenSMS/1.0",
+        },
+        payload,
+        {200, 201},
+    )
 
-    if brevo_key:
-        import json, urllib.request
-        url = "https://api.brevo.com/v3/smtp/email"
-        headers = {
-            "api-key": brevo_key,
+
+def _send_brevo(to_email: str, subject: str, body_text: str, api_key: str, cfg) -> None:
+    if not cfg["from_email"]:
+        raise EmailDeliveryError("SMTP_FROM_EMAIL is required for Brevo")
+    _post_json(
+        "https://api.brevo.com/v3/smtp/email",
+        {
+            "api-key": api_key,
             "Content-Type": "application/json",
             "Accept": "application/json",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) NextGenSMS/1.0",
-        }
-        payload = {
+            "User-Agent": "NextGenSMS/1.0",
+        },
+        {
             "sender": {"name": cfg["from_name"], "email": cfg["from_email"]},
             "to": [{"email": to_email}],
             "subject": subject,
             "textContent": body_text,
-        }
-        req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            if resp.status not in (200, 201):
-                raise RuntimeError(f"Brevo API error status {resp.status}")
-        return
+        },
+        {200, 201},
+    )
 
-    if sendgrid_key:
-        import json, urllib.request
-        url = "https://api.sendgrid.com/v3/mail/send"
-        headers = {
-            "Authorization": f"Bearer {sendgrid_key}",
+
+def _send_sendgrid(to_email: str, subject: str, body_text: str, api_key: str, cfg) -> None:
+    if not cfg["from_email"]:
+        raise EmailDeliveryError("SMTP_FROM_EMAIL is required for SendGrid")
+    _post_json(
+        "https://api.sendgrid.com/v3/mail/send",
+        {
+            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) NextGenSMS/1.0",
-        }
-
-        payload = {
+            "User-Agent": "NextGenSMS/1.0",
+        },
+        {
             "personalizations": [{"to": [{"email": to_email}]}],
             "from": {"email": cfg["from_email"], "name": cfg["from_name"]},
             "subject": subject,
             "content": [{"type": "text/plain", "value": body_text}],
-        }
-        req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            if resp.status not in (200, 202):
-                raise RuntimeError(f"SendGrid API error status {resp.status}")
-        return
+        },
+        {200, 202},
+    )
 
-    if not bool(cfg["host"] and cfg["username"] and cfg["password"]):
+
+def _send_smtp(to_email: str, subject: str, body_text: str, cfg) -> None:
+    if not _smtp_configured(cfg):
         raise EmailNotConfiguredError(
-            "Email sending is not configured on this server. "
-            "Set SMTP_HOST, SMTP_USERNAME, and SMTP_PASSWORD (or RESEND_API_KEY / BREVO_API_KEY)."
+            "SMTP is not configured. Set SMTP_HOST, SMTP_USERNAME and SMTP_PASSWORD."
         )
 
     msg = EmailMessage()
@@ -165,19 +218,88 @@ def send_email(to_email: str, subject: str, body_text: str) -> None:
         with smtplib.SMTP_SSL(cfg["host"], cfg["port"], context=context, timeout=15) as server:
             server.login(cfg["username"], cfg["password"])
             server.send_message(msg)
-    else:
-        with smtplib.SMTP(cfg["host"], cfg["port"], timeout=15) as server:
-            if cfg["use_tls"]:
-                context = ssl.create_default_context()
-                server.starttls(context=context)
-            server.login(cfg["username"], cfg["password"])
-            server.send_message(msg)
+        return
 
+    with smtplib.SMTP(cfg["host"], cfg["port"], timeout=15) as server:
+        if cfg["use_tls"]:
+            context = ssl.create_default_context()
+            server.starttls(context=context)
+        server.login(cfg["username"], cfg["password"])
+        server.send_message(msg)
+
+
+def _provider_order() -> list[str]:
+    configured = _provider_keys()
+    cfg = get_smtp_config()
+    provider = os.environ.get("EMAIL_PROVIDER", "auto").strip().lower()
+
+    if provider not in {"auto", "resend", "brevo", "sendgrid", "smtp"}:
+        print(f"[EMAIL] Invalid EMAIL_PROVIDER={provider!r}; using auto provider selection.")
+        provider = "auto"
+
+    if provider != "auto":
+        return [provider]
+
+    # Preserve compatibility with the previous preference order, but include
+    # SMTP as a real fallback when it is configured.
+    order = [name for name in ("resend", "brevo", "sendgrid") if configured[name]]
+    if _smtp_configured(cfg):
+        order.append("smtp")
+    return order
+
+
+def send_email(to_email: str, subject: str, body_text: str) -> None:
+    cfg = get_smtp_config()
+    keys = _provider_keys()
+    providers = _provider_order()
+
+    if not providers:
+        raise EmailNotConfiguredError(
+            "Email sending is not configured on this server. "
+            "Set SMTP_HOST/SMTP_USERNAME/SMTP_PASSWORD or an email API key."
+        )
+
+    failures: list[str] = []
+    for provider in providers:
+        try:
+            if provider == "resend":
+                if not keys["resend"]:
+                    raise EmailNotConfiguredError("RESEND_API_KEY is not configured")
+                _send_resend(to_email, subject, body_text, keys["resend"], cfg)
+            elif provider == "brevo":
+                if not keys["brevo"]:
+                    raise EmailNotConfiguredError("BREVO_API_KEY is not configured")
+                _send_brevo(to_email, subject, body_text, keys["brevo"], cfg)
+            elif provider == "sendgrid":
+                if not keys["sendgrid"]:
+                    raise EmailNotConfiguredError("SENDGRID_API_KEY is not configured")
+                _send_sendgrid(to_email, subject, body_text, keys["sendgrid"], cfg)
+            else:
+                _send_smtp(to_email, subject, body_text, cfg)
+
+            print(f"[EMAIL] {provider} delivery accepted for {to_email}")
+            return
+        except HTTPError as exc:
+            reason = _safe_http_reason(exc)
+            failures.append(f"{provider}: {reason}")
+            print(f"[EMAIL] {provider} rejected email: {reason}")
+        except EmailDeliveryError as exc:
+            failures.append(f"{provider}: {exc}")
+            print(f"[EMAIL] {provider} delivery failed: {exc}")
+        except (smtplib.SMTPException, OSError, ssl.SSLError) as exc:
+            failures.append(f"{provider}: {type(exc).__name__}: {exc}")
+            print(f"[EMAIL] {provider} delivery failed: {type(exc).__name__}: {exc}")
+
+    detail = "; ".join(failures)
+    raise EmailDeliveryError(
+        "All configured email providers failed. "
+        "Check the provider credentials/sender configuration and server logs."
+        + (f" Details: {detail}" if detail else "")
+    )
 
 
 def send_otp_email(to_email: str, code: str, purpose: str) -> None:
-    """purpose is 'REGISTER' or 'RESET_PASSWORD' -- only used to vary the
-    email copy, never affects sending mechanics."""
+    """Send the OTP used for registration verification or password reset."""
     if purpose == "REGISTER":
         subject = "Verify your email — VCET CSD SMS"
         intro = "Use this code to verify your email and finish creating your account:"
@@ -188,7 +310,7 @@ def send_otp_email(to_email: str, code: str, purpose: str) -> None:
     body = (
         f"{intro}\n\n"
         f"    {code}\n\n"
-        f"This code expires in 10 minutes. If you didn't request this, "
-        f"you can safely ignore this email.\n"
+        "This code expires in 10 minutes. If you didn't request this, "
+        "you can safely ignore this email.\n"
     )
     send_email(to_email, subject, body)

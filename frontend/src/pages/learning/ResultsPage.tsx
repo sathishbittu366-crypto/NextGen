@@ -3,7 +3,8 @@ import { AppShell } from "../../components/AppShell";
 import { ApiClientError } from "../../api/client";
 import { type CurrentUser } from "../../api/auth";
 import { ResultsAdminPage } from "./ResultsAdminPage";
-import { getMyResults, type StudentResults, type StudentSemesterResult } from "../../api/learning";
+import { getMyResults, getMyResultReport, type StudentResults, type StudentResultReport, type StudentSemesterResult } from "../../api/learning";
+import { ResultReport } from "./ResultReport";
 
 interface Props { user: CurrentUser; onLoggedOut: () => void; }
 
@@ -46,6 +47,14 @@ export function ResultsPage({ user, onLoggedOut }: Props) {
   const [selectedResultId, setSelectedResultId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // — Report | Marksheets switch. Report is the landing view; if it fails to
+  // load we fall back to the existing marksheet selector so nothing is lost.
+  const [view, setView] = useState<"report" | "marksheets">("report");
+  const [report, setReport] = useState<StudentResultReport | null>(null);
+
+  useEffect(() => {
+    void getMyResultReport().then(setReport).catch(() => setView("marksheets"));
+  }, []);
 
   useEffect(() => {
     void (async () => {
@@ -228,6 +237,17 @@ export function ResultsPage({ user, onLoggedOut }: Props) {
         )}
 
         {!loading && !error && data?.student && data.results.length > 0 && !selectedResult && (
+          <div className="rr-viewtabs" role="tablist" aria-label="Results view">
+            <button type="button" role="tab" aria-selected={view === "report"} onClick={() => setView("report")}>Report</button>
+            <button type="button" role="tab" aria-selected={view === "marksheets"} onClick={() => setView("marksheets")}>Marksheets</button>
+          </div>
+        )}
+
+        {!loading && !error && data?.student && data.results.length > 0 && !selectedResult && view === "report" && report && (
+          <ResultReport report={report} />
+        )}
+
+        {!loading && !error && data?.student && data.results.length > 0 && !selectedResult && view === "marksheets" && (
           <section className="results-selector-shell">
             <div className="results-selector-intro">
               <div>

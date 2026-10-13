@@ -16,6 +16,7 @@ from sms_app.services.learning_service import (
     delete_note,
     get_note_for_download,
     get_student_results,
+    get_student_result_report,
     get_admin_results_dashboard,
     get_admin_result_detail,
     list_notes,
@@ -216,3 +217,13 @@ async def results_me(user: CurrentUser = Depends(get_current_user)):
     if user.role != "STUDENT" or not user.student_roll_no:
         raise ApiError("Student access only", 403, "FORBIDDEN")
     return ok(get_student_results(roll_no=user.student_roll_no))
+
+
+@router.get("/api/results/me/report")
+async def results_me_report(user: CurrentUser = Depends(get_current_user)):
+    # WHY: roll number comes ONLY from the signed-in student's own account.
+    # This route intentionally takes no roll_no/student_id parameter, so a
+    # student can never request another student's report by editing a URL.
+    if user.role != "STUDENT" or not user.student_roll_no:
+        raise ApiError("Student access only", 403, "FORBIDDEN")
+    return ok(get_student_result_report(roll_no=user.student_roll_no))

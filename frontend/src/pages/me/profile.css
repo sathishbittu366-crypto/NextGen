@@ -1,0 +1,47 @@
+/* My Profile — read-first. Edit, photo tools and password stay hidden until asked for. */
+.pf { display: grid; gap: 14px; max-width: 720px; }
+.pf-card { border: 1px solid var(--ng-line); border-radius: 12px; background: var(--ng-surface); overflow: hidden; }
+
+.pf-head { display: flex; align-items: center; gap: 14px; padding: 16px; }
+.pf-avatar { flex: none; width: 64px; height: 64px; border-radius: 50%; object-fit: cover; background: var(--ng-accent-soft); }
+.pf-avatar.is-initials { display: grid; place-items: center; color: var(--ng-navy); font-size: 22px; font-weight: 800; letter-spacing: .02em; }
+.pf-id { min-width: 0; flex: 1 1 auto; }
+.pf-id h2 { margin: 0; font-size: 18px; font-weight: 800; letter-spacing: -.02em; line-height: 1.2; overflow-wrap: anywhere; color: var(--ng-text); }
+.pf-id p { margin: 3px 0 0; font-size: 12.5px; color: var(--ng-muted); }
+.pf-head .ng-flat-btn { flex: none; }
+
+.pf-photo-tools { display: flex; align-items: center; gap: 8px; padding: 0 16px 14px; }
+.pf-link-danger { min-height: 34px; padding: 0 10px; border: 0; background: transparent; color: var(--ng-red); font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; border-radius: 9px; }
+.pf-link-danger:hover { background: var(--ng-red-soft); }
+
+.pf-group { padding: 14px 16px 16px; border-top: 1px solid var(--ng-line); }
+.pf-group h3 { margin: 0 0 12px; font-size: 11px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; color: var(--ng-soft); }
+.pf-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 20px; }
+.pf-wide { grid-column: 1 / -1; }
+.pf-label { display: block; font-size: 12px; font-weight: 600; color: var(--ng-muted); margin-bottom: 3px; }
+.pf-val { font-size: 14px; font-weight: 600; color: var(--ng-text); overflow-wrap: anywhere; }
+.pf-val.is-empty { font-weight: 500; color: var(--ng-soft); }
+
+.pf-field { display: grid; gap: 6px; }
+.pf-field input, .pf-field select { width: 100%; box-sizing: border-box; min-height: 44px; padding: 0 12px; border: 1px solid var(--ng-line-strong); border-radius: 9px; background: var(--ng-surface); color: var(--ng-text); font: inherit; font-size: 14px; }
+.pf-field input:focus, .pf-field select:focus { outline: 2px solid var(--ng-accent); outline-offset: 1px; border-color: var(--ng-accent); }
+.pf-seg { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.pf-seg button { min-height: 44px; border: 1px solid var(--ng-line-strong); border-radius: 9px; background: var(--ng-surface); color: var(--ng-text); font: inherit; font-size: 14px; font-weight: 700; cursor: pointer; }
+.pf-seg button[aria-pressed="true"] { background: var(--ng-navy); border-color: var(--ng-navy); color: #fff; }
+
+.pf-lock { margin: 0; padding: 12px 16px; border-top: 1px solid var(--ng-line); background: var(--ng-amber-soft); color: var(--ng-amber); font-size: 13px; line-height: 1.45; }
+.pf-actions { display: flex; gap: 10px; padding: 14px 16px; border-top: 1px solid var(--ng-line); background: var(--ng-surface-2); }
+.pf-actions .ng-flat-btn { min-height: 44px; }
+
+.pf-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; }
+.pf-row strong { font-size: 14px; color: var(--ng-text); }
+.pf-pw { display: grid; gap: 14px; padding: 0 16px 16px; max-width: 420px; }
+
+.pf-logout { display: flex; justify-content: center; padding-top: 4px; }
+
+@media (max-width: 520px) {
+  .pf-grid { grid-template-columns: 1fr 1fr; gap: 12px 14px; }
+  .pf-grid.is-editing { grid-template-columns: 1fr; }
+  .pf-actions .ng-flat-btn { flex: 1; }
+}
+.pf-item { min-width: 0; }

@@ -367,9 +367,21 @@ async def send_otp(body: SendOtpBody, request: Request):
             status_code=503,
             code="EMAIL_NOT_CONFIGURED",
         ) from exc
+    except email_service.EmailDeliveryError as exc:
+        locked = record_failure(limiter_key)
+        # The exception contains provider diagnostics for the server log, but
+        # never expose those details to the browser/client.
+        print(f"[OTP] Email send failed for {purpose}: {exc}")
+        if locked:
+            raise ApiError("Too many attempts. Try again later.", status_code=429, code="RATE_LIMITED") from exc
+        raise ApiError(
+            "Could not send the verification email. Please try again later.",
+            status_code=502,
+            code="EMAIL_SEND_FAILED",
+        ) from exc
     except Exception as exc:
         locked = record_failure(limiter_key)
-        print(f"[OTP] Email send failed for {purpose}: {type(exc).__name__}")
+        print(f"[OTP] Unexpected email failure for {purpose}: {type(exc).__name__}: {exc}")
         if locked:
             raise ApiError("Too many attempts. Try again later.", status_code=429, code="RATE_LIMITED") from exc
         raise ApiError(

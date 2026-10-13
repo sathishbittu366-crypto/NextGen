@@ -1,7 +1,8 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { submitProblemReport } from "../api/reports";
 import { ApiClientError } from "../api/client";
-import { ErrorPopup } from "./ErrorPopup";
+import "../styles/ng-flat-controls.css";
+import "./report-problem.css";
 
 interface ReportProblemModalProps {
   isOpen: boolean;
@@ -25,6 +26,16 @@ export function ReportProblemModal({ isOpen, onClose }: ReportProblemModalProps)
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const subjectRef = useRef<HTMLInputElement>(null);
+
+  // Esc closes; focus lands on the first thing to type.
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    subjectRef.current?.focus();
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 
@@ -33,14 +44,8 @@ export function ReportProblemModal({ isOpen, onClose }: ReportProblemModalProps)
     setError(null);
     setSuccess(null);
 
-    if (!subject.trim()) {
-      setError("Please enter a subject or title for the problem");
-      return;
-    }
-    if (!description.trim()) {
-      setError("Please describe the problem you encountered");
-      return;
-    }
+    if (!subject.trim()) { setError("Add a short summary of the problem."); return; }
+    if (!description.trim()) { setError("Describe what happened so an administrator can follow up."); return; }
 
     setSubmitting(true);
     try {
@@ -58,99 +63,65 @@ export function ReportProblemModal({ isOpen, onClose }: ReportProblemModalProps)
         onClose();
       }, 1800);
     } catch (err) {
-      if (err instanceof ApiClientError) {
-        setError(err.message);
-      } else {
-        setError("Something went wrong. Please try again.");
-      }
+      setError(err instanceof ApiClientError ? err.message : "Something went wrong. Please try again.");
     } finally {
       setSubmitting(false);
     }
   }
 
   return (
-    <div className="report-modal-overlay" onClick={onClose}>
-      <ErrorPopup message={error} onClose={() => setError(null)} />
-      <div className="report-modal-card" onClick={(e) => e.stopPropagation()}>
-        <div className="report-modal-header">
-          <div className="report-modal-title">
-            <span className="report-icon">⚠️</span>
-            <h3>Report a Problem</h3>
+    <div className="rp-overlay" onClick={onClose}>
+      <div
+        className="rp-card"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="rp-title"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="rp-head">
+          <div>
+            <h2 id="rp-title">Report a problem</h2>
+            <p>Only administrators can see your report.</p>
           </div>
-          <button type="button" className="report-modal-close" onClick={onClose} aria-label="Close">
-            &times;
-          </button>
+          <button type="button" className="rp-close" onClick={onClose} aria-label="Close">&times;</button>
         </div>
 
-        <p className="report-modal-sub">
-          Facing an issue? Submit details below — only system administrators will see your report.
-        </p>
-
-        {success && (
-          <div className="success-banner" style={{ marginBottom: 14 }}>
-            <span>{success}</span>
-          </div>
-        )}
-
-        <form onSubmit={handleSubmit}>
-          <div className="brandlogin-field" style={{ marginBottom: 14 }}>
-            <label htmlFor="report-category">Problem Category</label>
-            <select
-              id="report-category"
-              className="report-select"
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-            >
-              {CATEGORIES.map((cat) => (
-                <option key={cat} value={cat}>
-                  {cat}
-                </option>
-              ))}
+        <form className="rp-form" onSubmit={handleSubmit} noValidate>
+          <div className="rp-field">
+            <label htmlFor="report-category">Category</label>
+            <select id="report-category" value={category} onChange={(e) => setCategory(e.target.value)}>
+              {CATEGORIES.map((cat) => <option key={cat} value={cat}>{cat}</option>)}
             </select>
           </div>
 
-          <div className="brandlogin-field" style={{ marginBottom: 14 }}>
-            <label htmlFor="report-subject">Subject / Summary *</label>
+          <div className="rp-field">
+            <label htmlFor="report-subject">Summary</label>
             <input
               id="report-subject"
+              ref={subjectRef}
               type="text"
-              required
               placeholder="e.g. Attendance page not updating"
               value={subject}
               onChange={(e) => setSubject(e.target.value)}
             />
           </div>
 
-          <div className="brandlogin-field" style={{ marginBottom: 18 }}>
-            <label htmlFor="report-description">Problem Details *</label>
+          <div className="rp-field">
+            <label htmlFor="report-description">What happened?</label>
             <textarea
               id="report-description"
-              rows={4}
-              required
-              placeholder="Describe what happened, error messages, or steps to reproduce..."
+              placeholder="Error messages, or the steps that led to it"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              style={{
-                width: "100%",
-                padding: "10px 14px",
-                borderRadius: "8px",
-                border: "1px solid rgba(255, 255, 255, 0.15)",
-                background: "rgba(15, 23, 42, 0.6)",
-                color: "#fff",
-                fontSize: "14px",
-                fontFamily: "inherit",
-                resize: "vertical",
-              }}
             />
           </div>
 
-          <div className="report-modal-actions">
-            <button type="button" className="btn btn-outline" onClick={onClose} disabled={submitting}>
-              Cancel
-            </button>
-            <button type="submit" className="brandlogin-btn" style={{ width: "auto", padding: "10px 22px" }} disabled={submitting}>
-              {submitting ? "Submitting…" : "Submit Report"}
-            </button>
+          {error && <p className="rp-msg is-error" role="alert">{error}</p>}
+          {success && <p className="rp-msg is-ok" role="status">{success}</p>}
+
+          <div className="rp-actions">
+            <button type="button" className="ng-flat-btn ng-flat-btn-outline" onClick={onClose} disabled={submitting}>Cancel</button>
+            <button type="submit" className="ng-flat-btn ng-flat-btn-primary" disabled={submitting}>{submitting ? "Sending…" : "Send report"}</button>
           </div>
         </form>
       </div>

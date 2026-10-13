@@ -1,0 +1,130 @@
+/* — Result report. Uses the app's existing tokens (tokens.css); no new palette. */
+.rr { display: grid; gap: 18px; max-width: 1040px; margin: 0 auto; }
+.rr-empty { padding: 28px 4px; }
+.rr-quiet { color: var(--muted); font-size: 13.5px; margin: 0; }
+
+/* — Identity + scope */
+.rr-id { display: flex; justify-content: space-between; align-items: flex-end; gap: 14px; flex-wrap: wrap; }
+.rr-id h2 { margin: 0; font-size: 22px; color: var(--text); }
+.rr-id p { margin: 3px 0 0; color: var(--muted); font-size: 13px; }
+
+.rr-scope, .rr-viewtabs { display: inline-flex; gap: 2px; padding: 3px; border-radius: 10px; background: var(--chip-bg-muted); }
+.rr-scope button, .rr-viewtabs button {
+  border: 0; background: transparent; color: var(--muted);
+  min-height: 36px; padding: 6px 14px; border-radius: 8px;
+  font-size: 13px; font-weight: 700; white-space: nowrap;
+}
+.rr-scope button[aria-selected="true"], .rr-viewtabs button[aria-selected="true"] {
+  background: var(--bg-card); color: var(--text); box-shadow: 0 1px 2px rgba(15, 23, 42, 0.14);
+}
+.rr-viewtabs { margin-bottom: 16px; }
+
+.rr-sems { position: relative; display: flex; gap: 8px; overflow-x: auto; padding-bottom: 2px; scrollbar-width: thin; }
+.rr-sem {
+  flex: none; min-height: 36px; padding: 6px 14px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--bg-card); color: var(--text);
+  font-size: 13px; font-weight: 700;
+}
+.rr-sem[aria-selected="true"] { background: var(--blue); border-color: var(--blue); color: #fff; }
+
+/* — Stat ledger */
+.rr-attempt { display: grid; gap: 14px; }
+.rr-attempt-title { margin: 0; font-size: 14px; color: var(--muted); font-weight: 700; }
+.rr-stats { display: flex; flex-wrap: wrap; margin: 0; border-top: 1px solid var(--border-light); border-bottom: 1px solid var(--border-light); }
+.rr-stat { padding: 14px 28px 14px 0; margin-right: 28px; border-right: 1px solid var(--border-light); }
+.rr-stat:last-child { border-right: 0; margin-right: 0; }
+.rr-stat dt { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 11px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; }
+.rr-stat dd { margin: 4px 0 0; font-family: 'Outfit', 'Plus Jakarta Sans', sans-serif; font-size: 26px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; }
+.rr-stat.is-primary dd { font-size: 40px; line-height: 1; padding-top: 4px; color: var(--blue); }
+.rr-stat.is-alert dd { color: var(--red-dark); }
+.rr-tag { padding: 2px 7px; border-radius: 999px; background: var(--yellow-bg); border: 1px solid var(--yellow-border); color: var(--yellow-dark); font-size: 10px; letter-spacing: 0.04em; cursor: help; }
+
+/* — Pass/fail ribbon */
+.rr-ribbon { display: flex; gap: 3px; height: 10px; }
+.rr-tick { flex: 1; min-width: 6px; border-radius: 2px; }
+.rr-tick-pass { background: var(--green); opacity: 0.4; }
+.rr-tick-fail { background: var(--red); }
+.rr-tick-unknown { background: var(--border-strong); opacity: 0.6; }
+
+/* — Subject list */
+.rr-list { list-style: none; margin: 0; padding: 0; }
+.rr-head, .rr-row {
+  display: grid; align-items: center; gap: 8px; padding: 12px 14px;
+  grid-template-columns: minmax(0, 1fr) 72px 72px 92px 52px 64px;
+}
+.rr-head { color: var(--muted); font-size: 11px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; border-bottom: 1px solid var(--border); }
+.rr-head span:not(:first-child) { text-align: center; }
+.rr-row { border-bottom: 1px solid var(--border-light); }
+.rr-row-main { display: grid; gap: 1px; min-width: 0; }
+.rr-row-main strong { font-size: 14px; color: var(--text); overflow-wrap: anywhere; }
+.rr-row-main small { color: var(--muted); font-size: 11.5px; }
+.rr-meta { display: none; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.rr-num { text-align: center; font-variant-numeric: tabular-nums; color: var(--subtext); font-size: 13.5px; }
+.rr-grade {
+  justify-self: center; min-width: 38px; padding: 4px 8px; border-radius: 8px; text-align: center;
+  background: var(--row-tint); color: var(--text); font-family: 'Outfit', sans-serif; font-weight: 800; font-size: 14px;
+}
+.rr-grade.is-failed { background: var(--red); color: #fff; }
+.rr-row.is-failed { background: var(--red-bg); box-shadow: inset 3px 0 0 var(--red); }
+.rr-row.is-cleared { box-shadow: inset 3px 0 0 var(--border-strong); }
+.rr-flag { margin-top: 3px; font-size: 11.5px; font-weight: 800; color: var(--red-dark); }
+.rr-flag.is-cleared { color: var(--green-dark); }
+
+/* — All-semesters ladder */
+.rr-ladder { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--border-light); }
+.rr-ladder li { border-bottom: 1px solid var(--border-light); }
+.rr-ladder-row {
+  width: 100%; display: grid; align-items: center; gap: 16px; text-align: left;
+  grid-template-columns: minmax(130px, 1.1fr) 150px minmax(90px, 1fr) 96px 16px;
+  padding: 14px 6px; border: 0; background: transparent; color: var(--text); min-height: 56px;
+}
+.rr-ladder-row:hover { background: var(--row-alt); }
+.rr-ladder-sem { display: grid; gap: 1px; min-width: 0; }
+.rr-ladder-sem strong { font-size: 14px; }
+.rr-ladder-sem small { color: var(--muted); font-size: 11.5px; }
+.rr-ladder-sgpa { display: grid; grid-template-columns: 38px 1fr; align-items: center; gap: 10px; }
+.rr-ladder-sgpa b { font-family: 'Outfit', sans-serif; font-size: 20px; font-variant-numeric: tabular-nums; }
+.rr-ladder-sgpa i { display: block; height: 6px; border-radius: 3px; background: var(--chip-bg-muted); overflow: hidden; }
+.rr-ladder-sgpa u { display: block; height: 100%; background: var(--blue); text-decoration: none; }
+.rr-ladder-count { color: var(--muted); font-size: 12.5px; font-weight: 700; text-align: right; }
+.rr-ladder-count.has-fail { color: var(--red-dark); }
+.rr-ladder-go { color: var(--border-strong); font-size: 18px; }
+
+/* — Till-now failed attempts */
+.rr-section { margin: 6px 0 0; font-size: 14px; color: var(--text); }
+.rr-fails { list-style: none; margin: 0; padding: 0; }
+.rr-fails li { display: flex; justify-content: space-between; gap: 14px; align-items: center; padding: 12px 14px; border-bottom: 1px solid var(--border-light); box-shadow: inset 3px 0 0 var(--border-strong); }
+.rr-fails li.is-pending { background: var(--red-bg); box-shadow: inset 3px 0 0 var(--red); }
+.rr-fails strong { display: block; font-size: 14px; overflow-wrap: anywhere; }
+.rr-fails small { color: var(--muted); font-size: 11.5px; }
+.rr-fails span { flex: none; font-size: 12px; font-weight: 800; color: var(--green-dark); text-align: right; }
+.rr-fails li.is-pending span { color: var(--red-dark); }
+
+/* — Phone */
+@media (max-width: 640px) {
+  .rr { gap: 14px; }
+  .rr-id { align-items: stretch; flex-direction: column; }
+  .rr-scope { display: flex; }
+  .rr-scope button { flex: 1; padding: 6px 4px; font-size: 12.5px; }
+  .rr-viewtabs { display: flex; }
+  .rr-viewtabs button { flex: 1; }
+  .rr-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); column-gap: 14px; }
+  .rr-stat { padding: 12px 0; margin: 0; border-right: 0; }
+  .rr-stat.is-primary { grid-column: 1 / -1; border-bottom: 1px solid var(--border-light); }
+  .rr-stat { display: flex; flex-direction: column; justify-content: space-between; }
+  .rr-stat dt { font-size: 10.5px; letter-spacing: 0.04em; }
+  .rr-stat dd { font-size: 20px; }
+  .rr-stat.is-primary dd { font-size: 36px; }
+  .rr-head { display: none; }
+  .rr-row { grid-template-columns: minmax(0, 1fr) auto; padding: 12px 4px; }
+  .rr-num { display: none; }
+  .rr-meta { display: block; }
+  .rr-ladder-row { grid-template-columns: minmax(0, 1fr) auto 14px; grid-template-areas: "sem count go" "sgpa ribbon ribbon"; gap: 8px 12px; padding: 12px 2px; }
+  .rr-ladder-sem { grid-area: sem; }
+  .rr-ladder-count { grid-area: count; }
+  .rr-ladder-go { grid-area: go; }
+  .rr-ladder-sgpa { grid-area: sgpa; grid-template-columns: 34px 56px; }
+  .rr-ladder-ribbon { grid-area: ribbon; }
+  .rr-fails li { align-items: flex-start; flex-direction: column; gap: 4px; }
+  .rr-fails span { text-align: left; }
+}

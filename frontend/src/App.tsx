@@ -19,6 +19,7 @@ import { StudentFormPage } from "./pages/students/StudentFormPage";
 import { StudentViewPage } from "./pages/students/StudentViewPage";
 import { StudentTrackRecordPage } from "./pages/students/StudentTrackRecordPage";
 import { StudentSemesterTrackRecordPage } from "./pages/students/StudentSemesterTrackRecordPage";
+import { StudentResultReportPage } from "./pages/students/StudentResultReportPage";
 import { FacultyPage } from "./pages/faculty/FacultyPage";
 import { SubjectsPage } from "./pages/subjects/SubjectsPage";
 import { AcademicCalendarPage } from "./pages/academic-calendar/AcademicCalendarPage";
@@ -185,6 +186,14 @@ export function App() {
         element={
           <Guard user={user} reload={reload} condition={user?.role === "HOD" || user?.role === "ADMIN"} fallback="/students">
             <StudentSemesterTrackRecordPage user={user!} onLoggedOut={handleLoggedOut} />
+          </Guard>
+        }
+      />
+      <Route
+        path="/students/:studentId/results-report"
+        element={
+          <Guard user={user} reload={reload} condition={user?.role !== "STUDENT"} fallback="/">
+            <StudentResultReportPage user={user!} onLoggedOut={handleLoggedOut} />
           </Guard>
         }
       />

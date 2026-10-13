@@ -3,12 +3,22 @@ import { AppShell } from "../../components/AppShell";
 import { ApiClientError } from "../../api/client";
 import { type CurrentUser } from "../../api/auth";
 import { deleteNote, getNoteDownloadUrl, getNoteUploadOptions, getNotes, type NoteItem, uploadNote } from "../../api/learning";
+import "../../styles/ng-flat-controls.css";
+import "./notes.css";
 
 interface Props { user: CurrentUser; onLoggedOut: () => void; }
 
 function formatDate(value: string) {
   try { return new Date(String(value).replace(" ", "T")).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }); }
   catch { return value; }
+}
+
+function fileTag(filename: string): string {
+  const ext = (filename.split(".").pop() || "").toLowerCase();
+  if (ext === "pdf") return "PDF";
+  if (ext === "ppt" || ext === "pptx") return "PPT";
+  if (ext === "doc" || ext === "docx") return "DOC";
+  return ext ? ext.slice(0, 4).toUpperCase() : "FILE";
 }
 
 export function NotesPage({ user, onLoggedOut }: Props) {
@@ -21,6 +31,12 @@ export function NotesPage({ user, onLoggedOut }: Props) {
   const [uploading, setUploading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [open, setOpen] = useState<Set<string>>(() => new Set());
+  const [managing, setManaging] = useState(false);
+
+  function toggle(key: string) {
+    setOpen((prev) => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next; });
+  }
 
   async function load() {
     setLoading(true); setError(null);
@@ -39,14 +55,16 @@ export function NotesPage({ user, onLoggedOut }: Props) {
   useEffect(() => { void load(); }, [user.role]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const grouped = useMemo(() => {
-    const map = new Map<string, NoteItem[]>();
+    const map = new Map<string, { code: string; name: string; items: NoteItem[] }>();
     for (const note of notes) {
       const key = `${note.subject_code} · ${note.subject_name}`;
-      const arr = map.get(key) ?? [];
-      arr.push(note); map.set(key, arr);
+      const group = map.get(key) ?? { code: note.subject_code, name: note.subject_name, items: [] };
+      group.items.push(note); map.set(key, group);
     }
-    return [...map.entries()];
+    return [...map.values()];
   }, [notes]);
+
+  const isStudent = user.role === "STUDENT";
 
   async function handleUpload(e: React.FormEvent) {
     e.preventDefault();
@@ -72,7 +90,7 @@ export function NotesPage({ user, onLoggedOut }: Props) {
   }
 
   return (
-    <AppShell user={user} activeNav="notes" heading="Notes" whoami={user.role === "STUDENT" ? `${user.username} · ${user.student_roll_no ?? ""}` : undefined} onLoggedOut={onLoggedOut}>
+    <AppShell user={user} activeNav="notes" heading="Notes" whoami={isStudent ? (user.student_roll_no && user.student_roll_no !== user.username ? `${user.username} · ${user.student_roll_no}` : user.username) : undefined} onLoggedOut={onLoggedOut}>
       {message && <div className="success-banner">{message}</div>}
       {error && <div className="error-banner">{error}</div>}
 
@@ -108,34 +126,62 @@ export function NotesPage({ user, onLoggedOut }: Props) {
         </div>
       )}
 
-      <div className="section-head" style={{ marginBottom: 14 }}>
-        <div><h2 style={{ marginBottom: 4 }}>{user.role === "STUDENT" ? "Subject Notes" : "My Uploaded Notes"}</h2><p className="subtitle-muted" style={{ margin: 0 }}>{user.role === "STUDENT" ? "Notes shared by your faculty, organized subject wise." : "Your published notes, grouped by subject."}</p></div>
-      </div>
+      {!isStudent && (
+        <div className="nt-page-head">
+          <h2 className="nt-page-title">My uploaded notes</h2>
+          {grouped.length > 0 && (
+            <button type="button" className="ng-flat-btn ng-flat-btn-outline ng-flat-btn-sm" aria-pressed={managing} onClick={() => setManaging((m) => !m)}>
+              {managing ? "Done" : "Manage"}
+            </button>
+          )}
+        </div>
+      )}
 
-      {loading ? <p className="empty-note">Loading notes…</p> : grouped.length === 0 ? <div className="card card-pad empty-note">{user.role === "STUDENT" ? "No notes have been shared for your current semester yet." : "You have not uploaded any notes yet."}</div> : (
-        <div style={{ display: "grid", gap: 16 }}>
-          {grouped.map(([subject, items]) => (
-            <section key={subject} className="card card-pad">
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline", marginBottom: 12 }}>
-                <h3 style={{ margin: 0 }}>{subject}</h3>
-                <span className="subtitle-muted">{items.length} note{items.length === 1 ? "" : "s"}</span>
-              </div>
-              <div style={{ display: "grid", gap: 10 }}>
-                {items.map(note => (
-                  <div key={note.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14, padding: "12px 14px", border: "1px solid var(--border)", borderRadius: 12, background: "var(--card-glass)" }}>
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ fontWeight: 800, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{note.title}</div>
-                      <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>{note.original_filename} · {note.faculty_name} · {formatDate(note.created_at)}</div>
-                    </div>
-                    <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
-                      <a className="btn btn-sm btn-outline" href={getNoteDownloadUrl(note.id)}>Download</a>
-                      {user.role === "FACULTY" && <button className="btn btn-sm btn-outline" type="button" onClick={() => void handleDelete(note)}>Remove</button>}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </section>
-          ))}
+      {loading ? <p className="empty-note">Loading notes…</p> : grouped.length === 0 ? (
+        <div className="nt-empty">
+          <strong>{isStudent ? "No notes yet" : "You haven't uploaded any notes"}</strong>
+          {isStudent ? "Notes your faculty share for this semester will appear here, grouped by subject." : "Use the form above to share the first one."}
+        </div>
+      ) : (
+        <div className="nt">
+          {grouped.map((group) => {
+            const key = group.code + group.name;
+            const isOpen = open.has(key);
+            const panelId = `nt-panel-${group.code.replace(/\W+/g, "")}`;
+            return (
+              <section key={key} className={`nt-group${isOpen ? " is-open" : ""}`}>
+                <button type="button" className="nt-group-head" aria-expanded={isOpen} aria-controls={panelId} onClick={() => toggle(key)}>
+                  <span className="nt-group-title">
+                    <span className="nt-code">{group.code}</span>
+                    <span className="nt-name">{group.name}</span>
+                  </span>
+                  <span className="nt-count" aria-label={`${group.items.length} files`}>{group.items.length}</span>
+                  <svg className="nt-chevron" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
+                </button>
+                {isOpen && (
+                  <ul className="nt-list" id={panelId}>
+                    {group.items.map((note) => (
+                      <li key={note.id} className="nt-item">
+                        <span className="nt-type" aria-hidden="true">{fileTag(note.original_filename)}</span>
+                        <div className="nt-main">
+                          <span className="nt-title">{note.title}</span>
+                          <span className="nt-meta">
+                            {isStudent ? note.faculty_name : note.original_filename} · {formatDate(note.created_at)}
+                          </span>
+                        </div>
+                        <div className="nt-actions">
+                          <a className="ng-flat-btn ng-flat-btn-outline ng-flat-btn-sm" href={getNoteDownloadUrl(note.id)} aria-label={`Download ${note.title}`}>Download</a>
+                          {user.role === "FACULTY" && managing && (
+                            <button className="ng-flat-btn ng-flat-btn-outline ng-flat-btn-sm nt-remove" type="button" onClick={() => void handleDelete(note)} aria-label={`Remove ${note.title}`}>Remove</button>
+                          )}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
+            );
+          })}
         </div>
       )}
     </AppShell>

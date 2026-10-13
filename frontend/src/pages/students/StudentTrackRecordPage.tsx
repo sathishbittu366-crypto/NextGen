@@ -39,7 +39,10 @@ export function StudentTrackRecordPage({ user, onLoggedOut }: Props) {
     <AppShell user={user} activeNav="students" heading="Student Track Record" whoami={`${r.name} · ${r.roll_no}`} onLoggedOut={onLoggedOut}>
       <div className="track-page">
         <ErrorPopup message={error} onClose={() => setError(null)} />
-        <button className="btn btn-outline btn-sm" type="button" onClick={() => navigate(`/students/${r.id}`)} style={{ marginBottom: 12 }}>← Student profile</button>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+          <button className="btn btn-outline btn-sm" type="button" onClick={() => navigate(`/students/${r.id}`)}>← Student profile</button>
+          <button className="btn btn-outline btn-sm" type="button" onClick={() => navigate(`/students/${r.id}/results-report`)}>Results report →</button>
+        </div>
 
         <section className="track-hero">
           <div className="track-avatar">{photo ? <img src={photo} alt={r.name} style={{ width:"100%", height:"100%", objectFit:"cover", borderRadius:"inherit" }} /> : r.name.slice(0,1).toUpperCase()}</div>

@@ -2,12 +2,13 @@
 // Mirrors webapp/routes/faculty.py + templates/faculty/list.html.
 // Sections are COLLAPSED BY DEFAULT, expanding on click.
 // All errors/failures displayed in RED (.error-banner)
-import { useState, useEffect, type CSSProperties } from "react";
+import { useState, useEffect } from "react";
 import { AppShell } from "../../components/AppShell";
 import { ErrorPopup } from "../../components/ErrorPopup";
 import { ToastPopup } from "../../components/ToastPopup";
+import { EmptyState, Icon, Modal, Switch, TabPanel, Tabs, initials, type TabDef } from "../../components/ngx";
 import {
-  getFacultyPage, createAccount, toggleAccountStatus, resetStudentPassword, deleteAccount, recreateFacultyAccount,
+  getFacultyPage, createAccount, toggleAccountStatus, resetStudentPassword, deleteAccount,
   saveRolePermissions, getUserPermissions, saveUserPermissions,
   type FacultyPageData, type UserAccount, type RolePermission, type UserPermission,
   getSmsAccessControl, saveSmsAccess, saveSmsBatchHandler,
@@ -28,17 +29,16 @@ export function FacultyPage({ user, onLoggedOut }: Props) {
   const [notice, setNotice] = useState<string | null>(null);
 
   // Collapsible state — collapsed by default
-  const [showHours, setShowHours] = useState(false);
+  const [tab, setTab] = useState("accounts");
+  const [query, setQuery] = useState("");
+  const [roleFilter, setRoleFilter] = useState("ALL");
   const [showCreateForm, setShowCreateForm] = useState(false);
-  const [showPermissions, setShowPermissions] = useState(false);
-  const [showSmsDelegation, setShowSmsDelegation] = useState(false);
   const [smsAccess, setSmsAccess] = useState<FacultySmsAccessData | null>(null);
   const [smsAccessFaculty, setSmsAccessFaculty] = useState<FacultySmsAccessRow | null>(null);
   const [smsAccessEnabled, setSmsAccessEnabled] = useState(false);
   const [smsBatchIds, setSmsBatchIds] = useState<number[]>([]);
   const [loadingSmsAccess, setLoadingSmsAccess] = useState(false);
   const [savingSmsAccess, setSavingSmsAccess] = useState(false);
-  const [showBatchHandlers, setShowBatchHandlers] = useState(false);
   const [savingBatchHandlerId, setSavingBatchHandlerId] = useState<number | null>(null);
 
   const [submitting, setSubmitting] = useState(false);
@@ -54,11 +54,6 @@ export function FacultyPage({ user, onLoggedOut }: Props) {
   const [accountToDelete, setAccountToDelete] = useState<UserAccount | null>(null);
   const [deletingAccount, setDeletingAccount] = useState(false);
   const [deleteKeyInput, setDeleteKeyInput] = useState("");
-  const [accountToRecreate, setAccountToRecreate] = useState<UserAccount | null>(null);
-  const [recreatePassword, setRecreatePassword] = useState("");
-  const [showRecreatePassword, setShowRecreatePassword] = useState(false);
-  const [recreateFullName, setRecreateFullName] = useState("");
-  const [recreatingAccount, setRecreatingAccount] = useState(false);
 
   // Create form state
   const [formUsername, setFormUsername] = useState("");
@@ -197,7 +192,7 @@ export function FacultyPage({ user, onLoggedOut }: Props) {
       await reload();
       // The SMS delegation panel keeps its own snapshot. Refresh it too so a
       // newly-created Faculty appears immediately as an assignable handler.
-      if (smsAccess || showSmsDelegation || showBatchHandlers) {
+      if (smsAccess || tab === "routing") {
         await loadSmsDelegation();
       }
     } catch (err) {
@@ -229,32 +224,6 @@ export function FacultyPage({ user, onLoggedOut }: Props) {
     }
   }
 
-  async function handleRecreateAccount() {
-    if (!accountToRecreate) return;
-    if (recreatePassword.length < 8) {
-      setError("New password must be at least 8 characters");
-      return;
-    }
-    setRecreatingAccount(true);
-    setError(null);
-    try {
-      const result = await recreateFacultyAccount(accountToRecreate.id, {
-        password: recreatePassword,
-        full_name: recreateFullName.trim() || accountToRecreate.full_name,
-      });
-      setNotice(`${result.username} was repaired/recreated. Attendance, subjects and Faculty mappings were preserved.`);
-      setAccountToRecreate(null);
-      setRecreatePassword("");
-      setShowRecreatePassword(false);
-      setRecreateFullName("");
-      await reload();
-    } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : "Failed to recreate Faculty account");
-    } finally {
-      setRecreatingAccount(false);
-    }
-  }
-
   async function handleConfirmDeleteAccount() {
     if (!accountToDelete) return;
     setDeletingAccount(true);
@@ -273,10 +242,66 @@ export function FacultyPage({ user, onLoggedOut }: Props) {
     }
   }
 
-  if (loading) return (
-    <AppShell user={user} activeNav="faculty" heading="Faculty" onLoggedOut={onLoggedOut}>
-      <p className="empty-note">Loading…</p>
-    </AppShell>
+  async function handleSaveSmsAccess() {
+    if (!smsAccessFaculty) return;
+    setSavingSmsAccess(true);
+    try {
+      await saveSmsAccess(smsAccessFaculty.username, { enabled: smsAccessEnabled, batch_ids: smsAccessEnabled ? smsBatchIds : [] });
+      setNotice(`SMS Gateway access updated for ${smsAccessFaculty.username}`);
+      setSmsAccessFaculty(null);
+      setSmsBatchIds([]);
+      await loadSmsDelegation();
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : "Failed to save SMS Gateway access");
+    } finally {
+      setSavingSmsAccess(false);
+    }
+  }
+
+  function openTab(id: string) {
+    setTab(id);
+    if (id === "routing") void loadSmsDelegation();
+  }
+
+  const accounts = data?.accounts ?? [];
+  const needle = query.trim().toLowerCase();
+  const visibleAccounts = accounts.filter((a) =>
+    (roleFilter === "ALL" || a.role === roleFilter) &&
+    (!needle || `${a.username} ${a.full_name || ""}`.toLowerCase().includes(needle)));
+  const canManage = (a: UserAccount) => a.role !== "HOD" && a.role !== "ADMIN" && a.username !== user.username && a.username !== "admin";
+  const maxHours = Math.max(1, ...(data?.hours ?? []).map((h) => h.total_hours));
+  const filtersOn = Boolean(needle || roleFilter !== "ALL");
+
+  const tabs: TabDef[] = [
+    { id: "accounts", label: "Accounts", count: loading ? null : accounts.length },
+    { id: "permissions", label: "Permissions" },
+    { id: "routing", label: "SMS routing" },
+    { id: "hours", label: "Teaching hours" },
+  ];
+
+  const roleChip = (role: UserAccount["role"]) => <span className={`ngx-role${role === "ADMIN" ? " is-admin" : role === "HOD" ? " is-hod" : ""}`}>{role}</span>;
+  const statusText = (active: boolean) => <span className="ngx-status"><i className={`ngx-dot${active ? " is-good" : ""}`} aria-hidden="true" />{active ? "Active" : "Inactive"}</span>;
+
+  const rowActions = (acc: UserAccount) => (
+    <>
+      <button className="ngx-btn is-secondary is-sm" onClick={() => void handleOpenProfilePermissions(acc)}>Edit access</button>
+      {canManage(acc) ? (
+        <>
+          <button className="ngx-btn is-ghost is-sm" onClick={() => void handleToggle(acc)}>{acc.active ? "Deactivate" : "Activate"}</button>
+          <button className="ngx-icon-btn is-danger" aria-label={`Delete ${acc.username}`} title="Delete account" onClick={() => { setAccountToDelete(acc); setDeleteKeyInput(""); }}><Icon name="trash" /></button>
+        </>
+      ) : (
+        <><span /><span /></>
+      )}
+      {acc.role === "STUDENT" && acc.student_roll_no && <button className="ngx-btn is-ghost is-sm" onClick={() => void handleResetPassword(acc)}>Reset password</button>}
+    </>
+  );
+
+  const permRow = (key: string, label: string, desc: string, checked: boolean, onChange: () => void, sensitive?: boolean) => (
+    <div key={key} className={`ngx-perm-row${sensitive ? " is-sensitive" : ""}`}>
+      <div><strong>{label}</strong><small>{desc}</small></div>
+      <Switch label={label} checked={checked} onChange={onChange} />
+    </div>
   );
 
   return (
@@ -284,795 +309,359 @@ export function FacultyPage({ user, onLoggedOut }: Props) {
       <ErrorPopup message={error} onClose={() => setError(null)} />
       {notice && <ToastPopup type="success" message={notice} onClose={() => setNotice(null)} />}
 
-      {/* ── Teaching hours (Collapsible, collapsed by default) ── */}
-      <div className="collapsible" style={{ marginBottom: 14 }}>
-        <div className="collapsible-trigger" onClick={() => setShowHours(!showHours)}>
-          <span>
-            <span style={{ marginRight: 8, fontSize: 12 }}>{showHours ? "▼" : "▶"}</span>
-            FACULTY TEACHING HOURS
-          </span>
-          <span style={{ fontSize: 12, color: "var(--muted)", fontWeight: 400 }}>
-            {showHours ? "Click to collapse" : "Click to expand"}
-          </span>
-        </div>
-        {showHours && (
-          <div className="collapsible-body">
-            {data?.hours.length === 0 ? (
-              <p className="subtitle-muted">No sessions recorded yet.</p>
+      <div className="ngx ngx-page">
+        <Tabs tabs={tabs} active={tab} onChange={openTab} label="Faculty sections" />
+
+        {/* ── Accounts ─────────────────────────────────────────────── */}
+        <TabPanel id="accounts" active={tab}>
+          <section className="ngx-card">
+            <div className="ngx-toolbar">
+              <div className="ngx-search"><Icon name="search" /><input className="ngx-input is-sm" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search name or username" aria-label="Search accounts" /></div>
+              <select className="ngx-select is-sm" aria-label="Filter by role" value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)}>
+                <option value="ALL">All roles</option><option value="ADMIN">Admin</option><option value="HOD">HOD</option><option value="FACULTY">Faculty</option>
+              </select>
+              {filtersOn && <button className="ngx-btn is-link" onClick={() => { setQuery(""); setRoleFilter("ALL"); }}>Clear</button>}
+              <span className="ngx-spacer" />
+              <span className="ngx-count">{filtersOn ? `${visibleAccounts.length} of ${accounts.length}` : `${accounts.length} account${accounts.length === 1 ? "" : "s"}`}</span>
+              <button className="ngx-btn is-primary" onClick={() => setShowCreateForm(true)}><Icon name="plus" size={15} />Create account</button>
+            </div>
+
+            {loading ? (
+              <div style={{ padding: 18, display: "grid", gap: 18 }}>{[0, 1, 2, 3].map((i) => <div key={i} className="ngx-skel" style={{ height: 34 }} />)}</div>
+            ) : visibleAccounts.length === 0 ? (
+              <EmptyState
+                title={filtersOn ? "No accounts match" : "No accounts yet"}
+                hint={filtersOn ? "Try a different name or role." : "Create the first Faculty account to get started."}
+                action={filtersOn ? <button className="ngx-btn is-secondary is-sm" onClick={() => { setQuery(""); setRoleFilter("ALL"); }}>Clear filters</button> : <button className="ngx-btn is-primary is-sm" onClick={() => setShowCreateForm(true)}>Create account</button>}
+              />
             ) : (
-              <div className="table-wrap">
-                <table className="data-table">
-                  <thead>
-                    <tr><th>Name</th><th>Username</th><th className="center">Hours</th></tr>
-                  </thead>
-                  <tbody>
-                    {data?.hours.map((h) => (
-                      <tr key={h.faculty_username}>
-                        <td>{h.full_name || h.faculty_username}</td>
-                        <td style={{ color: "var(--muted)", fontSize: 12 }}>{h.faculty_username}</td>
-                        <td className="center">{h.total_hours}</td>
+              <>
+                <div className="ngx-table-wrap ngx-acct-table">
+                  <table className="ngx-table">
+                    <thead><tr><th>Name</th><th>Role</th><th>Status</th><th><span style={{ position: "absolute", left: -9999 }}>Actions</span></th></tr></thead>
+                    <tbody>{visibleAccounts.map((acc) => (
+                      <tr key={acc.id}>
+                        <td>
+                          <div className={`ngx-person${acc.active ? "" : " is-off"}`}>
+                            <span className="ngx-avatar" aria-hidden="true">{initials(acc.full_name || acc.username)}</span>
+                            <div><div className="ngx-cell-main" title={acc.full_name || acc.username}>{acc.full_name || acc.username}</div><div className="ngx-cell-sub" title={acc.username}>@{acc.username}</div></div>
+                          </div>
+                        </td>
+                        <td>{roleChip(acc.role)}</td>
+                        <td>{statusText(acc.active)}</td>
+                        <td><div className="ngx-row-actions">{rowActions(acc)}</div></td>
                       </tr>
-                    ))}
-                  </tbody>
+                    ))}</tbody>
+                  </table>
+                </div>
+
+                <div className="ngx-acct-cards">
+                  {visibleAccounts.map((acc) => (
+                    <article key={acc.id} className="ngx-acct-card">
+                      <div className="ngx-acct-card-top">
+                        <div className={`ngx-person${acc.active ? "" : " is-off"}`}>
+                          <span className="ngx-avatar" aria-hidden="true">{initials(acc.full_name || acc.username)}</span>
+                          <div><div className="ngx-cell-main">{acc.full_name || acc.username}</div><div className="ngx-cell-sub">@{acc.username}</div></div>
+                        </div>
+                        <div className="ngx-acct-card-tags">{roleChip(acc.role)}</div>
+                      </div>
+                      <div className="ngx-acct-card-top">{statusText(acc.active)}<div className="ngx-acct-card-actions">{rowActions(acc)}</div></div>
+                    </article>
+                  ))}
+                </div>
+              </>
+            )}
+          </section>
+        </TabPanel>
+
+        {/* ── Faculty permissions (role-level) ─────────────────────── */}
+        <TabPanel id="permissions" active={tab}>
+          <section className="ngx-card">
+            <div className="ngx-card-head">
+              <div>
+                <h2>Faculty permissions</h2>
+                <p className="ngx-card-sub">Applies to every Faculty account in your scope. Changes save immediately.</p>
+              </div>
+            </div>
+            {ROLE_PERM_GROUPS.map((g) => (
+              <div key={g.title} className="ngx-perm-group">
+                <h3>{g.title}</h3>
+                {g.items.map((it) => permRow(it.key, it.label, it.desc, Boolean(facultyPerms[it.key]), () => void handleTogglePermission(it.key), it.sensitive))}
+              </div>
+            ))}
+          </section>
+        </TabPanel>
+
+        {/* ── SMS routing ──────────────────────────────────────────── */}
+        <TabPanel id="routing" active={tab}>
+          {user.role === "HOD" && (
+            <section className="ngx-card">
+              <div className="ngx-card-head">
+                <div>
+                  <h2>Batch handlers</h2>
+                  <p className="ngx-card-sub">Each batch has exactly one sender: you, or a Faculty with gateway access.</p>
+                </div>
+              </div>
+              {loadingSmsAccess && !smsAccess ? (
+                <div style={{ padding: 18, display: "grid", gap: 16 }}>{[0, 1, 2].map((i) => <div key={i} className="ngx-skel" style={{ height: 30 }} />)}</div>
+              ) : !smsAccess ? (
+                <EmptyState title="Batch handlers unavailable" hint="Reopen this tab to try again." />
+              ) : (
+                <>
+                  {smsAccess.faculty.filter((f) => f.enabled && f.active).length === 0 && (
+                    <div style={{ padding: "14px 18px 0" }}><div className="ngx-notice is-info"><Icon name="info" /><span>No Faculty has SMS gateway access yet. Grant it below to hand a batch off.</span></div></div>
+                  )}
+                  {(smsAccess.batch_handlers || []).length === 0 ? (
+                    <EmptyState title="No active batches" hint="Batches in your scope will be listed here." />
+                  ) : (smsAccess.batch_handlers || []).map((b) => {
+                    const enabledFaculty = smsAccess.faculty.filter((f) => f.enabled && f.active);
+                    const inList = b.handler_username === user.username || enabledFaculty.some((f) => f.username === b.handler_username);
+                    return (
+                      <div key={b.id} className="ngx-route-row is-2">
+                        <div><div className="ngx-cell-main">{b.code || b.name}</div><div className="ngx-cell-sub">{b.student_count} students</div></div>
+                        <select
+                          className="ngx-select is-sm"
+                          aria-label={`Handler for ${b.code || b.name}`}
+                          value={b.handler_username}
+                          disabled={savingBatchHandlerId === b.id}
+                          onChange={(e) => void handleAssignBatchHandler(b.id, e.target.value)}
+                        >
+                          <option value={user.username}>Me (HOD)</option>
+                          {!inList && <option value={b.handler_username}>{b.handler_full_name || b.handler_username}</option>}
+                          {enabledFaculty.map((f) => <option key={f.username} value={f.username}>{f.full_name || f.username}</option>)}
+                        </select>
+                      </div>
+                    );
+                  })}
+                </>
+              )}
+            </section>
+          )}
+
+          <section className="ngx-card">
+            <div className="ngx-card-head">
+              <div>
+                <h2>Gateway access</h2>
+                <p className="ngx-card-sub">Grants SMS gateway access only. Attendance, marks and student permissions are unchanged.</p>
+              </div>
+            </div>
+            {loadingSmsAccess && !smsAccess ? (
+              <div style={{ padding: 18, display: "grid", gap: 16 }}>{[0, 1, 2].map((i) => <div key={i} className="ngx-skel" style={{ height: 30 }} />)}</div>
+            ) : !smsAccess ? (
+              <EmptyState title="Gateway access unavailable" hint="Reopen this tab to try again." />
+            ) : smsAccess.faculty.length === 0 ? (
+              <EmptyState title="No Faculty accounts" hint="Create a Faculty account first." />
+            ) : smsAccess.faculty.map((fac) => (
+              <div key={fac.username} className="ngx-route-row">
+                <div className={`ngx-person${fac.active ? "" : " is-off"}`}>
+                  <span className="ngx-avatar" aria-hidden="true">{initials(fac.full_name || fac.username)}</span>
+                  <div><div className="ngx-cell-main">{fac.full_name || fac.username}</div><div className="ngx-cell-sub">@{fac.username}</div></div>
+                </div>
+                <div className="ngx-chips">
+                  {fac.enabled
+                    ? (fac.allowed_batches.length ? fac.allowed_batches.map((b) => <span key={b.id} className="ngx-chip">{b.code || b.name}</span>) : <span className="ngx-chip is-none">No batch delegated</span>)
+                    : <span className="ngx-hint">No access</span>}
+                </div>
+                <button className={`ngx-btn is-sm ${fac.enabled ? "is-secondary" : "is-primary"}`} onClick={() => { setSmsAccessFaculty(fac); setSmsAccessEnabled(fac.enabled); setSmsBatchIds(fac.allowed_batches.map((b) => b.id)); }}>{fac.enabled ? "Manage" : "Grant access"}</button>
+              </div>
+            ))}
+          </section>
+        </TabPanel>
+
+        {/* ── Teaching hours ───────────────────────────────────────── */}
+        <TabPanel id="hours" active={tab}>
+          <section className="ngx-card">
+            {!data || data.hours.length === 0 ? (
+              <EmptyState title="No sessions recorded yet" hint="Hours appear here once Faculty mark attendance." />
+            ) : (
+              <div className="ngx-table-wrap">
+                <table className="ngx-table ngx-hours-table">
+                  <thead><tr><th>Faculty</th><th className="is-right">Hours taught</th></tr></thead>
+                  <tbody>{data.hours.map((h) => (
+                    <tr key={h.faculty_username}>
+                      <td><div className="ngx-person"><span className="ngx-avatar" aria-hidden="true">{initials(h.full_name || h.faculty_username)}</span><div><div className="ngx-cell-main">{h.full_name || h.faculty_username}</div><div className="ngx-cell-sub">@{h.faculty_username}</div></div></div></td>
+                      <td><div className="ngx-bar"><div className="ngx-bar-track"><div className="ngx-bar-fill" style={{ width: `${(h.total_hours / maxHours) * 100}%` }} /></div><span className="ngx-num" style={{ minWidth: 36, textAlign: "right", fontWeight: 650, fontVariantNumeric: "tabular-nums" }}>{h.total_hours}</span></div></td>
+                    </tr>
+                  ))}</tbody>
                 </table>
               </div>
             )}
-          </div>
-        )}
+          </section>
+        </TabPanel>
       </div>
 
-      {/* ── Faculty Permission Matrix Control Panel (Collapsible) ── */}
-      <div className="collapsible" style={{ marginBottom: 18 }}>
-        <div className="collapsible-trigger" onClick={() => setShowPermissions(!showPermissions)}>
-          <span>
-            <span style={{ marginRight: 8, fontSize: 12 }}>{showPermissions ? "▼" : "▶"}</span>
-            🔑 FACULTY ACCESS CONTROL
-          </span>
-          <span style={{ fontSize: 12, color: "#38bdf8", fontWeight: 700 }}>
-            {showPermissions ? "Click to collapse" : "Manage Faculty Access"}
-          </span>
-        </div>
-        {showPermissions && (
-          <div className="collapsible-body" style={{ padding: 20 }}>
-            <p className="subtitle-muted" style={{ marginBottom: 16 }}>
-              Configure what <strong>Faculty</strong> members are permitted to view and modify. ADMIN can manage this globally; an HOD can manage Faculty in that HOD's scope only. ADMIN permissions are protected.
-            </p>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 14 }}>
-              <label className="checkbox-field" style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", background: "rgba(56, 189, 248, 0.06)", padding: "12px 16px", borderRadius: 10, border: "1px solid rgba(56, 189, 248, 0.2)" }}>
-                <input
-                  type="checkbox"
-                  checked={Boolean(facultyPerms.can_view_student_phone)}
-                  onChange={() => handleTogglePermission("can_view_student_phone")}
-                />
-                <div>
-                  <strong style={{ display: "block", fontSize: 13 }}>📱 View Student Phone & Contact Info</strong>
-                  <span style={{ fontSize: 11, color: "var(--muted)" }}>Permit Faculty to see student phone numbers</span>
-                </div>
-              </label>
-
-              <label className="checkbox-field" style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", background: "rgba(56, 189, 248, 0.06)", padding: "12px 16px", borderRadius: 10, border: "1px solid rgba(56, 189, 248, 0.2)" }}>
-                <input
-                  type="checkbox"
-                  checked={Boolean(facultyPerms.can_edit_students)}
-                  onChange={() => handleTogglePermission("can_edit_students")}
-                />
-                <div>
-                  <strong style={{ display: "block", fontSize: 13 }}>✏️ Edit Student Profiles & Records</strong>
-                  <span style={{ fontSize: 11, color: "var(--muted)" }}>Permit Faculty to edit student data</span>
-                </div>
-              </label>
-
-              <label className="checkbox-field" style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", background: "rgba(56, 189, 248, 0.06)", padding: "12px 16px", borderRadius: 10, border: "1px solid rgba(56, 189, 248, 0.2)" }}>
-                <input
-                  type="checkbox"
-                  checked={Boolean(facultyPerms.can_delete_students)}
-                  onChange={() => handleTogglePermission("can_delete_students")}
-                />
-                <div>
-                  <strong style={{ display: "block", fontSize: 13 }}>🗑️ Delete Student Profiles</strong>
-                  <span style={{ fontSize: 11, color: "var(--muted)" }}>Permit Faculty to delete student accounts</span>
-                </div>
-              </label>
-
-              <label className="checkbox-field" style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", background: "rgba(56, 189, 248, 0.06)", padding: "12px 16px", borderRadius: 10, border: "1px solid rgba(56, 189, 248, 0.2)" }}>
-                <input
-                  type="checkbox"
-                  checked={Boolean(facultyPerms.can_view_audit_logs)}
-                  onChange={() => handleTogglePermission("can_view_audit_logs")}
-                />
-                <div>
-                  <strong style={{ display: "block", fontSize: 13 }}>📜 View System Audit Logs</strong>
-                  <span style={{ fontSize: 11, color: "var(--muted)" }}>Permit Faculty to view administrative audit trails</span>
-                </div>
-              </label>
-
-              <label className="checkbox-field" style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", background: "rgba(56, 189, 248, 0.06)", padding: "12px 16px", borderRadius: 10, border: "1px solid rgba(56, 189, 248, 0.2)" }}>
-                <input
-                  type="checkbox"
-                  checked={Boolean(facultyPerms.can_view_sms_logs)}
-                  onChange={() => handleTogglePermission("can_view_sms_logs")}
-                />
-                <div>
-                  <strong style={{ display: "block", fontSize: 13 }}>📲 Access SMS Logs & Gateway</strong>
-                  <span style={{ fontSize: 11, color: "var(--muted)" }}>Permit Faculty to trigger absentee SMS alerts</span>
-                </div>
-              </label>
-
-              <label className="checkbox-field" style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", background: "rgba(56, 189, 248, 0.06)", padding: "12px 16px", borderRadius: 10, border: "1px solid rgba(56, 189, 248, 0.2)" }}>
-                <input
-                  type="checkbox"
-                  checked={Boolean(facultyPerms.can_manage_calendar)}
-                  onChange={() => handleTogglePermission("can_manage_calendar")}
-                />
-                <div>
-                  <strong style={{ display: "block", fontSize: 13 }}>📅 Academic Calendar & Timetables</strong>
-                  <span style={{ fontSize: 11, color: "var(--muted)" }}>Permit Faculty to upload timetables</span>
-                </div>
-              </label>
-
-              <label className="checkbox-field" style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", background: "rgba(56, 189, 248, 0.06)", padding: "12px 16px", borderRadius: 10, border: "1px solid rgba(56, 189, 248, 0.2)" }}>
-                <input
-                  type="checkbox"
-                  checked={Boolean(facultyPerms.can_manage_subjects)}
-                  onChange={() => handleTogglePermission("can_manage_subjects")}
-                />
-                <div>
-                  <strong style={{ display: "block", fontSize: 13 }}>📚 Manage Subjects & Allocations</strong>
-                  <span style={{ fontSize: 11, color: "var(--muted)" }}>Permit Faculty to edit course subjects</span>
-                </div>
-              </label>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* ── Batch Handlers: per-batch, HOD self-assigns or hands off to Faculty ── */}
-      {/* HOD-only: the assignment route requires the owning HOD, so Admin (who spans
-          multiple HOD scopes) doesn't get a control here that would just 403 on save. */}
-      {user.role === "HOD" && <div className="collapsible" style={{ marginBottom: 18 }}>
-        <div className="collapsible-trigger" onClick={() => { const next = !showBatchHandlers; setShowBatchHandlers(next); if (next) void loadSmsDelegation(); }}>
-          <span><span style={{ marginRight: 8, fontSize: 12 }}>{showBatchHandlers ? "▼" : "▶"}</span>🗂️ BATCH SMS HANDLERS</span>
-          <span style={{ fontSize: 12, color: "#38bdf8", fontWeight: 700 }}>{showBatchHandlers ? "Click to collapse" : "Who sends SMS for each batch"}</span>
-        </div>
-        {showBatchHandlers && (
-          <div className="collapsible-body" style={{ padding: 20 }}>
-            <p className="subtitle-muted" style={{ marginBottom: 16 }}>
-              Pick who sends absentee SMS for each batch — keep it yourself, or hand it off to a Faculty who has SMS Gateway access enabled below. A batch always has exactly one handler.
-            </p>
-            {loadingSmsAccess ? <p className="empty-note">Loading batch handlers…</p> : !smsAccess ? <p className="empty-note">No batch handler data available.</p> : (
-              <div style={{ display: "grid", gap: 10 }}>
-                {(smsAccess.batch_handlers || []).map((b) => {
-                  const enabledFaculty = smsAccess.faculty.filter((f) => f.enabled && f.active);
-                  return (
-                    <div key={b.id} style={{ display: "grid", gridTemplateColumns: "minmax(140px,1fr) minmax(160px,1fr) auto", gap: 12, alignItems: "center", padding: 14, border: "1px solid var(--border)", borderRadius: 12, background: "var(--card-glass)" }}>
-                      <div>
-                        <div style={{ fontWeight: 800, color: "var(--text)" }}>{b.code || b.name}</div>
-                        <div style={{ fontSize: 12, color: "var(--muted)" }}>{b.student_count} students</div>
-                      </div>
-                      <div>
-                        {b.is_self ? (
-                          <span style={{ ...smsChip, color: "#22c55e" }}>👤 HOD (self) — {b.handler_full_name}</span>
-                        ) : (
-                          <span style={smsChip}>📲 {b.handler_full_name || b.handler_username}</span>
-                        )}
-                      </div>
-                      <select
-                        value={b.handler_username}
-                        disabled={savingBatchHandlerId === b.id}
-                        onChange={(e) => void handleAssignBatchHandler(b.id, e.target.value)}
-                        style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontWeight: 700 }}
-                      >
-                        <option value={user.username}>Assign to myself (HOD)</option>
-                        {enabledFaculty.map((f) => (
-                          <option key={f.username} value={f.username}>{f.full_name || f.username}</option>
-                        ))}
-                      </select>
-                    </div>
-                  );
-                })}
-                {!(smsAccess.batch_handlers || []).length && <div className="empty-note">No active student batches exist in this HOD scope.</div>}
-                {smsAccess.faculty.filter((f) => f.enabled && f.active).length === 0 && (
-                  <div style={{ padding: 12, borderRadius: 10, background: "var(--chip-bg-muted)", color: "var(--muted)", fontSize: 13 }}>
-                    No Faculty currently has SMS Gateway access enabled — grant it below before you can hand off a batch.
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-      </div>}
-
-      {/* ── SMS Gateway Delegation (separate from ordinary Faculty permissions) ── */}
-      <div className="collapsible" style={{ marginBottom: 18 }}>
-        <div className="collapsible-trigger" onClick={() => { const next = !showSmsDelegation; setShowSmsDelegation(next); if (next) void loadSmsDelegation(); }}>
-          <span><span style={{ marginRight: 8, fontSize: 12 }}>{showSmsDelegation ? "▼" : "▶"}</span>📲 SMS GATEWAY DELEGATION</span>
-          <span style={{ fontSize: 12, color: "#38bdf8", fontWeight: 700 }}>{showSmsDelegation ? "Click to collapse" : "Manage SMS-only access"}</span>
-        </div>
-        {showSmsDelegation && (
-          <div className="collapsible-body" style={{ padding: 20 }}>
-            <p className="subtitle-muted" style={{ marginBottom: 16 }}>Grant SMS Gateway access only. This control does not modify Faculty attendance, marks, reports, profile, or general student permissions.</p>
-            {loadingSmsAccess ? <p className="empty-note">Loading SMS delegation…</p> : !smsAccess ? <p className="empty-note">No SMS delegation data available.</p> : (
-              <div style={{ display: "grid", gap: 12 }}>
-                {smsAccess.faculty.map((fac) => (
-                  <div key={fac.username} style={{ display: "grid", gridTemplateColumns: "minmax(180px,1fr) minmax(180px,2fr) auto", gap: 12, alignItems: "center", padding: 14, border: "1px solid var(--border)", borderRadius: 12, background: "var(--card-glass)" }}>
-                    <div><div style={{ fontWeight: 800, color: "var(--text)" }}>{fac.full_name || fac.username}</div><div style={{ fontSize: 12, color: "var(--muted)" }}>@{fac.username}</div></div>
-                    <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>{fac.enabled ? (fac.allowed_batches.length ? fac.allowed_batches.map(b => <span key={b.id} style={smsChip}>{b.code || b.name}</span>) : <span style={{ ...smsChip, color: "#dc2626" }}>No batch delegated</span>) : <span style={{ ...smsChip, color: "var(--muted)" }}>Disabled</span>}</div>
-                    <button className="btn btn-sm btn-primary" onClick={() => { setSmsAccessFaculty(fac); setSmsAccessEnabled(fac.enabled); setSmsBatchIds(fac.allowed_batches.map(b => b.id)); }}>{fac.enabled ? "Edit SMS Access" : "Grant SMS Access"}</button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* ── Create Account (Collapsible, collapsed by default) ── */}
-      <div className="section-head">
-        <h2>Faculty & User Accounts</h2>
-        <button className="btn" onClick={() => setShowCreateForm(!showCreateForm)}>
-          {showCreateForm ? "✕ Cancel" : "+ Create Account"}
-        </button>
-      </div>
-
+      {/* ── Create account ─────────────────────────────────────────── */}
       {showCreateForm && (
-        <div className="detail-box" style={{ background: "var(--card-glass)", border: "1px solid var(--border)", borderRadius: 16, padding: 24, marginBottom: 20 }}>
-          <h3 style={{ margin: "0 0 16px 0", fontSize: 18, fontWeight: 800, color: "var(--text)" }}>➕ Create Faculty / User Account</h3>
-          <form onSubmit={handleCreate}>
-            <div className="form-grid" style={{ marginBottom: 16 }}>
-              <div className="field">
-                <label style={{ fontWeight: 700, fontSize: 12, color: "var(--heading-accent)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 6, display: "block" }}>Username *</label>
-                <input type="text" className="input-field" value={formUsername} onChange={e => setFormUsername(e.target.value)} style={{ width: "100%", padding: "10px 14px", borderRadius: 10, background: "var(--input-bg)", border: "1px solid var(--input-border)", color: "var(--text)", fontWeight: 600 }} required />
-              </div>
-              <div className="field">
-                <label style={{ fontWeight: 700, fontSize: 12, color: "var(--heading-accent)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 6, display: "block" }}>Full Name</label>
-                <input type="text" className="input-field" value={formFullName} onChange={e => setFormFullName(e.target.value)} style={{ width: "100%", padding: "10px 14px", borderRadius: 10, background: "var(--input-bg)", border: "1px solid var(--input-border)", color: "var(--text)", fontWeight: 600 }} />
-              </div>
-              <div className="field">
-                <label style={{ fontWeight: 700, fontSize: 12, color: "var(--heading-accent)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 6, display: "block" }}>Password *</label>
-                <input type="password" className="input-field" value={formPassword} onChange={e => setFormPassword(e.target.value)} style={{ width: "100%", padding: "10px 14px", borderRadius: 10, background: "var(--input-bg)", border: "1px solid var(--input-border)", color: "var(--text)", fontWeight: 600 }} required />
-              </div>
-              <div className="field">
-                <label style={{ fontWeight: 700, fontSize: 12, color: "var(--heading-accent)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 6, display: "block" }}>Role *</label>
-                <select className="input-field" value={formRole} onChange={e => setFormRole(e.target.value as "ADMIN" | "HOD" | "FACULTY")} style={{ width: "100%", padding: "10px 14px", borderRadius: 10, background: "var(--input-bg)", border: "1px solid var(--input-border)", color: "var(--text)", fontWeight: 600 }}>
-                  <option value="FACULTY">FACULTY</option>
-            {user.role === "ADMIN" && <option value="HOD">HOD</option>}
-            {user.role === "ADMIN" && <option value="ADMIN">ADMIN</option>}
-                </select>
-              </div>
-            </div>
-            <button type="submit" className="btn btn-primary" style={{ background: "linear-gradient(135deg, #0284c7, #2563eb)", color: "#ffffff", fontWeight: 700, padding: "10px 22px", borderRadius: 10, border: "none", boxShadow: "0 8px 20px rgba(56, 189, 248, 0.35)", cursor: "pointer" }} disabled={submitting}>
-              {submitting ? "Creating Account…" : "💾 Save New Account"}
-            </button>
-          </form>
-        </div>
-      )}
-
-      {/* ── Faculty Accounts List ── */}
-      <div className="table-wrap" style={{ marginTop: 10 }}>
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>Username</th><th>Full Name</th><th>Role</th>
-              <th className="center">Active</th><th className="center">Access Options</th><th className="center">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data?.accounts.map((acc) => (
-              <tr key={acc.id}>
-                <td>{acc.username}</td>
-                <td>{acc.full_name || <span style={{ color: "var(--muted)" }}>—</span>}</td>
-                <td>
-                  <span className={`chip ${acc.role === "ADMIN" ? "chip-purple" : acc.role === "HOD" ? "chip-yellow" : "chip-muted"}`}>
-                    {acc.role}
-                  </span>
-                </td>
-                <td className="center">
-                  <span className={`chip ${acc.active ? "chip-green" : "chip-red"}`}>
-                    {acc.active ? "Active" : "Inactive"}
-                  </span>
-                </td>
-                <td className="center" style={{ whiteSpace: "nowrap" }}>
-                  <button
-                    className="btn btn-sm btn-primary"
-                    style={{
-                      background: "linear-gradient(135deg, #0284c7, #2563eb)",
-                      border: "none",
-                      color: "#fff",
-                      fontWeight: 700,
-                      fontSize: 12,
-                      padding: "6px 12px",
-                      borderRadius: 8,
-                      whiteSpace: "nowrap",
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: 4
-                    }}
-                    onClick={() => handleOpenProfilePermissions(acc)}
-                  >
-                    ⚙️ Edit Access
-                  </button>
-                </td>
-                <td className="center" style={{ whiteSpace: "nowrap" }}>
-                  {acc.role !== "HOD" && acc.role !== "ADMIN" && acc.username !== user.username && acc.username !== "admin" ? (
-                    <>
-                      <button className={`btn btn-sm ${acc.active ? "btn-outline" : "btn-green"}`}
-                        onClick={() => handleToggle(acc)}>
-                        {acc.active ? "Deactivate" : "Activate"}
-                      </button>
-                      {acc.role === "FACULTY" && (
-                        <button
-                          className="btn btn-sm btn-outline"
-                          style={{ marginLeft: 6, fontWeight: 700 }}
-                          onClick={() => {
-                            setAccountToRecreate(acc);
-                            setRecreateFullName(acc.full_name || "");
-                            setRecreatePassword("");
-                            setShowRecreatePassword(false);
-                          }}
-                          title="Repair credentials and HOD scope while preserving Faculty data"
-                        >
-                          Recreate / Repair
-                        </button>
-                      )}
-                      <button
-                        className="btn btn-sm btn-red"
-                        style={{ marginLeft: 6, fontWeight: 700 }}
-                        onClick={() => setAccountToDelete(acc)}
-                        title="Permanently delete this user account"
-                      >
-                        🗑️ Delete
-                      </button>
-                    </>
-                  ) : (
-                    <span style={{ color: "var(--muted)", fontSize: 12 }}>—</span>
-                  )}
-                  {acc.role === "STUDENT" && acc.student_roll_no && (
-                    <button className="btn btn-sm btn-warn" style={{ marginLeft: 6 }}
-                      onClick={() => handleResetPassword(acc)}>
-                      Reset PW
-                    </button>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {data?.accounts.length === 0 && <p className="empty-note">No faculty accounts found.</p>}
-      </div>
-
-      {smsAccessFaculty && smsAccess && (
-        <div className="modal-overlay" onClick={() => !savingSmsAccess && setSmsAccessFaculty(null)}>
-          <div className="modal-box modal3dPopIn" style={{ maxWidth: 700, width: "94%", maxHeight: "90vh", overflowY: "auto", background: "var(--bg-card)" }} onClick={e => e.stopPropagation()}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-              <h3 style={{ margin: 0, color: "var(--text)" }}>📲 SMS Gateway access — {smsAccessFaculty.full_name || smsAccessFaculty.username}</h3>
-              <button className="btn btn-sm btn-outline" onClick={() => setSmsAccessFaculty(null)}>✕</button>
-            </div>
-            <p style={{ ...subtleText, marginBottom: 16 }}>Only batches belonging to your HOD scope can be selected. The server rechecks this scope when saving and when sending.</p>
-            <label style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16, fontWeight: 800, color: "var(--text)" }}><input type="checkbox" checked={smsAccessEnabled} onChange={e => setSmsAccessEnabled(e.target.checked)} /> SMS Gateway Access Enabled</label>
-            {smsAccessEnabled && <div style={{ display: "grid", gap: 8 }}>
-              <div style={{ fontSize: 12, fontWeight: 800, color: "var(--heading-accent)", textTransform: "uppercase" }}>Allowed SMS recipient batches</div>
-              {smsAccess.batches.map((b) => <label key={b.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", border: "1px solid var(--border)", borderRadius: 10, cursor: "pointer" }}><input type="checkbox" checked={smsBatchIds.includes(b.id)} onChange={() => setSmsBatchIds(old => old.includes(b.id) ? old.filter(id => id !== b.id) : [...old, b.id])} /><span style={{ flex: 1, color: "var(--text)", fontWeight: 700 }}>{b.code || b.name}</span><span style={{ color: "var(--muted)", fontSize: 12 }}>{b.student_count} students</span></label>)}
-              {!smsAccess.batches.length && <div className="empty-note">No active student batches exist in this HOD scope.</div>}
-            </div>}
-            {!smsAccessEnabled && <div style={{ padding: 14, borderRadius: 10, background: "var(--chip-bg-muted)", color: "var(--muted)" }}>Revoking access removes all delegated SMS batches immediately.</div>}
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 20 }}><button className="btn btn-outline" onClick={() => setSmsAccessFaculty(null)} disabled={savingSmsAccess}>Cancel</button><button className="btn btn-primary" onClick={async () => { setSavingSmsAccess(true); try { const saved = await saveSmsAccess(smsAccessFaculty.username, { enabled: smsAccessEnabled, batch_ids: smsAccessEnabled ? smsBatchIds : [] }); setNotice(`SMS Gateway access updated for ${smsAccessFaculty.username}`); setSmsAccessFaculty(null); setSmsBatchIds([]); await loadSmsDelegation(); } catch (err) { setError(err instanceof ApiClientError ? err.message : "Failed to save SMS Gateway access"); } finally { setSavingSmsAccess(false); } }} disabled={savingSmsAccess}>{savingSmsAccess ? "Saving…" : "Save SMS Access"}</button></div>
-          </div>
-        </div>
-      )}
-
-      {/* Profile Access Selection Modal */}
-      {selectedAccount && (
-        <div className="modal-overlay" onClick={() => setSelectedAccount(null)}>
-          <div className="modal-box modal3dPopIn" style={{ maxWidth: 640, width: "94%", maxHeight: "90vh", overflowY: "auto", background: "var(--bg-card)", border: "1px solid var(--border)", boxShadow: "0 25px 60px rgba(0,0,0,0.25)" }} onClick={e => e.stopPropagation()}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-              <h3 style={{ margin: 0, fontSize: 20, color: "var(--text)", fontWeight: 800 }}>
-                ⚙️ Access Control: {selectedAccount.full_name || selectedAccount.username}
-              </h3>
-              <button className="btn btn-sm btn-outline" onClick={() => setSelectedAccount(null)}>✕</button>
-            </div>
-
-            {/* 👤 Faculty Name Dropdown Selector */}
-            <div style={{ marginBottom: 16, background: "rgba(56, 189, 248, 0.08)", padding: "14px 18px", borderRadius: 12, border: "1px solid var(--input-border)" }}>
-              <label style={{ display: "block", fontSize: 12, fontWeight: 800, color: "var(--heading-accent)", marginBottom: 8, letterSpacing: "0.5px" }}>
-                👤 SELECT FACULTY / USER NAME TO GIVE ACCESS:
-              </label>
-              <select
-                value={selectedAccount.username}
-                onChange={(e) => {
-                  const target = data?.accounts.find(a => a.username === e.target.value);
-                  if (target) handleOpenProfilePermissions(target);
-                }}
-                style={{
-                  width: "100%",
-                  padding: "10px 14px",
-                  borderRadius: 8,
-                  background: "var(--input-bg)",
-                  color: "var(--text)",
-                  border: "1px solid var(--input-border)",
-                  fontWeight: 700,
-                  fontSize: 14,
-                  outline: "none",
-                  cursor: "pointer",
-                }}
-              >
-                {data?.accounts.map((acc) => (
-                  <option key={acc.username} value={acc.username}>
-                    {acc.full_name ? `${acc.full_name} (@${acc.username})` : `@${acc.username}`} — [{acc.role}]
-                  </option>
-                ))}
+        <Modal
+          title="Create account"
+          onClose={() => setShowCreateForm(false)}
+          locked={submitting}
+          footer={<><button type="button" className="ngx-btn is-secondary" onClick={() => setShowCreateForm(false)} disabled={submitting}>Cancel</button><button type="submit" form="create-account-form" className="ngx-btn is-primary" disabled={submitting}>{submitting ? "Creating…" : "Create account"}</button></>}
+        >
+          <form id="create-account-form" onSubmit={handleCreate} className="ngx-form-grid">
+            <label className="ngx-field"><span>Username</span><input className="ngx-input" value={formUsername} onChange={(e) => setFormUsername(e.target.value)} autoComplete="off" required /></label>
+            <label className="ngx-field"><span>Full name <em>· optional</em></span><input className="ngx-input" value={formFullName} onChange={(e) => setFormFullName(e.target.value)} autoComplete="off" /></label>
+            <label className="ngx-field"><span>Temporary password</span><input type="password" className="ngx-input" value={formPassword} onChange={(e) => setFormPassword(e.target.value)} autoComplete="new-password" required /></label>
+            <label className="ngx-field"><span>Role</span>
+              <select className="ngx-select" value={formRole} onChange={(e) => setFormRole(e.target.value as "ADMIN" | "HOD" | "FACULTY")}>
+                <option value="FACULTY">Faculty</option>
+                {user.role === "ADMIN" && <option value="HOD">HOD</option>}
+                {user.role === "ADMIN" && <option value="ADMIN">Admin</option>}
               </select>
-            </div>
+            </label>
+          </form>
+        </Modal>
+      )}
 
-            {/* 🎯 Quick Select Faculty Buttons */}
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 18, alignItems: "center" }}>
-              <span style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.5px" }}>
-                Quick Select Faculty:
-              </span>
-              {data?.accounts.map((acc) => (
-                <button
-                  key={acc.username}
-                  type="button"
-                  onClick={() => handleOpenProfilePermissions(acc)}
-                  className={`btn btn-sm ${acc.username === selectedAccount.username ? "btn-primary" : "btn-outline"}`}
-                  style={{
-                    fontSize: 12,
-                    padding: "4px 10px",
-                    borderRadius: 6,
-                    fontWeight: acc.username === selectedAccount.username ? 700 : 500,
-                    background: acc.username === selectedAccount.username ? "linear-gradient(135deg, #0284c7, #2563eb)" : undefined,
-                    color: acc.username === selectedAccount.username ? "#ffffff" : undefined,
-                  }}
-                >
-                  {acc.full_name || acc.username} ({acc.role})
-                </button>
+      {/* ── Per-account access ─────────────────────────────────────── */}
+      {selectedAccount && (
+        <Modal
+          title={`Access · ${selectedAccount.full_name || selectedAccount.username}`}
+          size="md"
+          onClose={() => setSelectedAccount(null)}
+          locked={savingUserPerms}
+          footer={
+            <>
+              {selectedAccount.role !== "HOD" && selectedAccount.username !== user.username && (
+                <button type="button" className="ngx-btn is-danger foot-left ngx-foot-left" onClick={() => { const target = selectedAccount; setSelectedAccount(null); setAccountToDelete(target); setDeleteKeyInput(""); }}>Delete account…</button>
+              )}
+              <button type="button" className="ngx-btn is-secondary" onClick={() => setSelectedAccount(null)} disabled={savingUserPerms}>Cancel</button>
+              <button type="button" className="ngx-btn is-primary" onClick={handleSaveProfilePermissions} disabled={savingUserPerms || !userPerms}>{savingUserPerms ? "Saving…" : "Save access"}</button>
+            </>
+          }
+        >
+          <label className="ngx-field"><span>Account</span>
+            <select className="ngx-select" value={selectedAccount.username} onChange={(e) => { const target = accounts.find((a) => a.username === e.target.value); if (target) void handleOpenProfilePermissions(target); }}>
+              {accounts.map((acc) => <option key={acc.username} value={acc.username}>{acc.full_name ? `${acc.full_name} (@${acc.username})` : `@${acc.username}`} · {acc.role}</option>)}
+            </select>
+          </label>
+          {loadingUserPerms ? (
+            <div style={{ display: "grid", gap: 16 }}>{[0, 1, 2, 3, 4].map((i) => <div key={i} className="ngx-skel" style={{ height: 28 }} />)}</div>
+          ) : userPerms ? (
+            <div className="ngx-modal-perms">
+              {USER_PERM_GROUPS.map((g) => (
+                <div key={g.title} className="ngx-perm-group">
+                  <h3>{g.title}</h3>
+                  {g.items.map((it) => permRow(it.key, it.label, it.desc, Boolean(userPerms[it.key]), () => handleToggleUserPermission(it.key), it.sensitive))}
+                </div>
               ))}
             </div>
-
-            <p style={{ color: "var(--muted)", fontSize: 13, marginBottom: 18 }}>
-              Check/uncheck permissions below to give specific access to <strong>{selectedAccount.full_name || selectedAccount.username}</strong> (@{selectedAccount.username}).
-            </p>
-
-            {loadingUserPerms ? (
-              <p className="empty-note">Loading permissions…</p>
-            ) : userPerms ? (
-              <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 10, marginBottom: 24 }}>
-                <label className="checkbox-field" style={{ display: "flex", alignItems: "center", gap: 12, cursor: "pointer", background: userPerms.can_view_students ? "rgba(56, 189, 248, 0.12)" : "var(--chip-bg-muted)", padding: "12px 16px", borderRadius: 10, border: userPerms.can_view_students ? "1px solid rgba(56, 189, 248, 0.4)" : "1px solid var(--border)", color: "var(--text)", fontWeight: 600, fontSize: 14 }}>
-                  <input
-                    type="checkbox"
-                    checked={Boolean(userPerms.can_view_students)}
-                    onChange={() => handleToggleUserPermission("can_view_students")}
-                    style={{ width: 18, height: 18, accentColor: "#38bdf8", cursor: "pointer" }}
-                  />
-                  <span>👨‍🎓 View Student Profiles & Directory</span>
-                </label>
-
-                <label className="checkbox-field" style={{ display: "flex", alignItems: "center", gap: 12, cursor: "pointer", background: userPerms.can_edit_students ? "rgba(56, 189, 248, 0.12)" : "var(--chip-bg-muted)", padding: "12px 16px", borderRadius: 10, border: userPerms.can_edit_students ? "1px solid rgba(56, 189, 248, 0.4)" : "1px solid var(--border)", color: "var(--text)", fontWeight: 600, fontSize: 14 }}>
-                  <input
-                    type="checkbox"
-                    checked={Boolean(userPerms.can_edit_students)}
-                    onChange={() => handleToggleUserPermission("can_edit_students")}
-                    style={{ width: 18, height: 18, accentColor: "#38bdf8", cursor: "pointer" }}
-                  />
-                  <span>✏️ Edit Student Data & Information</span>
-                </label>
-
-                <label className="checkbox-field" style={{ display: "flex", alignItems: "center", gap: 12, cursor: "pointer", background: userPerms.can_delete_students ? "rgba(56, 189, 248, 0.12)" : "var(--chip-bg-muted)", padding: "12px 16px", borderRadius: 10, border: userPerms.can_delete_students ? "1px solid rgba(56, 189, 248, 0.4)" : "1px solid var(--border)", color: "var(--text)", fontWeight: 600, fontSize: 14 }}>
-                  <input
-                    type="checkbox"
-                    checked={Boolean(userPerms.can_delete_students)}
-                    onChange={() => handleToggleUserPermission("can_delete_students")}
-                    style={{ width: 18, height: 18, accentColor: "#38bdf8", cursor: "pointer" }}
-                  />
-                  <span>🗑️ Delete Student Records</span>
-                </label>
-
-                <label className="checkbox-field" style={{ display: "flex", alignItems: "center", gap: 12, cursor: "pointer", background: userPerms.can_manage_attendance ? "rgba(56, 189, 248, 0.12)" : "var(--chip-bg-muted)", padding: "12px 16px", borderRadius: 10, border: userPerms.can_manage_attendance ? "1px solid rgba(56, 189, 248, 0.4)" : "1px solid var(--border)", color: "var(--text)", fontWeight: 600, fontSize: 14 }}>
-                  <input
-                    type="checkbox"
-                    checked={Boolean(userPerms.can_manage_attendance)}
-                    onChange={() => handleToggleUserPermission("can_manage_attendance")}
-                    style={{ width: 18, height: 18, accentColor: "#38bdf8", cursor: "pointer" }}
-                  />
-                  <span>📊 Mark & Manage Student Attendance</span>
-                </label>
-
-                <label className="checkbox-field" style={{ display: "flex", alignItems: "center", gap: 12, cursor: "pointer", background: userPerms.can_manage_subjects ? "rgba(56, 189, 248, 0.12)" : "var(--chip-bg-muted)", padding: "12px 16px", borderRadius: 10, border: userPerms.can_manage_subjects ? "1px solid rgba(56, 189, 248, 0.4)" : "1px solid var(--border)", color: "var(--text)", fontWeight: 600, fontSize: 14 }}>
-                  <input
-                    type="checkbox"
-                    checked={Boolean(userPerms.can_manage_subjects)}
-                    onChange={() => handleToggleUserPermission("can_manage_subjects")}
-                    style={{ width: 18, height: 18, accentColor: "#38bdf8", cursor: "pointer" }}
-                  />
-                  <span>📚 Manage Subjects & Faculty Mapping</span>
-                </label>
-
-                <label className="checkbox-field" style={{ display: "flex", alignItems: "center", gap: 12, cursor: "pointer", background: userPerms.can_manage_calendar ? "rgba(56, 189, 248, 0.12)" : "var(--chip-bg-muted)", padding: "12px 16px", borderRadius: 10, border: userPerms.can_manage_calendar ? "1px solid rgba(56, 189, 248, 0.4)" : "1px solid var(--border)", color: "var(--text)", fontWeight: 600, fontSize: 14 }}>
-                  <input
-                    type="checkbox"
-                    checked={Boolean(userPerms.can_manage_calendar)}
-                    onChange={() => handleToggleUserPermission("can_manage_calendar")}
-                    style={{ width: 18, height: 18, accentColor: "#38bdf8", cursor: "pointer" }}
-                  />
-                  <span>📅 Manage Academic Calendar & Timetables</span>
-                </label>
-
-                <label className="checkbox-field" style={{ display: "flex", alignItems: "center", gap: 12, cursor: "pointer", background: userPerms.can_view_sms_logs ? "rgba(56, 189, 248, 0.12)" : "var(--chip-bg-muted)", padding: "12px 16px", borderRadius: 10, border: userPerms.can_view_sms_logs ? "1px solid rgba(56, 189, 248, 0.4)" : "1px solid var(--border)", color: "var(--text)", fontWeight: 600, fontSize: 14 }}>
-                  <input
-                    type="checkbox"
-                    checked={Boolean(userPerms.can_view_sms_logs)}
-                    onChange={() => handleToggleUserPermission("can_view_sms_logs")}
-                    style={{ width: 18, height: 18, accentColor: "#38bdf8", cursor: "pointer" }}
-                  />
-                  <span>📲 View Absentee SMS Logs & Phone Gateway</span>
-                </label>
-
-                <label className="checkbox-field" style={{ display: "flex", alignItems: "center", gap: 12, cursor: "pointer", background: userPerms.can_view_audit_logs ? "rgba(37, 99, 235, 0.12)" : "var(--chip-bg-muted)", padding: "12px 16px", borderRadius: 10, border: userPerms.can_view_audit_logs ? "1px solid rgba(37, 99, 235, 0.4)" : "1px solid var(--border)", color: "var(--text)", fontWeight: 600, fontSize: 14 }}>
-                  <input
-                    type="checkbox"
-                    checked={Boolean(userPerms.can_view_audit_logs)}
-                    onChange={() => handleToggleUserPermission("can_view_audit_logs")}
-                    style={{ width: 18, height: 18, accentColor: "#2563eb", cursor: "pointer" }}
-                  />
-                  <span>📜 View System Audit Trail & Logs</span>
-                </label>
-              </div>
-            ) : null}
-
-            {selectedAccount.role !== "HOD" && selectedAccount.username !== user.username && (
-              <div style={{ marginTop: 20, paddingTop: 16, borderTop: "1.5px dashed var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 800, color: "#dc2626" }}>
-                    ⚠️ Danger Zone: Permanent Profile Removal
-                  </div>
-                  <div style={{ fontSize: 11.5, color: "var(--muted)", fontWeight: 600 }}>
-                    Permanently delete @{selectedAccount.username}'s account, mappings, and permissions.
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  className="btn btn-sm btn-red"
-                  style={{ fontWeight: 800 }}
-                  onClick={() => {
-                    const target = selectedAccount;
-                    setSelectedAccount(null);
-                    setAccountToDelete(target);
-                    setDeleteKeyInput("");
-                  }}
-                >
-                  🗑️ Delete Account
-                </button>
-              </div>
-            )}
-
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 20 }}>
-              <button className="btn btn-outline" onClick={() => setSelectedAccount(null)}>Cancel</button>
-              <button className="btn btn-primary" style={{ background: "linear-gradient(135deg, #0284c7, #2563eb)", border: "none" }} onClick={handleSaveProfilePermissions} disabled={savingUserPerms || !userPerms}>
-                {savingUserPerms ? "Saving Access…" : "Save Access Permissions"}
-              </button>
-            </div>
-          </div>
-        </div>
+          ) : null}
+        </Modal>
       )}
 
-      {/* Credential reveal modal */}
+      {/* ── SMS gateway access ─────────────────────────────────────── */}
+      {smsAccessFaculty && smsAccess && (
+        <Modal
+          title={`SMS gateway · ${smsAccessFaculty.full_name || smsAccessFaculty.username}`}
+          onClose={() => setSmsAccessFaculty(null)}
+          locked={savingSmsAccess}
+          footer={<><button type="button" className="ngx-btn is-secondary" onClick={() => setSmsAccessFaculty(null)} disabled={savingSmsAccess}>Cancel</button><button type="button" className="ngx-btn is-primary" onClick={() => void handleSaveSmsAccess()} disabled={savingSmsAccess}>{savingSmsAccess ? "Saving…" : "Save access"}</button></>}
+        >
+          <div className="ngx-toggle-row" style={{ padding: 0 }}>
+            <div><strong>SMS gateway access</strong><small>Only batches in your scope can be selected. The server re-checks this on save and on send.</small></div>
+            <Switch label="SMS gateway access" checked={smsAccessEnabled} onChange={setSmsAccessEnabled} />
+          </div>
+          {smsAccessEnabled ? (
+            <div>
+              <div className="ngx-label" style={{ marginBottom: 8 }}>Batches this person can message</div>
+              <div className="ngx-check-list">
+                {smsAccess.batches.map((b) => {
+                  const on = smsBatchIds.includes(b.id);
+                  return (
+                    <label key={b.id} className={`ngx-check-row${on ? " is-checked" : ""}`}>
+                      <input type="checkbox" checked={on} onChange={() => setSmsBatchIds((old) => on ? old.filter((id) => id !== b.id) : [...old, b.id])} />
+                      <b>{b.code || b.name}</b><span>{b.student_count} students</span>
+                    </label>
+                  );
+                })}
+                {!smsAccess.batches.length && <EmptyState title="No active batches in your scope" />}
+              </div>
+            </div>
+          ) : (
+            <div className="ngx-notice"><Icon name="alert" /><span>Turning access off removes all delegated batches as soon as you save.</span></div>
+          )}
+        </Modal>
+      )}
+
+      {/* ── Password reset result ──────────────────────────────────── */}
       {revealedCreds && (
-        <div className="modal-overlay" onClick={() => setRevealedCreds(null)}>
-          <div className="modal-box" onClick={e => e.stopPropagation()}>
-            <h3>🔑 Password Reset</h3>
-            <p style={{ color: "var(--muted)", fontSize: 13, marginBottom: 14 }}>
-              Share these credentials with the user.
-            </p>
-            <div className="credential-row">
-              <label>Username</label>
-              {revealedCreds.username}
-            </div>
-            <div className="credential-row">
-              <label>Temporary Password</label>
-              {revealedCreds.password}
-            </div>
-            <button className="btn btn-block" onClick={() => setRevealedCreds(null)}>Done</button>
-          </div>
-        </div>
+        <Modal title="Password reset" size="sm" onClose={() => setRevealedCreds(null)} footer={<button type="button" className="ngx-btn is-primary" onClick={() => setRevealedCreds(null)}>Done</button>}>
+          <p>Share these credentials with the user. The password is shown only once.</p>
+          <div className="ngx-cred"><span>Username</span><code>{revealedCreds.username}</code></div>
+          <div className="ngx-cred"><span>Temporary password</span><code>{revealedCreds.password}</code></div>
+        </Modal>
       )}
 
-      {accountToRecreate && (
-        <div className="modal-overlay" onClick={() => { if (!recreatingAccount) { setAccountToRecreate(null); setShowRecreatePassword(false); } }}>
-          <div className="modal-box modal3dPopIn" style={{ maxWidth: 560, width: "94%", background: "var(--bg-card)" }} onClick={e => e.stopPropagation()}>
-            <h3 style={{ marginTop: 0, color: "var(--text)" }}>Repair Faculty Account</h3>
-            <p style={{ color: "var(--muted)", lineHeight: 1.55, fontSize: 13 }}>
-              This does <strong>not</strong> delete the account. It repairs its login credentials and restores the HOD scope while preserving attendance sessions, subject assignments, permissions, timetable references and SMS delegation.
-            </p>
-            <div className="field" style={{ marginTop: 16 }}>
-              <label style={{ fontWeight: 700, fontSize: 12, display: "block", marginBottom: 6 }}>Username</label>
-              <input className="input-field" value={accountToRecreate.username} disabled style={{ width: "100%" }} />
-            </div>
-            <div className="field" style={{ marginTop: 12 }}>
-              <label style={{ fontWeight: 700, fontSize: 12, display: "block", marginBottom: 6 }}>Full Name</label>
-              <input className="input-field" value={recreateFullName} onChange={e => setRecreateFullName(e.target.value)} style={{ width: "100%" }} />
-            </div>
-            <div className="field" style={{ marginTop: 12 }}>
-              <label style={{ fontWeight: 700, fontSize: 12, display: "block", marginBottom: 6 }}>New Password *</label>
-              <div style={{ display: "flex", gap: 8, alignItems: "stretch" }}>
-                <input
-                  type={showRecreatePassword ? "text" : "password"}
-                  className="input-field"
-                  value={recreatePassword}
-                  onChange={e => setRecreatePassword(e.target.value)}
-                  placeholder="Minimum 8 characters"
-                  style={{ width: "100%", flex: 1, minWidth: 0 }}
-                  autoFocus
-                  autoComplete="new-password"
-                />
-                <button
-                  type="button"
-                  className="btn btn-outline"
-                  onClick={() => setShowRecreatePassword(v => !v)}
-                  aria-label={showRecreatePassword ? "Hide password" : "View password"}
-                  aria-pressed={showRecreatePassword}
-                  style={{ minWidth: 86, padding: "0 14px", whiteSpace: "nowrap" }}
-                >
-                  {showRecreatePassword ? "Hide Pass" : "View Pass"}
-                </button>
-              </div>
-            </div>
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 20 }}>
-              <button className="btn btn-outline" onClick={() => { if (!recreatingAccount) { setAccountToRecreate(null); setShowRecreatePassword(false); } }} disabled={recreatingAccount}>Cancel</button>
-              <button className="btn btn-primary" onClick={() => void handleRecreateAccount()} disabled={recreatingAccount || recreatePassword.length < 8}>
-                {recreatingAccount ? "Repairing…" : "Repair & Restore Account"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Permanent Delete Confirmation Modal ── */}
+      {/* ── Permanent delete ───────────────────────────────────────── */}
       {accountToDelete && (() => {
         const isKeyValid = deleteKeyInput.trim().toUpperCase() === "DELETE" ||
           deleteKeyInput.trim().toLowerCase() === accountToDelete.username.toLowerCase();
-
         return (
-          <div className="modal-overlay" onClick={() => !deletingAccount && setAccountToDelete(null)}>
-            <div
-              className="modal-box modal3dPopIn"
-              style={{
-                maxWidth: 490,
-                width: "92%",
-                background: "var(--bg-card)",
-                border: "1.5px solid #fca5a5",
-                borderRadius: 18,
-                padding: 24,
-                boxShadow: "0 25px 50px -12px rgba(220, 38, 38, 0.28)"
-              }}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
-                <div style={{
-                  width: 46,
-                  height: 46,
-                  borderRadius: 12,
-                  background: "linear-gradient(135deg, #fee2e2 0%, #fecaca 100%)",
-                  border: "1px solid #fca5a5",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  fontSize: 22,
-                  color: "#dc2626",
-                  flexShrink: 0
-                }}>
-                  ⚠️
-                </div>
-                <div>
-                  <h3 style={{ margin: 0, fontSize: 18, color: "#991b1b", fontWeight: 800 }}>
-                    Permanent Delete Confirmation
-                  </h3>
-                  <div style={{ fontSize: 12.5, color: "var(--muted)", fontWeight: 600, marginTop: 2 }}>
-                    This action will permanently erase this profile from the system.
-                  </div>
-                </div>
-              </div>
-
-              <div style={{
-                background: "var(--row-alt)",
-                border: "1px solid var(--border)",
-                borderRadius: 12,
-                padding: 14,
-                marginBottom: 16
-              }}>
-                <div style={{ fontSize: 15, fontWeight: 800, color: "var(--text)" }}>
-                  👤 {accountToDelete.full_name || accountToDelete.username}
-                </div>
-                <div style={{ fontSize: 13, color: "var(--heading-accent)", fontWeight: 700, marginTop: 3 }}>
-                  Username: <strong>@{accountToDelete.username}</strong> · Role: <strong>{accountToDelete.role}</strong>
-                </div>
-                {accountToDelete.department && (
-                  <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600, marginTop: 3 }}>
-                    Department: {accountToDelete.department}
-                  </div>
-                )}
-              </div>
-
-              <div style={{ fontSize: 13.5, color: "var(--text)", lineHeight: 1.5, marginBottom: 16, fontWeight: 500 }}>
-                Are you sure you want to permanently delete this user account?
-                <ul style={{ margin: "8px 0 0", paddingLeft: 20, fontSize: 12.5, color: "#b91c1c", fontWeight: 600 }}>
-                  <li>Account credentials and login will be permanently deleted.</li>
-                  <li>Subject-faculty mappings and user permissions will be cleared.</li>
-                  <li>The user will be immediately removed and will never appear in the application again.</li>
-                </ul>
-              </div>
-
-              {/* 🔑 Security Confirmation Key Input */}
-              <div style={{ marginBottom: 20, background: "rgba(239, 68, 68, 0.06)", padding: 14, borderRadius: 12, border: "1.5px dashed #fca5a5" }}>
-                <label htmlFor="confirm-delete-key" style={{ display: "block", fontSize: 12, fontWeight: 800, color: "#991b1b", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.5px" }}>
-                  🔑 Enter Confirmation Key To Authorize:
-                </label>
-                <div style={{ fontSize: 12.5, color: "var(--text)", marginBottom: 8, fontWeight: 600 }}>
-                  Type <strong style={{ color: "#dc2626" }}>DELETE</strong> or <strong style={{ color: "#2563eb" }}>{accountToDelete.username}</strong> below:
-                </div>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <input
-                    id="confirm-delete-key"
-                    type="text"
-                    placeholder={`Type "DELETE" or "${accountToDelete.username}"`}
-                    value={deleteKeyInput}
-                    onChange={(e) => setDeleteKeyInput(e.target.value)}
-                    autoFocus
-                    style={{
-                      flex: 1,
-                      height: 40,
-                      padding: "0 12px",
-                      borderRadius: 8,
-                      border: isKeyValid ? "2px solid #10b981" : "1.5px solid var(--border)",
-                      background: "#ffffff",
-                      color: "var(--text)",
-                      fontWeight: 700,
-                      fontSize: 14,
-                      outline: "none"
-                    }}
-                  />
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-outline"
-                    onClick={() => setDeleteKeyInput(accountToDelete.username)}
-                    title="Insert profile key"
-                    style={{ fontSize: 12, whiteSpace: "nowrap", fontWeight: 700 }}
-                  >
-                    🔑 Fill Key
-                  </button>
-                </div>
-              </div>
-
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
-                <button
-                  type="button"
-                  className="btn btn-outline"
-                  onClick={() => setAccountToDelete(null)}
-                  disabled={deletingAccount}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-red"
-                  onClick={handleConfirmDeleteAccount}
-                  disabled={deletingAccount || !isKeyValid}
-                  style={{
-                    minWidth: 160,
-                    fontWeight: 800,
-                    opacity: isKeyValid ? 1 : 0.5,
-                    cursor: isKeyValid ? "pointer" : "not-allowed"
-                  }}
-                >
-                  {deletingAccount ? "Deleting…" : "🗑️ Delete Permanently"}
-                </button>
-              </div>
+          <Modal
+            title={`Delete @${accountToDelete.username}?`}
+            tone="danger"
+            size="sm"
+            onClose={() => setAccountToDelete(null)}
+            locked={deletingAccount}
+            footer={<><button type="button" className="ngx-btn is-secondary" onClick={() => setAccountToDelete(null)} disabled={deletingAccount} data-autofocus="">Cancel</button><button type="button" className="ngx-btn is-danger-solid" onClick={handleConfirmDeleteAccount} disabled={deletingAccount || !isKeyValid}>{deletingAccount ? "Deleting…" : "Delete permanently"}</button></>}
+          >
+            <div className="ngx-person">
+              <span className="ngx-avatar" aria-hidden="true">{initials(accountToDelete.full_name || accountToDelete.username)}</span>
+              <div><div className="ngx-cell-main">{accountToDelete.full_name || accountToDelete.username}</div><div className="ngx-cell-sub">{accountToDelete.role}{accountToDelete.department ? ` · ${accountToDelete.department}` : ""}</div></div>
             </div>
-          </div>
+            <ul className="ngx-list">
+              <li>Login and credentials are removed for good.</li>
+              <li>Subject mappings and permissions are cleared.</li>
+              <li>This cannot be undone.</li>
+            </ul>
+            <label className="ngx-field">
+              <span>Type <b>DELETE</b> or <b>{accountToDelete.username}</b> to confirm</span>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input className={`ngx-input ngx-confirm-input${isKeyValid ? " is-valid" : ""}`} value={deleteKeyInput} onChange={(e) => setDeleteKeyInput(e.target.value)} autoComplete="off" />
+                <button type="button" className="ngx-btn is-ghost" onClick={() => setDeleteKeyInput(accountToDelete.username)}>Use username</button>
+              </div>
+            </label>
+          </Modal>
         );
       })()}
     </AppShell>
   );
 }
 
+type RoleKey = Exclude<keyof RolePermission, "role">;
+type UserKey = Exclude<keyof UserPermission, "username">;
+interface PermItem<K> { key: K; label: string; desc: string; sensitive?: boolean }
 
-const smsChip: CSSProperties = { display: "inline-flex", padding: "5px 8px", borderRadius: 999, background: "var(--chip-bg-muted)", border: "1px solid var(--border)", color: "var(--text)", fontSize: 11, fontWeight: 800 };
-const subtleText: CSSProperties = { color: "var(--muted)", fontSize: 12.5, lineHeight: 1.5 };
+const ROLE_PERM_GROUPS: { title: string; items: PermItem<RoleKey>[] }[] = [
+  { title: "Students", items: [
+    { key: "can_view_student_phone", label: "View contact details", desc: "See student phone numbers" },
+    { key: "can_edit_students", label: "Edit student records", desc: "Change student profiles and data" },
+    { key: "can_delete_students", label: "Delete student profiles", desc: "Remove student accounts", sensitive: true },
+  ] },
+  { title: "Academics", items: [
+    { key: "can_manage_calendar", label: "Calendar and timetables", desc: "Upload timetables" },
+    { key: "can_manage_subjects", label: "Subjects and allocations", desc: "Edit course subjects" },
+  ] },
+  { title: "Records", items: [
+    { key: "can_view_sms_logs", label: "SMS logs and gateway", desc: "Trigger absentee SMS alerts" },
+    { key: "can_view_audit_logs", label: "Audit logs", desc: "View the administrative audit trail", sensitive: true },
+  ] },
+];
+
+const USER_PERM_GROUPS: { title: string; items: PermItem<UserKey>[] }[] = [
+  { title: "Students", items: [
+    { key: "can_view_students", label: "View student profiles", desc: "Directory and individual profiles" },
+    { key: "can_edit_students", label: "Edit student data", desc: "Change student information" },
+    { key: "can_delete_students", label: "Delete student records", desc: "Permanently remove students", sensitive: true },
+  ] },
+  { title: "Academics", items: [
+    { key: "can_manage_attendance", label: "Mark and manage attendance", desc: "Record and correct attendance" },
+    { key: "can_manage_subjects", label: "Manage subjects", desc: "Subjects and faculty mapping" },
+    { key: "can_manage_calendar", label: "Calendar and timetables", desc: "Academic calendar and schedules" },
+  ] },
+  { title: "Records", items: [
+    { key: "can_view_sms_logs", label: "SMS logs and gateway", desc: "Absentee SMS logs and phone gateway" },
+    { key: "can_view_audit_logs", label: "Audit trail", desc: "System audit logs", sensitive: true },
+  ] },
+];

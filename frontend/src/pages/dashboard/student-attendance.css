@@ -1,0 +1,130 @@
+/* Student Attendance Summary — flat, built only from the --ng-* tokens (redesign.css).
+   Everything is scoped under .sa so it can't leak into other pages. */
+
+.sa { --sa-target: 75; max-width: 980px; }
+.sa [class*="tone-"] { --tone: var(--ng-muted); --tone-soft: var(--ng-surface-2); }
+.sa .tone-green { --tone: var(--ng-green); --tone-soft: var(--ng-green-soft); }
+.sa .tone-amber { --tone: var(--ng-amber); --tone-soft: var(--ng-amber-soft); }
+.sa .tone-red   { --tone: var(--ng-red);   --tone-soft: var(--ng-red-soft); }
+
+/* ── Summary ─────────────────────────────────────────── */
+.sa-summary {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px 32px;
+  padding: 20px 24px; margin-bottom: 18px;
+  border: 1px solid var(--ng-line); border-radius: 12px; background: var(--ng-surface);
+}
+.sa-overall { display: flex; flex-direction: column; gap: 4px; }
+.sa-overall-label { font-size: 11px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: var(--ng-soft); }
+.sa-overall-num { font-size: 44px; line-height: 1; font-weight: 800; letter-spacing: -.03em; color: var(--tone); font-variant-numeric: tabular-nums; }
+.sa-summary-side { min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.sa-summary-line { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 16px; font-size: 13px; color: var(--ng-muted); }
+.sa-summary-line strong { color: var(--ng-text); font-weight: 700; }
+.sa-summary-flag { color: var(--tone); font-weight: 700; }
+
+/* Meter: fill + a fixed tick at the 75% line */
+.sa-meter { position: relative; height: 8px; border-radius: 99px; background: #e8edf1; }
+.sa-meter > i { position: absolute; inset: 0 auto 0 0; border-radius: 99px; background: var(--tone); min-width: 2px; }
+.sa-meter::after { content: ""; position: absolute; top: -3px; bottom: -3px; left: calc(var(--sa-target) * 1%); width: 2px; margin-left: -1px; border-radius: 2px; background: var(--ng-text); opacity: .55; }
+.sa-summary .sa-meter { height: 10px; margin-top: 4px; }
+
+/* ── Subject list ────────────────────────────────────── */
+.sa-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--ng-line); border-radius: 12px; background: var(--ng-surface); overflow: hidden; }
+.sa-subject + .sa-subject { border-top: 1px solid var(--ng-line); }
+.sa-subject.is-open { background: var(--ng-surface-2); }
+
+.sa-row {
+  width: 100%; display: grid; align-items: center; gap: 4px 20px; text-align: left;
+  grid-template-columns: minmax(0, 1.5fr) minmax(110px, 1fr) minmax(190px, 220px) 64px 18px;
+  padding: 16px 20px; min-height: 64px; border: 0; background: transparent; color: var(--ng-text); font: inherit; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.sa-row:hover { background: var(--ng-surface-2); }
+.sa-row:focus-visible { outline: 2px solid var(--ng-accent); outline-offset: -2px; }
+
+.sa-id { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.sa-name { font-size: 14.5px; font-weight: 700; line-height: 1.3; }
+.sa-code { font-size: 11.5px; font-weight: 600; color: var(--ng-soft); letter-spacing: .02em; }
+
+.sa-plan { display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; line-height: 1.3; }
+.sa-plan strong { font-weight: 700; color: var(--ng-text); }
+.sa-plan span { color: var(--ng-muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.tone-amber .sa-plan strong, .tone-red .sa-plan strong { color: var(--tone); }
+
+.sa-pct { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
+.sa-pct-num { font-size: 20px; line-height: 1; font-weight: 800; letter-spacing: -.02em; color: var(--tone); font-variant-numeric: tabular-nums; }
+.sa-flag { font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; padding: 2px 6px; border-radius: 5px; color: var(--tone); background: var(--tone-soft); }
+
+.sa-chev { width: 18px; height: 18px; color: var(--ng-soft); transition: transform .15s ease; }
+.is-open .sa-chev { transform: rotate(180deg); color: var(--ng-text); }
+
+/* ── Expanded history ────────────────────────────────── */
+.sa-detail { padding: 4px 20px 20px; }
+.sa-detail-top { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+.sa-strip-wrap { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.sa-strip-cap { font-size: 11px; font-weight: 700; color: var(--ng-soft); }
+.sa-strip { display: flex; flex-wrap: wrap; gap: 3px; }
+.sa-strip i { width: 9px; height: 16px; border-radius: 2px; background: var(--ng-green); opacity: .38; }
+.sa-strip i.absent { background: var(--ng-red); opacity: 1; }
+.sa-strip i.other  { background: var(--ng-amber); opacity: .8; }
+
+.sa-seg { flex: none; display: inline-flex; padding: 3px; gap: 2px; border: 1px solid var(--ng-line-strong); border-radius: 9px; background: var(--ng-surface); }
+.sa-seg button { min-height: 30px; padding: 0 12px; border: 0; border-radius: 6px; background: transparent; color: var(--ng-muted); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+.sa-seg button[aria-pressed="true"] { background: var(--ng-navy); color: #fff; }
+.sa-seg button:focus-visible { outline: 2px solid var(--ng-accent); outline-offset: 1px; }
+
+.sa-sessions { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: 1fr 1fr; column-gap: 28px; border-top: 1px solid var(--ng-line); }
+.sa-session { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 40px; padding: 8px 2px; border-bottom: 1px solid var(--ng-line); font-size: 13px; font-variant-numeric: tabular-nums; }
+.sa-session-when { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.sa-session-when span { font-size: 11.5px; color: var(--ng-soft); }
+.sa-session-state { flex: none; font-size: 12px; color: var(--ng-soft); font-weight: 600; }
+.sa-session.is-absent .sa-session-when { font-weight: 700; }
+.sa-session.is-absent .sa-session-state { color: var(--ng-red); background: var(--ng-red-soft); padding: 3px 9px; border-radius: 99px; font-weight: 800; }
+.sa-session.is-other .sa-session-state { color: var(--ng-amber); background: var(--ng-amber-soft); padding: 3px 9px; border-radius: 99px; font-weight: 800; }
+.sa-more { margin-top: 12px; }
+.sa-detail-note { padding: 14px 2px 2px; font-size: 13px; color: var(--ng-muted); }
+.sa-retry { margin-left: 10px; }
+
+/* ── Page states ─────────────────────────────────────── */
+.sa-state { padding: 36px 24px; border: 1px solid var(--ng-line); border-radius: 12px; background: var(--ng-surface); text-align: center; color: var(--ng-muted); font-size: 14px; }
+.sa-state strong { display: block; margin-bottom: 4px; color: var(--ng-text); font-size: 15px; }
+.sa-state .ng-flat-btn { margin-top: 14px; }
+
+.sa-skel { border-radius: 6px; background: linear-gradient(90deg, #eef2f5, #f6f8fa, #eef2f5); background-size: 200% 100%; animation: sa-shimmer 1.4s linear infinite; }
+.sa-skel-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 20px; }
+.sa-skel-row + .sa-skel-row { border-top: 1px solid var(--ng-line); }
+@keyframes sa-shimmer { to { background-position: -200% 0; } }
+
+@media (prefers-reduced-motion: reduce) { .sa-skel { animation: none; } .sa-chev { transition: none; } }
+
+/* ── Tablet / phone ──────────────────────────────────── */
+@media (max-width: 860px) {
+  .sa-row { grid-template-columns: minmax(0, 1fr) minmax(170px, 200px) 60px 18px; }
+  .sa-row > .sa-meter { display: none; }
+  .sa-sessions { grid-template-columns: 1fr; }
+}
+@media (max-width: 640px) {
+  .sa-summary { grid-template-columns: 1fr; padding: 14px; gap: 10px; margin-bottom: 12px; }
+  .sa-overall { flex-direction: row; align-items: baseline; justify-content: space-between; }
+  .sa-overall-num { font-size: 32px; order: 2; }
+  .sa-summary .sa-meter { margin-top: 0; }
+  .sa-summary-line { font-size: 12.5px; }
+  .sa-list { border-radius: 10px; }
+  .sa-row {
+    grid-template-columns: minmax(0, 1fr) auto 16px;
+    grid-template-areas: "id pct chev" "meter meter meter" "plan plan plan";
+    gap: 8px 10px; padding: 12px 14px 13px; min-height: 0;
+  }
+  .sa-row > .sa-id { grid-area: id; }
+  .sa-row > .sa-pct { grid-area: pct; flex-direction: row; align-items: center; gap: 6px; }
+  .sa-row > .sa-chev { grid-area: chev; width: 16px; height: 16px; }
+  .sa-row > .sa-meter { display: block; grid-area: meter; height: 6px; }
+  .sa-row > .sa-plan { grid-area: plan; flex-direction: row; justify-content: space-between; align-items: baseline; gap: 12px; }
+  .sa-name { font-size: 14px; }
+  .sa-pct-num { font-size: 17px; }
+  .sa-flag { order: -1; }
+  .sa-detail { padding: 2px 14px 14px; }
+  .sa-detail-top { flex-direction: column; align-items: stretch; gap: 10px; }
+  .sa-seg { align-self: flex-start; }
+  .sa-seg button { min-height: 28px; }
+  .sa-more { display: flex; margin: 12px auto 0; }
+}
