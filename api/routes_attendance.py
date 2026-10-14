@@ -424,8 +424,8 @@ async def semester_attendance_summary(
         rows = c.execute(
             f"""
             SELECT r.roll_no, a.subject_id,
-                   COUNT(r.id) AS total_sessions,
-                   SUM(CASE WHEN r.status='Present' THEN 1 ELSE 0 END) AS present_sessions
+                   CAST(COALESCE(SUM(a.duration_hours), 0) AS SIGNED) AS total_sessions,
+                   CAST(COALESCE(SUM(CASE WHEN r.status='Present' THEN a.duration_hours ELSE 0 END), 0) AS SIGNED) AS present_sessions
             FROM attendance_records r
             JOIN attendance_sessions a ON a.id=r.session_id
             WHERE a.semester_id=%s {where_extra}

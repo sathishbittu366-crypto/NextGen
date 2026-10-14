@@ -366,10 +366,9 @@ def upload_attendance_excel(*, raw: bytes, filename: str, semester_id: int, hod_
                         raise ValueError(
                             f"Conflicting topic for existing attendance session on {attendance_date} for subject {items[0]['subject_code']}"
                         )
-                    if (attendance_date, subject_id, session_type) in group_duration_explicit and existing_duration != group_duration[(attendance_date, subject_id, session_type)]:
-                        raise ValueError(
-                            f"Conflicting duration for existing attendance session on {attendance_date} for subject {items[0]['subject_code']}"
-                        )
+                    # An explicit duration in the sheet is the source of truth:
+                    # it overwrites the existing session's duration (applied by
+                    # the UPDATE below) instead of raising a conflict.
                     updates = []
                     params = []
                     if (attendance_date, subject_id, session_type) in group_topic_explicit:
@@ -1539,8 +1538,8 @@ def student_subject_attendance(roll_no):
     with connect() as c:
         return c.execute("""
             SELECT s.id AS subject_id, s.code AS subject_code, s.name AS subject_name,
-                   COUNT(r.id) AS total_sessions,
-                   SUM(CASE WHEN r.status='Present' THEN 1 ELSE 0 END) AS present_sessions
+                   CAST(COALESCE(SUM(a.duration_hours), 0) AS SIGNED) AS total_sessions,
+                   CAST(COALESCE(SUM(CASE WHEN r.status='Present' THEN a.duration_hours ELSE 0 END), 0) AS SIGNED) AS present_sessions
             FROM attendance_records r
             JOIN attendance_sessions a ON a.id=r.session_id
             JOIN subjects s ON s.id=a.subject_id
@@ -1558,8 +1557,8 @@ def student_subject_attendance_for_semester(roll_no, semester_id):
     with connect() as c:
         return c.execute("""
             SELECT s.id AS subject_id, s.code AS subject_code, s.name AS subject_name,
-                   COUNT(r.id) AS total_sessions,
-                   SUM(CASE WHEN r.status='Present' THEN 1 ELSE 0 END) AS present_sessions
+                   CAST(COALESCE(SUM(a.duration_hours), 0) AS SIGNED) AS total_sessions,
+                   CAST(COALESCE(SUM(CASE WHEN r.status='Present' THEN a.duration_hours ELSE 0 END), 0) AS SIGNED) AS present_sessions
             FROM attendance_records r
             JOIN attendance_sessions a ON a.id=r.session_id
             JOIN subjects s ON s.id=a.subject_id

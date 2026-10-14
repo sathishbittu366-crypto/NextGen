@@ -423,8 +423,8 @@ async def student_track_record(student_id: int, user: CurrentUser = Depends(get_
         semester_rows = c.execute("SELECT id, code, name FROM academic_semesters ORDER BY sort_order, id").fetchall()
         attendance_rows = c.execute("""
             SELECT a.semester_id,
-                   COUNT(DISTINCT r.session_id) AS total_classes,
-                   SUM(CASE WHEN r.status='Present' THEN 1 ELSE 0 END) AS present_classes
+                   CAST(COALESCE(SUM(a.duration_hours), 0) AS SIGNED) AS total_classes,
+                   CAST(COALESCE(SUM(CASE WHEN r.status='Present' THEN a.duration_hours ELSE 0 END), 0) AS SIGNED) AS present_classes
             FROM attendance_records r
             JOIN attendance_sessions a ON a.id=r.session_id
             WHERE r.roll_no=%s
