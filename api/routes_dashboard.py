@@ -429,6 +429,7 @@ class SmsTemplateBody(BaseModel):
 class SmsGeneralNoticeBody(BaseModel):
     semester_id: int
     message: str
+    recipient: str = "PARENT"  # "PARENT" (default) or "STUDENT"
 
 
 def _mask_secret(value: str | None) -> str:
@@ -798,9 +799,9 @@ async def create_general_notice(body: SmsGeneralNoticeBody, user: CurrentUser = 
     from sms_app.services.sms_service import send_general_notice, send_general_notice_as_faculty
     try:
         if user.role == "HOD":
-            result = send_general_notice(user.username, body.semester_id, body.message, user.username)
+            result = send_general_notice(user.username, body.semester_id, body.message, user.username, recipient=body.recipient)
         elif user.role == "FACULTY":
-            result = send_general_notice_as_faculty(user.username, body.semester_id, body.message, user.username)
+            result = send_general_notice_as_faculty(user.username, body.semester_id, body.message, user.username, recipient=body.recipient)
         else:
             raise ApiError("General Notice must be sent from the responsible HOD scope", 400, "SCOPE_REQUIRED")
     except ValueError as exc:
@@ -844,6 +845,7 @@ async def get_sms_approval(send_date: str | None = Query(default=None), user: Cu
         "gateway_name": r.get("gateway_name"), "gateway_mode": r.get("gateway_mode"),
         "gateway_active": bool(r.get("gateway_active")) if r.get("gateway_active") is not None else False,
         "message_type": r.get("message_type") or "ABSENTEE_ALERT",
+        "recipient_type": r.get("recipient_type") or "PARENT",
         "status": r.get("status") or "PENDING",
         "error": r.get("error"),
     } for r in rows])

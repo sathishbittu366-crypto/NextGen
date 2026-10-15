@@ -8,7 +8,7 @@ in frontend/src/pages/students/ and call through frontend/src/api/students.ts.
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import date, datetime
 from io import BytesIO
 from typing import Any
 
@@ -675,6 +675,10 @@ def _cell_to_str(val: Any) -> str:
     trailing '.0' from whole-number floats; everything else -> plain str."""
     if val is None:
         return ""
+    # Date-formatted Excel cells (e.g. Date of Birth) arrive as datetime;
+    # str() would give '2005-12-20 00:00:00' and fail the YYYY-MM-DD check.
+    if isinstance(val, (datetime, date)):
+        return val.strftime("%Y-%m-%d")
     if isinstance(val, float) and val.is_integer():
         return str(int(val))
     return str(val).strip()

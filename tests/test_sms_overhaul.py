@@ -240,3 +240,73 @@ def test_cutoff_happy_path_single_fire_and_batch_isolation(monkeypatch):
     r2 = sms_service.queue_absentees_for_session(4, ["1"])
     assert r2["triggered"] is True
     assert len(triggers) == 2  # one independently for semester 3 and semester 4
+
+
+def _notice_handler(seen, students):
+    def handler(sql, params):
+        q = " ".join(sql.split())
+        if q.startswith("SELECT id FROM academic_semesters"):
+            return Result(row={"id": 3})
+        if q.startswith("INSERT INTO sms_message_templates"):
+            seen["template_saved"] = True
+            return Result(rowcount=1)
+        if q.startswith("SELECT roll_no,name,"):
+            seen["student_query"] = q
+            return Result(rows=students)
+        if q.startswith("SELECT * FROM sms_gateways WHERE hod_username"):
+            return Result(row={"id": 5, "hod_username": "hod1", "active": 1, "gateway_mode": "local", "local_url": "http://x", "auto_send": 0})
+        if q.startswith("INSERT INTO sms_queue"):
+            seen.setdefault("rows", []).append(params)
+            return Result(rowcount=1)
+        raise AssertionError(q)
+    return handler
+
+
+def test_general_notice_to_students_uses_student_phone_and_keeps_parent_template(monkeypatch):
+    seen = {}
+    students = [
+        {"roll_no": "1", "name": "Alice", "phone": "9111111111"},
+        {"roll_no": "2", "name": "Bob", "phone": ""},
+    ]
+    monkeypatch.setattr(sms_service, "connect", lambda: FakeConn(_notice_handler(seen, students)))
+    monkeypatch.setattr(sms_service, "audit", lambda *a, **k: None)
+    result = sms_service.send_general_notice("hod1", 3, "Lab record due Friday", "hod1", recipient="STUDENT")
+    assert "phone FROM students" in seen["student_query"] and "parent_phone" not in seen["student_query"]
+    assert result["queued_count"] == 1 and result["blocked_count"] == 1 and result["recipient"] == "STUDENT"
+    # destination number is the student's own; the row is tagged so approval re-reads the same column
+    assert seen["rows"][0][1] == "9111111111" and seen["rows"][0][-1] == "STUDENT"
+    assert seen["rows"][1][1] == "" and seen["rows"][1][6] == "Student phone number is missing."
+    # a student-addressed one-off must not overwrite the saved parent-facing template
+    assert "template_saved" not in seen
+
+
+def test_general_notice_defaults_to_parents_and_rejects_unknown_audience(monkeypatch):
+    seen = {}
+    students = [{"roll_no": "1", "name": "Alice", "parent_phone": "9999999999"}]
+    monkeypatch.setattr(sms_service, "connect", lambda: FakeConn(_notice_handler(seen, students)))
+    monkeypatch.setattr(sms_service, "audit", lambda *a, **k: None)
+    result = sms_service.send_general_notice("hod1", 3, "PTM tomorrow", "hod1")
+    assert seen["rows"][0][1] == "9999999999" and seen["rows"][0][-1] == "PARENT"
+    assert seen["template_saved"] is True and result["recipient"] == "PARENT"
+    with pytest.raises(ValueError):
+        sms_service.send_general_notice("hod1", 3, "x", "hod1", recipient="EVERYONE")
+
+
+def test_approving_student_row_rereads_student_phone_not_parent(monkeypatch):
+    updates = []
+    row = {"id": 7, "roll_no": "1", "status": "PENDING", "approved": 0, "hod_username": "hod1",
+           "recipient_type": "STUDENT", "parent_phone": "9111111111",
+           "current_parent_phone": "9999999999", "current_student_phone": "9222222222",
+           "student_hod_username": "hod1", "gateway_id": 5}
+    gw = {"id": 5, "active": 1, "hod_username": "hod1", "gateway_mode": "local", "local_url": "http://x"}
+    def handler(sql, params):
+        q = " ".join(sql.split())
+        if q.startswith("SELECT q.*"): return Result(row=row)
+        if q.startswith("SELECT * FROM sms_gateways WHERE id"): return Result(row=gw)
+        if q.startswith("UPDATE sms_queue SET parent_phone"):
+            updates.append(params); return Result(rowcount=1)
+        raise AssertionError(q)
+    monkeypatch.setattr(sms_service, "connect", lambda: FakeConn(handler))
+    monkeypatch.setattr(sms_service, "audit", lambda *a, **k: None)
+    assert sms_service.approve_sms(7, "hod1", "hod1") == 1
+    assert updates[0][0] == "9222222222"

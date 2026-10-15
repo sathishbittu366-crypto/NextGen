@@ -1465,6 +1465,7 @@ def init_db(db_name=None):
             gateway_id INT NULL,
             approved TINYINT(1) NOT NULL DEFAULT 0 CHECK(approved IN (0,1)),
             message_type VARCHAR(32) NOT NULL DEFAULT 'ABSENTEE_ALERT',
+            recipient_type VARCHAR(16) NOT NULL DEFAULT 'PARENT',
             status VARCHAR(32) NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING','PROCESSING','SENT','FAILED','REJECTED')),
             attempt_count INT NOT NULL DEFAULT 0,
             processing_started_at DATETIME NULL,
@@ -1547,6 +1548,11 @@ def init_db(db_name=None):
         existing_sms_cols = {row["Field"] if "Field" in row else row["name"] for row in c.execute("SHOW COLUMNS FROM sms_queue").fetchall()}
         if "message_type" not in existing_sms_cols:
             c.execute("ALTER TABLE sms_queue ADD COLUMN message_type VARCHAR(32) NOT NULL DEFAULT 'ABSENTEE_ALERT'")
+        # Who the row is addressed to. The destination number is always stored
+        # in sms_queue.parent_phone (the worker reads only that column); this
+        # flag tells approval which student column to re-read the number from.
+        if "recipient_type" not in existing_sms_cols:
+            c.execute("ALTER TABLE sms_queue ADD COLUMN recipient_type VARCHAR(16) NOT NULL DEFAULT 'PARENT'")
 
         c.execute("""
         CREATE TABLE IF NOT EXISTS sms_absentee_triggers(

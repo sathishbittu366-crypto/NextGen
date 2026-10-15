@@ -15,8 +15,29 @@ from sms_app.services.sms_credential_encryption import is_encrypted_secret
 ABSENTEE_TEMPLATE = "Dear Parent, {student} has not attended college today ({date}). - VCET CSD Dept"
 GENERAL_TEMPLATE = "Dear Parent, {student}, VCET CSD Dept has an important notice: {message}"
 MESSAGE_TEMPLATE = ABSENTEE_TEMPLATE  # compatibility alias; new sends load the saved per-scope template.
+RECIPIENT_PARENT = "PARENT"
+RECIPIENT_STUDENT = "STUDENT"
 MAX_ATTEMPTS = 3
 PROCESSING_LEASE_MINUTES = 15
+
+
+def normalize_recipient(value) -> str:
+    """General notices go to parents unless the sender explicitly picks students."""
+    v = str(value or RECIPIENT_PARENT).strip().upper()
+    if v not in (RECIPIENT_PARENT, RECIPIENT_STUDENT):
+        raise ValueError("Recipient must be PARENT or STUDENT")
+    return v
+
+
+def _recipient_phone(row: dict, recipient: str) -> str:
+    """Current number for a queue row's audience, falling back to the snapshot."""
+    if recipient == RECIPIENT_STUDENT:
+        return (row.get("current_student_phone") or row.get("parent_phone") or "").strip()
+    return (row.get("current_parent_phone") or row.get("parent_phone") or "").strip()
+
+
+def _missing_phone_error(recipient: str) -> str:
+    return "Student phone number is missing." if recipient == RECIPIENT_STUDENT else "Parent phone number is missing."
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -291,6 +312,7 @@ def approve_sms_batch(hod_username: str, send_date: str, actor: str):
     with connect() as c:
         rows = c.execute("""
             SELECT q.*, s.name AS student_name, s.parent_phone AS current_parent_phone,
+                   s.phone AS current_student_phone,
                    s.hod_username AS student_hod_username
             FROM sms_queue q
             LEFT JOIN students s ON s.roll_no=q.roll_no
@@ -308,9 +330,10 @@ def approve_sms_batch(hod_username: str, send_date: str, actor: str):
 
         updates = []
         for row in rows:
-            parent_phone = (row.get("current_parent_phone") or row.get("parent_phone") or "").strip()
+            recipient = normalize_recipient(row.get("recipient_type"))
+            parent_phone = _recipient_phone(row, recipient)
             if not parent_phone:
-                raise ValueError(f"Cannot approve {row['roll_no']}: parent phone number is missing.")
+                raise ValueError(f"Cannot approve {row['roll_no']}: {_missing_phone_error(recipient).lower()}")
             if row.get("student_hod_username") != hod_username:
                 raise ValueError(f"Cannot approve {row['roll_no']}: student HOD ownership does not match this approval scope.")
 
@@ -357,16 +380,18 @@ def approve_sms(queue_id: int, hod_username: str, actor: str):
     """Approve one queue row inside one HOD scope."""
     with connect() as c:
         row = c.execute("""
-            SELECT q.*, s.parent_phone AS current_parent_phone, s.hod_username AS student_hod_username
+            SELECT q.*, s.parent_phone AS current_parent_phone, s.phone AS current_student_phone,
+                   s.hod_username AS student_hod_username
             FROM sms_queue q LEFT JOIN students s ON s.roll_no=q.roll_no
             WHERE q.id=%s AND q.hod_username=%s AND q.status='PENDING' AND q.approved=0
             FOR UPDATE
         """, (queue_id, hod_username)).fetchone()
         if not row:
             raise ValueError("SMS queue row not found or not pending in your scope.")
-        phone = (row.get("current_parent_phone") or row.get("parent_phone") or "").strip()
+        recipient = normalize_recipient(row.get("recipient_type"))
+        phone = _recipient_phone(row, recipient)
         if not phone:
-            raise ValueError("Cannot approve: parent phone number is missing.")
+            raise ValueError(f"Cannot approve: {_missing_phone_error(recipient).lower()}")
         if row.get("student_hod_username") != hod_username:
             raise ValueError("Cannot approve: student HOD ownership does not match this approval scope.")
         gateway = c.execute("SELECT * FROM sms_gateways WHERE id=%s", (row.get("gateway_id"),)).fetchone() if row.get("gateway_id") else None
@@ -413,7 +438,7 @@ def save_message_template(hod_username: str, message_type: str, template: str, a
     return template
 
 
-def send_general_notice_as_faculty(faculty_username: str, semester_id: int, message: str, actor: str):
+def send_general_notice_as_faculty(faculty_username: str, semester_id: int, message: str, actor: str, recipient: str = RECIPIENT_PARENT):
     """Queue a General Notice only for a batch delegated to this Faculty.
 
     This is deliberately separate from the HOD path so the ordinary HOD queue
@@ -424,6 +449,8 @@ def send_general_notice_as_faculty(faculty_username: str, semester_id: int, mess
     message = str(message or "").strip()
     if not message:
         raise ValueError("General Notice message cannot be empty")
+    recipient = normalize_recipient(recipient)
+    phone_col = "phone" if recipient == RECIPIENT_STUDENT else "parent_phone"
     from sms_app.services.sms_access import faculty_can_use_batch, faculty_gateway, faculty_sms_enabled
     with connect() as c:
         access = c.execute(
@@ -454,8 +481,8 @@ def send_general_notice_as_faculty(faculty_username: str, semester_id: int, mess
         if not ready:
             raise ValueError(reason)
 
-        students = c.execute("""
-            SELECT roll_no,name,parent_phone
+        students = c.execute(f"""
+            SELECT roll_no,name,{phone_col}
             FROM students
             WHERE active=1 AND hod_username=%s AND current_semester_id=%s
             ORDER BY roll_no
@@ -466,8 +493,8 @@ def send_general_notice_as_faculty(faculty_username: str, semester_id: int, mess
         queued = 0
         blocked = 0
         for student in students:
-            phone = (student.get("parent_phone") or "").strip()
-            row_error = "Parent phone number is missing." if not phone else None
+            phone = (student.get(phone_col) or "").strip()
+            row_error = _missing_phone_error(recipient) if not phone else None
             try:
                 msg = message.format(student=student["name"], date="", message=message)
             except Exception as exc:
@@ -475,9 +502,9 @@ def send_general_notice_as_faculty(faculty_username: str, semester_id: int, mess
             c.execute("""
                 INSERT INTO sms_queue(
                     roll_no,parent_phone,message,attendance_session_id,send_date,
-                    hod_username,gateway_id,approved,message_type,status,error
-                ) VALUES(%s,%s,%s,NULL,CURRENT_DATE,%s,%s,%s,'GENERAL_NOTICE','PENDING',%s)
-            """, (student["roll_no"], phone, msg, hod_username, gateway["id"], int(not row_error), row_error))
+                    hod_username,gateway_id,approved,message_type,status,error,recipient_type
+                ) VALUES(%s,%s,%s,NULL,CURRENT_DATE,%s,%s,%s,'GENERAL_NOTICE','PENDING',%s,%s)
+            """, (student["roll_no"], phone, msg, hod_username, gateway["id"], int(not row_error), row_error, recipient))
             if row_error:
                 blocked += 1
             else:
@@ -485,28 +512,37 @@ def send_general_notice_as_faculty(faculty_username: str, semester_id: int, mess
 
         audit(
             c, actor, "GENERAL_NOTICE_QUEUED", "sms_queue",
-            f"faculty={faculty_username}; hod={hod_username}; semester_id={semester_id}; gateway={gateway['id']}; queued={queued}; blocked={blocked}; auto_send=1",
+            f"faculty={faculty_username}; hod={hod_username}; semester_id={semester_id}; recipient={recipient}; gateway={gateway['id']}; queued={queued}; blocked={blocked}; auto_send=1",
         )
-        return {"queued_count": queued, "blocked_count": blocked, "template": message}
+        return {"queued_count": queued, "blocked_count": blocked, "template": message, "recipient": recipient}
 
 
-def send_general_notice(hod_username: str, semester_id: int, message: str, actor: str):
-    """Queue the same custom notice for every active student in one HOD batch."""
+def send_general_notice(hod_username: str, semester_id: int, message: str, actor: str, recipient: str = RECIPIENT_PARENT):
+    """Queue the same custom notice for every active student in one HOD batch.
+
+    recipient="PARENT" (default) sends to each parent's number; "STUDENT" sends
+    to the student's own number instead. One row per student either way.
+    """
     message = str(message or "").strip()
     if not message:
         raise ValueError("General Notice message cannot be empty")
+    recipient = normalize_recipient(recipient)
     with connect() as c:
         semester = c.execute("SELECT id FROM academic_semesters WHERE id=%s", (semester_id,)).fetchone()
         if not semester:
             raise ValueError("Selected batch does not exist")
         template = message
-        c.execute("""
-            INSERT INTO sms_message_templates(hod_username,message_type,template)
-            VALUES(%s,'GENERAL_NOTICE',%s)
-            ON DUPLICATE KEY UPDATE template=%s
-        """, (hod_username, message, message))
-        students = c.execute("""
-            SELECT roll_no,name,parent_phone FROM students
+        # The saved General Notice template is the parent-facing wording; a
+        # student-addressed one-off must not overwrite it.
+        if recipient == RECIPIENT_PARENT:
+            c.execute("""
+                INSERT INTO sms_message_templates(hod_username,message_type,template)
+                VALUES(%s,'GENERAL_NOTICE',%s)
+                ON DUPLICATE KEY UPDATE template=%s
+            """, (hod_username, message, message))
+        phone_col = "phone" if recipient == RECIPIENT_STUDENT else "parent_phone"
+        students = c.execute(f"""
+            SELECT roll_no,name,{phone_col} FROM students
             WHERE active=1 AND hod_username=%s AND current_semester_id=%s
             ORDER BY roll_no
         """, (hod_username, semester_id)).fetchall()
@@ -517,17 +553,17 @@ def send_general_notice(hod_username: str, semester_id: int, message: str, actor
         auto_send = bool(gateway and gateway.get("auto_send") and ready)
         queued = 0; blocked = 0
         for student in students:
-            phone = (student.get("parent_phone") or "").strip()
-            row_error = None if phone and ready else ("Parent phone number is missing." if not phone else reason)
+            phone = (student.get(phone_col) or "").strip()
+            row_error = None if phone and ready else (_missing_phone_error(recipient) if not phone else reason)
             msg = template.format(student=student["name"], date="", message=message) if "{message}" in template or "{student}" in template else template
             c.execute("""
-                INSERT INTO sms_queue(roll_no,parent_phone,message,attendance_session_id,send_date,hod_username,gateway_id,approved,message_type,status,error)
-                VALUES(%s,%s,%s,NULL,CURRENT_DATE,%s,%s,%s,'GENERAL_NOTICE','PENDING',%s)
-            """, (student["roll_no"], phone, msg, hod_username, gateway["id"] if gateway else None, int(auto_send and not row_error), row_error))
+                INSERT INTO sms_queue(roll_no,parent_phone,message,attendance_session_id,send_date,hod_username,gateway_id,approved,message_type,status,error,recipient_type)
+                VALUES(%s,%s,%s,NULL,CURRENT_DATE,%s,%s,%s,'GENERAL_NOTICE','PENDING',%s,%s)
+            """, (student["roll_no"], phone, msg, hod_username, gateway["id"] if gateway else None, int(auto_send and not row_error), row_error, recipient))
             if row_error: blocked += 1
             else: queued += 1
-        audit(c, actor, "GENERAL_NOTICE_QUEUED", "sms_queue", f"hod={hod_username}; semester_id={semester_id}; queued={queued}; blocked={blocked}; auto_send={int(auto_send)}")
-        return {"queued_count": queued, "blocked_count": blocked, "template": message}
+        audit(c, actor, "GENERAL_NOTICE_QUEUED", "sms_queue", f"hod={hod_username}; semester_id={semester_id}; recipient={recipient}; queued={queued}; blocked={blocked}; auto_send={int(auto_send)}")
+        return {"queued_count": queued, "blocked_count": blocked, "template": message, "recipient": recipient}
 
 
 def pending_sms(limit=25, hod_username=None):

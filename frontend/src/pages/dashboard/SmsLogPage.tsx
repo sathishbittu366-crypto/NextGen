@@ -21,6 +21,7 @@ import {
   getSmsTemplates,
   saveSmsTemplate,
   sendGeneralNotice,
+  type SmsRecipient,
   getMySmsAccess,
   type SmsApprovalRow,
   type SmsGateway,
@@ -98,6 +99,7 @@ export function SmsLogPage({ user, onLoggedOut }: Props) {
   const [messageType, setMessageType] = useState<"ABSENTEE_ALERT" | "GENERAL_NOTICE">("ABSENTEE_ALERT");
   const [templates, setTemplates] = useState<Record<string, string>>({});
   const [composeText, setComposeText] = useState("");
+  const [recipient, setRecipient] = useState<SmsRecipient>("PARENT");
   const [batches, setBatches] = useState<SmsBatch[]>([]);
   const [selectedBatchId, setSelectedBatchId] = useState<number | null>(null);
   const [gateways, setGateways] = useState<SmsGateway[]>([]);
@@ -279,15 +281,27 @@ export function SmsLogPage({ user, onLoggedOut }: Props) {
     finally { setBusy(null); }
   };
 
+  // The saved wording is parent-facing, so flipping the audience flips a leading
+  // salutation too. Anything the sender has rewritten is left exactly as typed.
+  const chooseRecipient = (next: SmsRecipient) => {
+    if (next === recipient) return;
+    setRecipient(next);
+    setComposeText((t) => next === "STUDENT"
+      ? t.replace(/^Dear Parents?\b/i, "Dear Student")
+      : t.replace(/^Dear Students?\b/i, "Dear Parent"));
+  };
+
   const sendGeneral = async () => {
     if (!selectedBatchId || !composeText.trim()) return;
     const batch = batches.find((b) => b.id === selectedBatchId);
     const label = batch ? (batch.code || batch.name) : "the selected batch";
+    const toStudents = recipient === "STUDENT";
+    const who = toStudents ? "student" : "parent";
     const ok = await confirm({
-      title: isFaculty ? `Send SMS to ${label}?` : `Queue notice for ${label}?`,
+      title: isFaculty ? `Send SMS to ${label} ${who}s?` : `Queue notice for ${label} ${who}s?`,
       body: (
         <>
-          <p>{batch ? `Every parent in ${label} (${batch.student_count} students) will receive this message${isFaculty ? " right away" : " once it is approved"}.` : "Every parent in the selected batch will receive this message."}</p>
+          <p>{batch ? `Every ${who} in ${label} (${batch.student_count} students) will receive this message${toStudents ? " on their own phone" : ""}${isFaculty ? " right away" : " once it is approved"}.` : `Every ${who} in the selected batch will receive this message.`}</p>
           <div className="ngx-quote">{composeText}</div>
         </>
       ),
@@ -296,8 +310,9 @@ export function SmsLogPage({ user, onLoggedOut }: Props) {
     if (!ok) return;
     setBusy("general"); setError(null);
     try {
-      const result = await sendGeneralNotice(selectedBatchId, composeText);
-      setSuccess(`${result.queued_count} message(s) queued.`);
+      const result = await sendGeneralNotice(selectedBatchId, composeText, recipient);
+      const noPhone = result.blocked_count ? ` ${result.blocked_count} blocked: no ${who} phone on file.` : "";
+      setSuccess(`${result.queued_count} message(s) queued.${noPhone}`);
       await load();
     } catch (err) { setError(err instanceof ApiClientError ? err.message : "Could not queue SMS"); }
     finally { setBusy(null); }
@@ -320,7 +335,7 @@ export function SmsLogPage({ user, onLoggedOut }: Props) {
   const approveOne = async (r: SmsApprovalRow) => {
     const ok = await confirm({
       title: `Approve SMS for ${r.student_name}?`,
-      body: <><div className="ngx-quote">{r.message}</div><p className="ngx-hint">To {r.parent_phone}</p></>,
+      body: <><div className="ngx-quote">{r.message}</div><p className="ngx-hint">To {r.recipient_type === "STUDENT" ? "student " : ""}{r.parent_phone}</p></>,
       confirmLabel: "Approve",
     });
     if (!ok) return;
@@ -333,7 +348,7 @@ export function SmsLogPage({ user, onLoggedOut }: Props) {
   const rejectOne = async (r: SmsApprovalRow) => {
     const ok = await confirm({
       title: `Reject SMS for ${r.student_name}?`,
-      body: <p>This message will not be sent to {r.parent_phone}.</p>,
+      body: <p>This message will not be sent to {r.recipient_type === "STUDENT" ? "the student at " : ""}{r.parent_phone}.</p>,
       confirmLabel: "Reject message",
       tone: "danger",
     });
@@ -563,7 +578,7 @@ export function SmsLogPage({ user, onLoggedOut }: Props) {
                       <div key={r.id} className={`ngx-queue-row${r.error ? " is-blocked" : ""}`}>
                         <div className="ngx-queue-who">
                           <strong>{r.student_name}</strong>
-                          <span>{r.roll_no} · {r.parent_phone}</span>
+                          <span>{r.roll_no} · {r.parent_phone}{r.recipient_type === "STUDENT" ? " · Student's phone" : ""}</span>
                         </div>
                         <p className="ngx-queue-msg">{r.message}</p>
                         <div className="ngx-queue-act">
@@ -590,8 +605,8 @@ export function SmsLogPage({ user, onLoggedOut }: Props) {
             <div className="ngx-card-body">
               {!isFaculty && (
                 <div className="ngx-segment" role="group" aria-label="Message type" style={{ marginBottom: 18 }}>
-                  <button type="button" className={messageType === "ABSENTEE_ALERT" ? "is-active" : ""} aria-pressed={messageType === "ABSENTEE_ALERT"} onClick={() => { setMessageType("ABSENTEE_ALERT"); setComposeText(templates.ABSENTEE_ALERT || ""); }}>Absentee alert</button>
-                  <button type="button" className={messageType === "GENERAL_NOTICE" ? "is-active" : ""} aria-pressed={messageType === "GENERAL_NOTICE"} onClick={() => { setMessageType("GENERAL_NOTICE"); setComposeText(templates.GENERAL_NOTICE || ""); }}>General notice</button>
+                  <button type="button" className={messageType === "ABSENTEE_ALERT" ? "is-active" : ""} aria-pressed={messageType === "ABSENTEE_ALERT"} onClick={() => { setMessageType("ABSENTEE_ALERT"); setRecipient("PARENT"); setComposeText(templates.ABSENTEE_ALERT || ""); }}>Absentee alert</button>
+                  <button type="button" className={messageType === "GENERAL_NOTICE" ? "is-active" : ""} aria-pressed={messageType === "GENERAL_NOTICE"} onClick={() => { setMessageType("GENERAL_NOTICE"); setRecipient("PARENT"); setComposeText(templates.GENERAL_NOTICE || ""); }}>General notice</button>
                 </div>
               )}
               <div className="ngx-form-grid">
@@ -603,8 +618,16 @@ export function SmsLogPage({ user, onLoggedOut }: Props) {
                     </select>
                   </label>
                 )}
+                {(isFaculty || messageType === "GENERAL_NOTICE") && (
+                  <div className="ngx-field" role="group" aria-labelledby="ngx-audience-label"><span id="ngx-audience-label">Send to</span>
+                    <div className="ngx-segment ngx-audience">
+                      <button type="button" className={recipient === "PARENT" ? "is-active" : ""} aria-pressed={recipient === "PARENT"} onClick={() => chooseRecipient("PARENT")}>Parents</button>
+                      <button type="button" className={recipient === "STUDENT" ? "is-active" : ""} aria-pressed={recipient === "STUDENT"} onClick={() => chooseRecipient("STUDENT")}>Students</button>
+                    </div>
+                  </div>
+                )}
                 <label className="ngx-field"><span>{isFaculty || messageType === "GENERAL_NOTICE" ? "Message" : "Absentee message template"}</span>
-                  <textarea className="ngx-textarea" value={composeText} onChange={(e) => setComposeText(e.target.value)} placeholder="Dear Parent, {student}: {message}" style={{ minHeight: 120 }} />
+                  <textarea className="ngx-textarea" value={composeText} onChange={(e) => setComposeText(e.target.value)} placeholder={recipient === "STUDENT" ? "Dear Student, {student}: {message}" : "Dear Parent, {student}: {message}"} style={{ minHeight: 120 }} />
                   <div className="ngx-counter"><span className="ngx-hint">{composeText.length} characters</span></div>
                 </label>
               </div>
@@ -612,9 +635,9 @@ export function SmsLogPage({ user, onLoggedOut }: Props) {
                 {isFaculty || messageType === "GENERAL_NOTICE" ? (
                   <>
                     <button className="ngx-btn is-primary" disabled={busy !== null || !selectedBatchId || !composeText.trim() || (isFaculty && !gatewayConfigured)} onClick={() => void sendGeneral()}>
-                      {busy === "general" ? (isFaculty ? "Sending…" : "Queuing…") : isFaculty ? (selectedBatch ? `Send to ${selectedBatch.code || selectedBatch.name}` : "Send SMS to batch") : (selectedBatch ? `Queue for ${selectedBatch.code || selectedBatch.name}` : "Queue notice")}
+                      {busy === "general" ? (isFaculty ? "Sending…" : "Queuing…") : isFaculty ? (selectedBatch ? `Send to ${selectedBatch.code || selectedBatch.name} ${recipient === "STUDENT" ? "students" : "parents"}` : "Send SMS to batch") : (selectedBatch ? `Queue for ${selectedBatch.code || selectedBatch.name} ${recipient === "STUDENT" ? "students" : "parents"}` : "Queue notice")}
                     </button>
-                    {!isFaculty && <button className="ngx-btn is-secondary" onClick={() => void saveTemplate()} disabled={busy !== null}>Save template</button>}
+                    {!isFaculty && recipient === "PARENT" && <button className="ngx-btn is-secondary" onClick={() => void saveTemplate()} disabled={busy !== null}>Save template</button>}
                     {isFaculty && !gatewayConfigured && <span className="ngx-hint is-warn">Set up your gateway before sending.</span>}
                   </>
                 ) : (

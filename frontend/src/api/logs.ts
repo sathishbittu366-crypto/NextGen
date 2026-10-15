@@ -12,11 +12,15 @@ export interface AuditLogRow {
   created_at: string;
 }
 
+export type SmsRecipient = "PARENT" | "STUDENT";
+
 export interface SmsLogRow {
   id: number;
   roll_no: string;
   student_name?: string;
   parent_phone: string;
+  /** Who the number belongs to: "PARENT" (default) or "STUDENT". */
+  recipient_type?: SmsRecipient;
   message: string;
   status: string;
   approved?: number;
@@ -92,6 +96,7 @@ export interface SmsApprovalRow {
   gateway_name: string | null;
   gateway_mode: string | null;
   gateway_active: boolean;
+  recipient_type?: SmsRecipient;
   message_type?: string;
   status?: string;
   error: string | null;
@@ -168,8 +173,8 @@ export async function saveSmsTemplate(message_type: "ABSENTEE_ALERT" | "GENERAL_
   return apiFetch(`/api/dashboard/sms-templates`, { method: "POST", body: { message_type, template } });
 }
 
-export async function sendGeneralNotice(semester_id: number, message: string): Promise<{ queued_count: number; blocked_count: number }> {
-  return apiFetch(`/api/dashboard/sms-general-notice`, { method: "POST", body: { semester_id, message } });
+export async function sendGeneralNotice(semester_id: number, message: string, recipient: SmsRecipient = "PARENT"): Promise<{ queued_count: number; blocked_count: number; recipient?: SmsRecipient }> {
+  return apiFetch(`/api/dashboard/sms-general-notice`, { method: "POST", body: { semester_id, message, recipient } });
 }
 
 export async function testSmsGatewayConnection(id: number): Promise<{ ok: boolean; mode: string; device?: unknown; health?: string; message?: string }> {
